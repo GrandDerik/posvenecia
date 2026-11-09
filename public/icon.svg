@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="50%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#0f172a" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  
+  <!-- Rounded Base Canvas -->
+  <rect width="512" height="512" rx="128" fill="url(#bgGrad)"/>
+  
+  <!-- Subtle inner border -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="4"/>
+
+  <!-- Stylized V Checkmark Emblem with POS Symbolism -->
+  <g filter="url(#shadow)">
+    <!-- Main check / V mark -->
+    <path d="M128 260 L220 352 L384 160" fill="none" stroke="#ffffff" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- Secondary accent checkmark underline -->
+    <path d="M152 284 L220 352 L360 188" fill="none" stroke="url(#accentGrad)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
+  </g>
+
+  <!-- POS badge pill at bottom -->
+  <g transform="translate(166, 388)">
+    <rect width="180" height="56" rx="28" fill="#0f172a" opacity="0.85"/>
+    <rect width="180" height="56" rx="28" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+    <text x="90" y="37" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="900" fill="#38bdf8" text-anchor="middle" letter-spacing="4">VENECIA</text>
+  </g>
+</svg>

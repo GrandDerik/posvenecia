@@ -1,0 +1,6 @@
+{
+  "name": "Punto de Venta Venezuela - POS Retail & SENIAT",
+  "description": "Sistema de Punto de Venta bimonetario para comercio retail en Venezuela con tasa BCV, IGTF, Libro de Ventas/Compras SENIAT, Fiados y Cuadre de Caja.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
