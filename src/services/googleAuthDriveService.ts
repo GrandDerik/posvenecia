@@ -7,7 +7,7 @@ import {
   onAuthStateChanged, 
   User 
 } from 'firebase/auth';
-import { firebaseConfig } from '../config/firebaseConfig';
+import { firebaseConfig, isFirebaseConfigured } from '../config/firebaseConfig';
 import { 
   Product, 
   Sale, 
@@ -20,8 +20,16 @@ import {
   CashShift
 } from '../types';
 
-// Initialize Firebase App
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+// Initialize Firebase App gracefully (with fallback config so app never crashes if env is empty)
+const safeConfig = isFirebaseConfigured ? firebaseConfig : {
+  apiKey: 'AIzaSyPlaceholderKeyForLocalModeOnly123456',
+  authDomain: 'posvenecia-local.firebaseapp.com',
+  projectId: 'posvenecia-local',
+  storageBucket: 'posvenecia-local.firebasestorage.app',
+  messagingSenderId: '123456789012',
+  appId: '1:123456789012:web:placeholder'
+};
+const app = getApps().length === 0 ? initializeApp(safeConfig) : getApp();
 export const auth = getAuth(app);
 
 // Provider with Drive scopes
@@ -194,6 +202,11 @@ export const initAuth = (
  * Trigger official Google Sign-In with popup
  */
 export const signInWithGoogle = async (): Promise<{ user: User; accessToken: string }> => {
+  if (!isFirebaseConfigured) {
+    throw new Error(
+      'Para sincronizar con Google Drive, configura las variables VITE_FIREBASE_* en tu panel de Vercel o archivo .env. Mientras tanto, tu punto de venta funciona al 100% de forma local con IndexedDB y puedes exportar copias en JSON y Excel.'
+    );
+  }
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
@@ -445,11 +458,10 @@ export const saveDatabaseToDrive = async (
       etag: newEtag
     };
   } else {
-    // Create new file in appDataFolder (POST multipart)
+    // Create new file in user's Google Drive (POST multipart)
     const metadata = {
       name: DB_FILE_NAME,
       mimeType: 'application/json',
-      parents: ['appDataFolder'],
       description: 'Base de datos privada y sincronizada del sistema PosVenecia'
     };
 

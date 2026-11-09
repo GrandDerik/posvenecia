@@ -637,14 +637,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   /**
    * Load scoped storage for active user (IndexedDB as robust storage with localStorage fast-cache)
+   * Resilient fallback across scopes: if a scoped user has no data yet, seamlessly reads from master/guest
    */
   const loadScopedLocalStorage = useCallback((uid?: string) => {
     const scope = uid ? `usr_${uid}` : 'guest';
     const read = (key: string) => {
       try {
-        const saved = localStorage.getItem(`posvenecia_${scope}_${key}`);
-        if (saved) {
-          return JSON.parse(saved);
+        const candidateKeys = [
+          `posvenecia_${scope}_${key}`,
+          `posvenecia_master_${key}`,
+          `posvenecia_guest_${key}`,
+          `posvenecia_${key}_v4`,
+          `tupunto_${key}`
+        ];
+        for (const k of candidateKeys) {
+          const saved = localStorage.getItem(k);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) ? parsed.length > 0 : parsed) {
+              return parsed;
+            }
+          }
         }
       } catch (e) {
         /* ignore parsing or access error */
@@ -677,27 +690,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCashShift(storedCashShift);
     setCashShiftHistory(storedShiftHistory);
 
-    // Deep asynchronous hydration from IndexedDB (handles unlimited records beyond 5MB quota)
-    loadAppStateFromIndexedDB(scope).then((idbData) => {
-      if (idbData) {
-        if (idbData.products && Array.isArray(idbData.products)) setProducts(idbData.products);
-        if (idbData.sales && Array.isArray(idbData.sales)) setSales(idbData.sales);
-        if (idbData.expenses && Array.isArray(idbData.expenses)) setExpenses(idbData.expenses);
-        if (idbData.fiados && Array.isArray(idbData.fiados)) setFiados(idbData.fiados);
-        if (idbData.clients && Array.isArray(idbData.clients)) setClients(idbData.clients);
-        if (idbData.cuentasPorPagar && Array.isArray(idbData.cuentasPorPagar)) setCuentasPorPagar(idbData.cuentasPorPagar);
-        if (idbData.gastosOperativos && Array.isArray(idbData.gastosOperativos)) setGastosOperativos(idbData.gastosOperativos);
-        if (idbData.businessInfo) setBusinessInfo(idbData.businessInfo);
-        if (idbData.customCategories) setCustomCategories(idbData.customCategories);
-        if (idbData.cashShift !== undefined) setCashShift(idbData.cashShift);
-        if (idbData.cashShiftHistory) setCashShiftHistory(idbData.cashShiftHistory);
+    // Deep asynchronous hydration from IndexedDB with master fallback
+    loadAppStateFromIndexedDB(scope).then(async (idbData) => {
+      let finalData = idbData;
+      if (!finalData || (!finalData.products?.length && !finalData.sales?.length)) {
+        finalData = (await loadAppStateFromIndexedDB('master')) || (await loadAppStateFromIndexedDB('guest'));
+      }
+      if (finalData) {
+        if (finalData.products && Array.isArray(finalData.products) && finalData.products.length > 0) {
+          setProducts(prev => prev.length > 0 ? prev : finalData.products);
+        }
+        if (finalData.sales && Array.isArray(finalData.sales) && finalData.sales.length > 0) {
+          setSales(prev => prev.length > 0 ? prev : finalData.sales);
+        }
+        if (finalData.expenses && Array.isArray(finalData.expenses) && finalData.expenses.length > 0) {
+          setExpenses(prev => prev.length > 0 ? prev : finalData.expenses);
+        }
+        if (finalData.fiados && Array.isArray(finalData.fiados) && finalData.fiados.length > 0) {
+          setFiados(prev => prev.length > 0 ? prev : finalData.fiados);
+        }
+        if (finalData.clients && Array.isArray(finalData.clients) && finalData.clients.length > 0) {
+          setClients(prev => prev.length > 0 ? prev : finalData.clients);
+        }
+        if (finalData.cuentasPorPagar && Array.isArray(finalData.cuentasPorPagar) && finalData.cuentasPorPagar.length > 0) {
+          setCuentasPorPagar(prev => prev.length > 0 ? prev : finalData.cuentasPorPagar);
+        }
+        if (finalData.gastosOperativos && Array.isArray(finalData.gastosOperativos) && finalData.gastosOperativos.length > 0) {
+          setGastosOperativos(prev => prev.length > 0 ? prev : finalData.gastosOperativos);
+        }
+        if (finalData.businessInfo) setBusinessInfo(finalData.businessInfo);
+        if (finalData.customCategories) setCustomCategories(finalData.customCategories);
+        if (finalData.cashShift !== undefined) setCashShift(finalData.cashShift);
+        if (finalData.cashShiftHistory) setCashShiftHistory(finalData.cashShiftHistory);
       }
     }).catch(err => console.warn('Error hydrating from IndexedDB:', err));
   }, []);
 
   /**
    * Save scoped storage for active user
-   * Saves primary state to IndexedDB (virtually unlimited quota) and safely mirrors to localStorage
+   * Saves to both active user scope AND master fallback so data is never wiped on login/logout
    */
   const saveScopedLocalStorage = useCallback((uid: string | undefined, data: {
     products: Product[];
@@ -714,15 +745,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }) => {
     const scope = uid ? `usr_${uid}` : 'guest';
 
-    // 1. Primary storage: IndexedDB (stores entire databases without quota crashes)
-    saveAppStateToIndexedDB(scope, data).catch(err => {
-      console.error('IndexedDB saveAppState error:', err);
-    });
+    // 1. Primary storage: IndexedDB (stores under active scope AND master backup)
+    saveAppStateToIndexedDB(scope, data).catch(err => console.error('IndexedDB saveAppState error:', err));
+    saveAppStateToIndexedDB('master', data).catch(err => console.error('IndexedDB saveAppState master error:', err));
 
-    // 2. Secondary fast cache: localStorage with safe try-catch (guards against QuotaExceededError)
+    // 2. Secondary fast cache: localStorage
     const safeSetItem = (key: string, value: any) => {
       try {
         localStorage.setItem(`posvenecia_${scope}_${key}`, JSON.stringify(value));
+        localStorage.setItem(`posvenecia_master_${key}`, JSON.stringify(value));
       } catch (e: any) {
         if (e?.name === 'QuotaExceededError' || e?.code === 22) {
           console.warn(`LocalStorage quota exceeded on key: ${key}. Data is safely stored in IndexedDB.`);
@@ -794,6 +825,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       try {
         let payload = buildCurrentPayload();
+
+        // Safety guard: If local state on this device is completely empty, check if remote cloud has data before uploading empty state!
+        if (payload.products.length === 0 && payload.sales.length === 0) {
+          const meta = await getRemoteDatabaseMetadata(token);
+          if (meta?.fileId) {
+            const remoteRes = await readDatabaseFromDrive(token, meta.fileId);
+            if (remoteRes?.data && ((remoteRes.data.products?.length || 0) > 0 || (remoteRes.data.sales?.length || 0) > 0)) {
+              console.warn('[PosVenecia] Protección contra sobreescritura vacía: se descargaron los datos de la nube en lugar de sobreescribir con vacío.');
+              const remoteData = remoteRes.data;
+              setProducts(remoteData.products || []);
+              setSales(remoteData.sales || []);
+              setExpenses(remoteData.expenses || []);
+              setFiados(remoteData.fiados || []);
+              setClients(remoteData.clients || []);
+              setCuentasPorPagar(remoteData.cuentasPorPagar || []);
+              setGastosOperativos(remoteData.gastosOperativos || []);
+              if (remoteData.cashShift !== undefined) setCashShift(remoteData.cashShift);
+              if (remoteData.cashShiftHistory) setCashShiftHistory(remoteData.cashShiftHistory);
+              if (remoteData.businessInfo) setBusinessInfo(remoteData.businessInfo);
+              if (remoteData.bcvRate) setBcvRateState(remoteData.bcvRate);
+              if (remoteData.bcvEuroRate) setBcvEuroRateState(remoteData.bcvEuroRate);
+              saveScopedLocalStorage(curUser.uid, {
+                products: remoteData.products || [],
+                sales: remoteData.sales || [],
+                expenses: remoteData.expenses || [],
+                fiados: remoteData.fiados || [],
+                clients: remoteData.clients || [],
+                cuentasPorPagar: remoteData.cuentasPorPagar || [],
+                gastosOperativos: remoteData.gastosOperativos || [],
+                businessInfo: remoteData.businessInfo || DEFAULT_BUSINESS_INFO,
+                customCategories: [],
+                cashShift: remoteData.cashShift,
+                cashShiftHistory: remoteData.cashShiftHistory || []
+              });
+              setDriveSyncStatus('synced');
+              return true;
+            }
+          }
+        }
+
         let saveRes: { fileId: string; modifiedTime: string; etag: string | null } | null = null;
 
         try {
@@ -1276,41 +1347,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
               }
             } else {
-              // Brand new user: clean blank state []
-              setProducts([]);
-              setSales([]);
-              setExpenses([]);
-              setFiados([]);
-              setClients([]);
-              setCuentasPorPagar([]);
-              setGastosOperativos([]);
-              setCashShift(null);
-              setCashShiftHistory([]);
-
-              const blankPayload: AppDatabasePayload = {
-                version: '2.0',
-                updatedAt: new Date().toISOString(),
-                userEmail: firebaseUser.email || '',
-                userUid: firebaseUser.uid,
-                businessInfo: DEFAULT_BUSINESS_INFO,
-                bcvRate: INITIAL_BCV_RATE,
-                bcvEuroRate: INITIAL_BCV_EURO_RATE,
-                products: [],
-                sales: [],
-                expenses: [],
-                fiados: [],
-                cuentasPorPagar: [],
-                gastosOperativos: [],
-                clients: [],
-                cashShift: null,
-                cashShiftHistory: []
-              };
-              const saveRes = await saveDatabaseToDrive(token, blankPayload).catch(e => {
+              // Remote file not created yet in Google Drive:
+              // PRESERVE local products and upload them to initialize the user's cloud database!
+              const localPayload = buildCurrentPayloadRef.current();
+              const saveRes = await saveDatabaseToDrive(token, localPayload).catch(e => {
                 console.warn('Init drive file error', e);
                 return null;
               });
+              if (saveRes?.fileId) {
+                lastDriveFileIdRef.current = saveRes.fileId;
+              }
               if (saveRes?.modifiedTime) {
                 lastRemoteModifiedTimeRef.current = saveRes.modifiedTime;
+              }
+              if (saveRes?.etag) {
+                lastRemoteEtagRef.current = saveRes.etag;
               }
             }
             setDriveSyncStatus('synced');
@@ -1502,41 +1553,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
       } else {
-        // First-time Google user: Start 100% clean []
-        setProducts([]);
-        setSales([]);
-        setExpenses([]);
-        setFiados([]);
-        setClients([]);
-        setCuentasPorPagar([]);
-        setGastosOperativos([]);
-        setCashShift(null);
-        setCashShiftHistory([]);
-
-        const blankPayload: AppDatabasePayload = {
-          version: '2.0',
-          updatedAt: new Date().toISOString(),
-          userEmail: user.email || '',
-          userUid: user.uid,
-          businessInfo: DEFAULT_BUSINESS_INFO,
-          bcvRate: INITIAL_BCV_RATE,
-          bcvEuroRate: INITIAL_BCV_EURO_RATE,
-          products: [],
-          sales: [],
-          expenses: [],
-          fiados: [],
-          cuentasPorPagar: [],
-          gastosOperativos: [],
-          clients: [],
-          cashShift: null,
-          cashShiftHistory: []
-        };
-        const saveRes = await saveDatabaseToDrive(accessToken, blankPayload).catch(e => {
+        // Remote file not created yet in Google Drive:
+        // PRESERVE local products and upload them to initialize the user's cloud database!
+        const localPayload = buildCurrentPayloadRef.current();
+        const saveRes = await saveDatabaseToDrive(accessToken, localPayload).catch(e => {
           console.warn('Init drive file error', e);
           return null;
         });
+        if (saveRes?.fileId) {
+          lastDriveFileIdRef.current = saveRes.fileId;
+        }
         if (saveRes?.modifiedTime) {
           lastRemoteModifiedTimeRef.current = saveRes.modifiedTime;
+        }
+        if (saveRes?.etag) {
+          lastRemoteEtagRef.current = saveRes.etag;
         }
       }
 
@@ -1555,6 +1586,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   /**
    * Google Log-out flow handler
+   * Does NOT wipe products or sales; preserves store data on the terminal while disconnecting cloud session.
    */
   const logoutGoogle = async () => {
     try {
@@ -1566,19 +1598,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setDriveSyncStatus('unauthenticated');
       setIsSessionStarted(false);
       localStorage.removeItem('posvenecia_session_started');
-      // Reset active memory states to blank []
-      setProducts([]);
-      setSales([]);
-      setExpenses([]);
-      setFiados([]);
-      setClients([]);
-      setCuentasPorPagar([]);
-      setGastosOperativos([]);
-      setBusinessInfo(DEFAULT_BUSINESS_INFO);
+      // Store inventory and sales are PRESERVED on this device!
       setSelectedClientForPOS(null);
       setCart([]);
       setLastCompletedSale(null);
-      // Close any open modals so LoginView is immediately visible
+      // Close open modals
       setIsGoogleModalOpen(false);
       setIsProfileModalOpen(false);
       setIsAperturaModalOpen(false);

@@ -25,4 +25,12 @@ export const firebaseConfig: FirebaseClientConfig = {
   oAuthClientId: import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || ''
 };
 
+export const isFirebaseConfigured = Boolean(
+  firebaseConfig.apiKey && 
+  firebaseConfig.projectId && 
+  firebaseConfig.apiKey !== 'AIzaSy...' &&
+  !firebaseConfig.apiKey.includes('...') &&
+  firebaseConfig.projectId !== 'tu-proyecto'
+);
+
 export default firebaseConfig;
