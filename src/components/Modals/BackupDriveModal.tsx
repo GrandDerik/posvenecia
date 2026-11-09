@@ -40,6 +40,9 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     loginWithGoogle,
     logoutGoogle,
     syncToGoogleDrive,
+    reloadFromGoogleDrive,
+    renewGoogleSession,
+    driveSyncStatus,
     isDriveSyncing,
     lastDriveSyncTime,
     cashShift,
@@ -136,6 +139,41 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     } catch (err: any) {
       setSyncStatus(`Error: ${err?.message || 'No se pudo conectar'}`);
       setTimeout(() => setSyncStatus(null), 4000);
+    }
+  };
+
+  const handleRenewSession = async () => {
+    try {
+      setSyncStatus('Reconectando sesión de Google Drive...');
+      const ok = await renewGoogleSession();
+      if (ok) {
+        setSyncStatus('¡Sesión reconectada y datos actualizados desde Google Drive!');
+      } else {
+        setSyncStatus('No se pudo reconectar la sesión.');
+      }
+      setTimeout(() => setSyncStatus(null), 4000);
+    } catch (err: any) {
+      setSyncStatus(`Error: ${err?.message || 'Error al renovar sesión'}`);
+      setTimeout(() => setSyncStatus(null), 4000);
+    }
+  };
+
+  const handleReloadFromDrive = async () => {
+    setIsSyncingLocal(true);
+    setSyncStatus('Descargando y sincronizando versión más reciente de Google Drive...');
+    try {
+      const ok = await reloadFromGoogleDrive();
+      if (ok) {
+        setSyncStatus('¡Base de datos sincronizada con Google Drive exitosamente!');
+      } else {
+        setSyncStatus('La base de datos ya está al día con la nube.');
+      }
+      setTimeout(() => setSyncStatus(null), 4000);
+    } catch (err: any) {
+      setSyncStatus(`Error: ${err?.message || 'Error al descargar datos'}`);
+      setTimeout(() => setSyncStatus(null), 4000);
+    } finally {
+      setIsSyncingLocal(false);
     }
   };
 
@@ -250,6 +288,29 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             {googleUser?.isConnected ? (
               <>
+                {driveSyncStatus === 'token_expired' ? (
+                  <button
+                    type="button"
+                    disabled={isDriveSyncing || isSyncingLocal}
+                    onClick={handleRenewSession}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer animate-pulse disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${(isDriveSyncing || isSyncingLocal) ? 'animate-spin' : ''}`} />
+                    <span>⚠️ Reconectar Sesión y Sincronizar</span>
+                  </button>
+                ) : null}
+
+                <button
+                  type="button"
+                  disabled={isDriveSyncing || isSyncingLocal}
+                  onClick={handleReloadFromDrive}
+                  className="px-3.5 py-2 bg-white hover:bg-slate-50 border border-blue-200 text-blue-700 rounded-xl text-xs font-bold shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                  title="Descargar y combinar la versión más reciente guardada desde tu teléfono u otro equipo"
+                >
+                  <Download className={`w-3.5 h-3.5 ${(isDriveSyncing || isSyncingLocal) ? 'animate-spin' : ''}`} />
+                  <span>Traer Cambios de la Nube</span>
+                </button>
+
                 <button
                   type="button"
                   disabled={isDriveSyncing || isSyncingLocal}
@@ -257,8 +318,9 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${(isDriveSyncing || isSyncingLocal) ? 'animate-spin' : ''}`} />
-                  <span>{(isDriveSyncing || isSyncingLocal) ? 'Sincronizando...' : 'Subir Copia a Google Drive Ahora'}</span>
+                  <span>{(isDriveSyncing || isSyncingLocal) ? 'Sincronizando...' : 'Subir Copia a Google Drive'}</span>
                 </button>
+
                 <button
                   type="button"
                   onClick={handleDisconnectDrive}

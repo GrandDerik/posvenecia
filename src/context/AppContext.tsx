@@ -896,29 +896,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [syncToGoogleDrive]);
 
   /**
-   * Renews Google Drive OAuth session via 1-click popup
-   */
-  const renewGoogleSession = useCallback(async (): Promise<boolean> => {
-    try {
-      setIsDriveSyncing(true);
-      const token = await renewGoogleToken();
-      if (token) {
-        setDriveSyncStatus('synced');
-        await syncToGoogleDrive();
-        return true;
-      }
-      return false;
-    } catch (err: any) {
-      console.error('Error renewing Google Drive session:', err);
-      setDriveSyncStatus('token_expired');
-      return false;
-    } finally {
-      setIsDriveSyncing(false);
-    }
-  }, [syncToGoogleDrive]);
-
-  /**
-   * Reload database directly from user's Google Drive
+   * Reload database directly from user's Google Drive with intelligent merge
    */
   const reloadFromGoogleDrive = useCallback(async (): Promise<boolean> => {
     return driveSyncMutex.runExclusive(async () => {
@@ -940,41 +918,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           lastDriveFileIdRef.current = meta.fileId;
           const remoteResult = await readDatabaseFromDrive(token, meta.fileId);
           if (remoteResult && remoteResult.data) {
-            const remoteData = remoteResult.data;
-            setProducts(remoteData.products || []);
-            setSales(remoteData.sales || []);
-            setExpenses(remoteData.expenses || []);
-            setFiados(remoteData.fiados || []);
-            setClients(remoteData.clients || []);
-            setCuentasPorPagar(remoteData.cuentasPorPagar || []);
-            setGastosOperativos(remoteData.gastosOperativos || []);
-            if (remoteData.cashShift !== undefined) {
-              setCashShift(remoteData.cashShift);
+            const localPayload = buildCurrentPayload();
+            const merged = mergeDatabasePayloads(localPayload, remoteResult.data);
+
+            setProducts(merged.products);
+            setSales(merged.sales);
+            setExpenses(merged.expenses);
+            setFiados(merged.fiados);
+            setClients(merged.clients);
+            setCuentasPorPagar(merged.cuentasPorPagar);
+            setGastosOperativos(merged.gastosOperativos);
+            if (merged.cashShift !== undefined) {
+              setCashShift(merged.cashShift);
             }
-            if (remoteData.cashShiftHistory) {
-              setCashShiftHistory(remoteData.cashShiftHistory);
+            if (merged.cashShiftHistory) {
+              setCashShiftHistory(merged.cashShiftHistory);
             }
-            if (remoteData.businessInfo) {
-              setBusinessInfo(remoteData.businessInfo);
+            if (merged.businessInfo) {
+              setBusinessInfo(merged.businessInfo);
             }
-            if (remoteData.bcvRate) setBcvRateState(remoteData.bcvRate);
-            if (remoteData.bcvEuroRate) setBcvEuroRateState(remoteData.bcvEuroRate);
-            if (remoteData.tombstones) {
-              tombstonesRef.current = remoteData.tombstones;
+            if (merged.bcvRate) setBcvRateState(merged.bcvRate);
+            if (merged.bcvEuroRate) setBcvEuroRateState(merged.bcvEuroRate);
+            if (merged.tombstones) {
+              tombstonesRef.current = merged.tombstones;
             }
 
             saveScopedLocalStorage(curUser.uid, {
-              products: remoteData.products || [],
-              sales: remoteData.sales || [],
-              expenses: remoteData.expenses || [],
-              fiados: remoteData.fiados || [],
-              clients: remoteData.clients || [],
-              cuentasPorPagar: remoteData.cuentasPorPagar || [],
-              gastosOperativos: remoteData.gastosOperativos || [],
-              businessInfo: remoteData.businessInfo || DEFAULT_BUSINESS_INFO,
+              products: merged.products,
+              sales: merged.sales,
+              expenses: merged.expenses,
+              fiados: merged.fiados,
+              clients: merged.clients,
+              cuentasPorPagar: merged.cuentasPorPagar,
+              gastosOperativos: merged.gastosOperativos,
+              businessInfo: merged.businessInfo || DEFAULT_BUSINESS_INFO,
               customCategories: [],
-              cashShift: remoteData.cashShift,
-              cashShiftHistory: remoteData.cashShiftHistory || []
+              cashShift: merged.cashShift,
+              cashShiftHistory: merged.cashShiftHistory || []
             });
 
             if (meta.modifiedTime) {
@@ -1005,7 +985,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsDriveSyncing(false);
       }
     });
-  }, [saveScopedLocalStorage]);
+  }, [buildCurrentPayload, saveScopedLocalStorage]);
+
+  /**
+   * Renews Google Drive OAuth session via 1-click popup and pulls latest data from other devices
+   */
+  const renewGoogleSession = useCallback(async (): Promise<boolean> => {
+    try {
+      setIsDriveSyncing(true);
+      setDriveSyncStatus('syncing');
+      const token = await renewGoogleToken();
+      if (token) {
+        // Immediately reload from Google Drive to pull products/changes from other devices
+        const reloaded = await reloadFromGoogleDrive();
+        if (!reloaded) {
+          // If remote file doesn't exist yet, save current local state
+          await syncToGoogleDrive();
+        }
+        setDriveSyncStatus('synced');
+        return true;
+      }
+      return false;
+    } catch (err: any) {
+      console.error('Error renewing Google Drive session:', err);
+      setDriveSyncStatus('token_expired');
+      return false;
+    } finally {
+      setIsDriveSyncing(false);
+    }
+  }, [reloadFromGoogleDrive, syncToGoogleDrive]);
 
   /**
    * Continuous multi-device background sync: checks remote Google Drive file
@@ -1183,11 +1191,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearInterval(interval);
   }, [googleUser?.isConnected]);
 
-  // Keep stable ref for loadScopedLocalStorage to avoid re-running initAuth
+  // Keep stable refs to avoid re-running initAuth
   const loadScopedLocalStorageRef = useRef(loadScopedLocalStorage);
   loadScopedLocalStorageRef.current = loadScopedLocalStorage;
   const saveScopedLocalStorageRef = useRef(saveScopedLocalStorage);
   saveScopedLocalStorageRef.current = saveScopedLocalStorage;
+  const buildCurrentPayloadRef = useRef(buildCurrentPayload);
+  buildCurrentPayloadRef.current = buildCurrentPayload;
 
   /**
    * Firebase Auth initialization and auto-sync on mount (Strictly single-mount listener)
@@ -1207,7 +1217,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           autoSyncEnabled: true
         };
         setGoogleUser(gUser);
-        setDriveSyncStatus(token ? 'syncing' : 'offline');
+        setDriveSyncStatus(token ? 'syncing' : 'token_expired');
 
         // First load any local cached records for this specific user
         loadScopedLocalStorageRef.current(firebaseUser.uid);
@@ -1221,39 +1231,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               lastDriveFileIdRef.current = meta.fileId;
               const remoteRes = await readDatabaseFromDrive(token, meta.fileId);
               if (remoteRes?.data) {
-                const remoteData = remoteRes.data;
-                setProducts(remoteData.products || []);
-                setSales(remoteData.sales || []);
-                setExpenses(remoteData.expenses || []);
-                setFiados(remoteData.fiados || []);
-                setClients(remoteData.clients || []);
-                setCuentasPorPagar(remoteData.cuentasPorPagar || []);
-                setGastosOperativos(remoteData.gastosOperativos || []);
-                if (remoteData.cashShift !== undefined) {
-                  setCashShift(remoteData.cashShift);
+                const localPayload = buildCurrentPayloadRef.current();
+                const merged = mergeDatabasePayloads(localPayload, remoteRes.data);
+
+                setProducts(merged.products);
+                setSales(merged.sales);
+                setExpenses(merged.expenses);
+                setFiados(merged.fiados);
+                setClients(merged.clients);
+                setCuentasPorPagar(merged.cuentasPorPagar);
+                setGastosOperativos(merged.gastosOperativos);
+                if (merged.cashShift !== undefined) {
+                  setCashShift(merged.cashShift);
                 }
-                if (remoteData.cashShiftHistory) {
-                  setCashShiftHistory(remoteData.cashShiftHistory);
+                if (merged.cashShiftHistory) {
+                  setCashShiftHistory(merged.cashShiftHistory);
                 }
-                if (remoteData.businessInfo) setBusinessInfo(remoteData.businessInfo);
-                if (remoteData.bcvRate) setBcvRateState(remoteData.bcvRate);
-                if (remoteData.bcvEuroRate) setBcvEuroRateState(remoteData.bcvEuroRate);
-                if (remoteData.tombstones) {
-                  tombstonesRef.current = remoteData.tombstones;
+                if (merged.businessInfo) setBusinessInfo(merged.businessInfo);
+                if (merged.bcvRate) setBcvRateState(merged.bcvRate);
+                if (merged.bcvEuroRate) setBcvEuroRateState(merged.bcvEuroRate);
+                if (merged.tombstones) {
+                  tombstonesRef.current = merged.tombstones;
                 }
 
                 saveScopedLocalStorageRef.current(firebaseUser.uid, {
-                  products: remoteData.products || [],
-                  sales: remoteData.sales || [],
-                  expenses: remoteData.expenses || [],
-                  fiados: remoteData.fiados || [],
-                  clients: remoteData.clients || [],
-                  cuentasPorPagar: remoteData.cuentasPorPagar || [],
-                  gastosOperativos: remoteData.gastosOperativos || [],
-                  businessInfo: remoteData.businessInfo || DEFAULT_BUSINESS_INFO,
+                  products: merged.products,
+                  sales: merged.sales,
+                  expenses: merged.expenses,
+                  fiados: merged.fiados,
+                  clients: merged.clients,
+                  cuentasPorPagar: merged.cuentasPorPagar,
+                  gastosOperativos: merged.gastosOperativos,
+                  businessInfo: merged.businessInfo || DEFAULT_BUSINESS_INFO,
                   customCategories: [],
-                  cashShift: remoteData.cashShift,
-                  cashShiftHistory: remoteData.cashShiftHistory || []
+                  cashShift: merged.cashShift,
+                  cashShiftHistory: merged.cashShiftHistory || []
                 });
 
                 if (meta.modifiedTime) {
@@ -1341,7 +1353,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       cashShiftHistory
     });
 
-    // Debounced upload to Google Drive (4 seconds)
+    // Fast debounced upload to Google Drive (1.5 seconds)
     if (autoSaveTimerRef.current) {
       clearTimeout(autoSaveTimerRef.current);
     }
@@ -1351,12 +1363,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (token && googleUser?.isConnected) {
         syncToGoogleDrive();
       }
-    }, 4000);
+    }, 1500);
+
+    // Flush pending changes immediately if user switches tabs or navigates away
+    const handleVisibilityFlush = () => {
+      if (document.visibilityState === 'hidden' && autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+        const token = getGoogleAccessToken();
+        if (token && googleUser?.isConnected) {
+          syncToGoogleDrive();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityFlush);
+    window.addEventListener('pagehide', handleVisibilityFlush);
 
     return () => {
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
       }
+      document.removeEventListener('visibilitychange', handleVisibilityFlush);
+      window.removeEventListener('pagehide', handleVisibilityFlush);
     };
   }, [
     products, 
@@ -1368,7 +1395,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     gastosOperativos, 
     businessInfo, 
     customCategories, 
-    cashShift,
+    cashShift, 
     cashShiftHistory,
     googleUser?.uid, 
     googleUser?.isConnected,
@@ -1382,12 +1409,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!googleUser?.isConnected) return;
 
-    // Background interval: check every 10 seconds for changes from other devices
+    // Background interval: check every 7 seconds for changes from other devices
     const intervalId = setInterval(() => {
       checkRemoteChangesForMultiDevice();
-    }, 10000);
+    }, 7000);
 
-    // Immediate check when tab or window gains focus
+    // Immediate check when tab or window gains focus or becomes visible
     const handleFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
         checkRemoteChangesForMultiDevice();
@@ -1430,26 +1457,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lastDriveFileIdRef.current = meta.fileId;
         const remoteRes = await readDatabaseFromDrive(accessToken, meta.fileId);
         if (remoteRes?.data) {
-          const remoteData = remoteRes.data;
-          setProducts(remoteData.products || []);
-          setSales(remoteData.sales || []);
-          setExpenses(remoteData.expenses || []);
-          setFiados(remoteData.fiados || []);
-          setClients(remoteData.clients || []);
-          setCuentasPorPagar(remoteData.cuentasPorPagar || []);
-          setGastosOperativos(remoteData.gastosOperativos || []);
-          if (remoteData.cashShift !== undefined) {
-            setCashShift(remoteData.cashShift);
+          const localPayload = buildCurrentPayloadRef.current();
+          const merged = mergeDatabasePayloads(localPayload, remoteRes.data);
+
+          setProducts(merged.products);
+          setSales(merged.sales);
+          setExpenses(merged.expenses);
+          setFiados(merged.fiados);
+          setClients(merged.clients);
+          setCuentasPorPagar(merged.cuentasPorPagar);
+          setGastosOperativos(merged.gastosOperativos);
+          if (merged.cashShift !== undefined) {
+            setCashShift(merged.cashShift);
           }
-          if (remoteData.cashShiftHistory) {
-            setCashShiftHistory(remoteData.cashShiftHistory);
+          if (merged.cashShiftHistory) {
+            setCashShiftHistory(merged.cashShiftHistory);
           }
-          if (remoteData.businessInfo) setBusinessInfo(remoteData.businessInfo);
-          if (remoteData.bcvRate) setBcvRateState(remoteData.bcvRate);
-          if (remoteData.bcvEuroRate) setBcvEuroRateState(remoteData.bcvEuroRate);
-          if (remoteData.tombstones) {
-            tombstonesRef.current = remoteData.tombstones;
+          if (merged.businessInfo) setBusinessInfo(merged.businessInfo);
+          if (merged.bcvRate) setBcvRateState(merged.bcvRate);
+          if (merged.bcvEuroRate) setBcvEuroRateState(merged.bcvEuroRate);
+          if (merged.tombstones) {
+            tombstonesRef.current = merged.tombstones;
           }
+
+          saveScopedLocalStorageRef.current(user.uid, {
+            products: merged.products,
+            sales: merged.sales,
+            expenses: merged.expenses,
+            fiados: merged.fiados,
+            clients: merged.clients,
+            cuentasPorPagar: merged.cuentasPorPagar,
+            gastosOperativos: merged.gastosOperativos,
+            businessInfo: merged.businessInfo || DEFAULT_BUSINESS_INFO,
+            customCategories: [],
+            cashShift: merged.cashShift,
+            cashShiftHistory: merged.cashShiftHistory || []
+          });
 
           if (meta.modifiedTime) {
             lastRemoteModifiedTimeRef.current = meta.modifiedTime;

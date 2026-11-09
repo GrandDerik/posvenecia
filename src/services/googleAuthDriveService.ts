@@ -32,11 +32,51 @@ provider.setCustomParameters({
   prompt: 'select_account'
 });
 
-// In-memory token cache (Do NOT store in localStorage per security guidelines)
+// Persistent token cache helpers
+const TOKEN_KEY_PREFIX = 'posvenecia_oauth_token_';
+const TOKEN_TIME_PREFIX = 'posvenecia_oauth_timestamp_';
+const TOKEN_TTL_MS = 55 * 60 * 1000; // 55 minutes (Google tokens expire at 60 mins)
+
 let cachedAccessToken: string | null = null;
 let tokenAcquiredTimestamp: number = 0;
-const TOKEN_TTL_MS = 55 * 60 * 1000; // 55 minutes (Google tokens expire at 60 mins)
 let isSigningIn = false;
+
+export const persistAccessTokenForUser = (uid: string, token: string | null) => {
+  cachedAccessToken = token;
+  tokenAcquiredTimestamp = token ? Date.now() : 0;
+  try {
+    if (token) {
+      localStorage.setItem(`${TOKEN_KEY_PREFIX}${uid}`, token);
+      localStorage.setItem(`${TOKEN_TIME_PREFIX}${uid}`, tokenAcquiredTimestamp.toString());
+      localStorage.setItem('posvenecia_active_google_token', token);
+      localStorage.setItem('posvenecia_active_google_token_time', tokenAcquiredTimestamp.toString());
+    } else {
+      localStorage.removeItem(`${TOKEN_KEY_PREFIX}${uid}`);
+      localStorage.removeItem(`${TOKEN_TIME_PREFIX}${uid}`);
+      localStorage.removeItem('posvenecia_active_google_token');
+      localStorage.removeItem('posvenecia_active_google_token_time');
+    }
+  } catch (e) {
+    console.warn('Could not persist OAuth token to localStorage:', e);
+  }
+};
+
+export const getPersistedAccessTokenForUser = (uid: string): { token: string | null; isExpired: boolean } => {
+  try {
+    const token = localStorage.getItem(`${TOKEN_KEY_PREFIX}${uid}`) || localStorage.getItem('posvenecia_active_google_token');
+    const timeStr = localStorage.getItem(`${TOKEN_TIME_PREFIX}${uid}`) || localStorage.getItem('posvenecia_active_google_token_time');
+    const time = Number(timeStr || 0);
+
+    if (!token || !time) {
+      return { token: null, isExpired: true };
+    }
+
+    const isExpired = Date.now() - time >= TOKEN_TTL_MS;
+    return { token: isExpired ? null : token, isExpired };
+  } catch (e) {
+    return { token: null, isExpired: true };
+  }
+};
 
 export class GoogleDriveAuthError extends Error {
   isExpired: boolean;
@@ -123,15 +163,29 @@ export const initAuth = (
   onUserChanged: (user: User | null, token: string | null) => void
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user && cachedAccessToken) {
-      onUserChanged(user, cachedAccessToken);
-    } else if (!user) {
+    if (user) {
+      // Check if we have an in-memory token or still-valid token in localStorage
+      if (cachedAccessToken && !isGoogleTokenExpired()) {
+        onUserChanged(user, cachedAccessToken);
+        return;
+      }
+
+      const { token, isExpired } = getPersistedAccessTokenForUser(user.uid);
+      if (token && !isExpired) {
+        cachedAccessToken = token;
+        const timeStr = localStorage.getItem(`${TOKEN_TIME_PREFIX}${user.uid}`) || localStorage.getItem('posvenecia_active_google_token_time');
+        tokenAcquiredTimestamp = Number(timeStr || Date.now());
+        onUserChanged(user, token);
+      } else {
+        // Token has genuinely expired or is not on this device yet
+        cachedAccessToken = null;
+        tokenAcquiredTimestamp = 0;
+        onUserChanged(user, null);
+      }
+    } else {
       cachedAccessToken = null;
       tokenAcquiredTimestamp = 0;
       onUserChanged(null, null);
-    } else {
-      // User is logged in via Firebase session but token needs refresh or prompt
-      onUserChanged(user, cachedAccessToken);
     }
   });
 };
@@ -150,8 +204,7 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
       throw new Error('No se pudo obtener el token de acceso de Google');
     }
 
-    cachedAccessToken = token;
-    tokenAcquiredTimestamp = Date.now();
+    persistAccessTokenForUser(result.user.uid, token);
     return { user: result.user, accessToken: token };
   } catch (err: any) {
     console.error('Google Sign-In Error:', err);
@@ -179,15 +232,22 @@ export const getGoogleAccessToken = (): string | null => {
 /**
  * Set or refresh in-memory access token
  */
-export const setGoogleAccessToken = (token: string | null) => {
+export const setGoogleAccessToken = (token: string | null, uid?: string) => {
   cachedAccessToken = token;
   tokenAcquiredTimestamp = token ? Date.now() : 0;
+  if (uid) {
+    persistAccessTokenForUser(uid, token);
+  }
 };
 
 /**
  * Log out from Firebase and clear tokens
  */
 export const logOutGoogle = async (): Promise<void> => {
+  const curUser = auth.currentUser;
+  if (curUser) {
+    persistAccessTokenForUser(curUser.uid, null);
+  }
   await signOut(auth);
   cachedAccessToken = null;
   tokenAcquiredTimestamp = 0;
@@ -198,13 +258,15 @@ const DB_FILE_NAME = 'posvenecia_database.json';
 
 /**
  * Search for posvenecia_database.json in user's Drive (appDataFolder or standard drive space)
+ * Sorts by modifiedTime desc to always select the latest file version across devices.
  */
 export const findDriveDatabaseFile = async (accessToken: string): Promise<string | null> => {
-  // First search in appDataFolder (private per-user application storage)
-  const appDataQuery = encodeURIComponent(`name = '${DB_FILE_NAME}' and trashed = false`);
-  const appDataUrl = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${appDataQuery}&fields=files(id,name,modifiedTime)`;
+  const candidates: Array<{ id: string; modifiedTime: string }> = [];
 
+  // 1. Search in appDataFolder (private per-user application storage)
   try {
+    const appDataQuery = encodeURIComponent(`name = '${DB_FILE_NAME}' and trashed = false`);
+    const appDataUrl = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${appDataQuery}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime)`;
     const res = await fetch(appDataUrl, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
@@ -212,17 +274,17 @@ export const findDriveDatabaseFile = async (accessToken: string): Promise<string
     if (res.ok) {
       const data = await res.json();
       if (data.files && data.files.length > 0) {
-        return data.files[0].id;
+        data.files.forEach((f: any) => candidates.push({ id: f.id, modifiedTime: f.modifiedTime || '' }));
       }
     }
   } catch (e) {
     console.warn('Error searching appDataFolder:', e);
   }
 
-  // Fallback search in user files created by this app
+  // 2. Search in user files created by this app
   try {
     const driveQuery = encodeURIComponent(`name = '${DB_FILE_NAME}' and trashed = false`);
-    const driveUrl = `https://www.googleapis.com/drive/v3/files?q=${driveQuery}&fields=files(id,name,modifiedTime)`;
+    const driveUrl = `https://www.googleapis.com/drive/v3/files?q=${driveQuery}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime)`;
     const res = await fetch(driveUrl, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
@@ -230,64 +292,81 @@ export const findDriveDatabaseFile = async (accessToken: string): Promise<string
     if (res.ok) {
       const data = await res.json();
       if (data.files && data.files.length > 0) {
-        return data.files[0].id;
+        data.files.forEach((f: any) => candidates.push({ id: f.id, modifiedTime: f.modifiedTime || '' }));
       }
     }
   } catch (e) {
     console.warn('Error searching drive files:', e);
   }
 
-  return null;
+  if (candidates.length === 0) return null;
+
+  // Pick the newest file
+  candidates.sort((a, b) => new Date(b.modifiedTime).getTime() - new Date(a.modifiedTime).getTime());
+  return candidates[0].id;
 };
 
 /**
  * Get remote database metadata (fileId, modifiedTime, and etag) for multi-device sync
+ * Checks both appDataFolder and drive space, picking the newest file version.
  */
 export const getRemoteDatabaseMetadata = async (
   accessToken: string
 ): Promise<{ fileId: string; modifiedTime?: string; etag?: string } | null> => {
-  const appDataQuery = encodeURIComponent(`name = '${DB_FILE_NAME}' and trashed = false`);
-  const appDataUrl = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${appDataQuery}&fields=files(id,name,modifiedTime,etag)`;
+  const candidates: Array<{ fileId: string; modifiedTime?: string; etag?: string }> = [];
 
+  // Check appDataFolder
   try {
+    const appDataQuery = encodeURIComponent(`name = '${DB_FILE_NAME}' and trashed = false`);
+    const appDataUrl = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${appDataQuery}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime,etag)`;
     const res = await fetch(appDataUrl, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     if (res.ok) {
       const data = await res.json();
       if (data.files && data.files.length > 0) {
-        return { 
+        candidates.push({ 
           fileId: data.files[0].id, 
           modifiedTime: data.files[0].modifiedTime,
           etag: data.files[0].etag
-        };
+        });
       }
     }
   } catch (e) {
     console.warn('Error fetching appDataFolder metadata:', e);
   }
 
+  // Check general drive files
   try {
     const driveQuery = encodeURIComponent(`name = '${DB_FILE_NAME}' and trashed = false`);
-    const driveUrl = `https://www.googleapis.com/drive/v3/files?q=${driveQuery}&fields=files(id,name,modifiedTime,etag)`;
+    const driveUrl = `https://www.googleapis.com/drive/v3/files?q=${driveQuery}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime,etag)`;
     const res = await fetch(driveUrl, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     if (res.ok) {
       const data = await res.json();
       if (data.files && data.files.length > 0) {
-        return { 
+        candidates.push({ 
           fileId: data.files[0].id, 
           modifiedTime: data.files[0].modifiedTime,
           etag: data.files[0].etag
-        };
+        });
       }
     }
   } catch (e) {
     console.warn('Error fetching drive metadata:', e);
   }
 
-  return null;
+  if (candidates.length === 0) return null;
+
+  // Sort candidates by modifiedTime desc
+  candidates.sort((a, b) => {
+    const timeA = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+    const timeB = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+    return timeB - timeA;
+  });
+
+  return candidates[0];
 };
 
 /**
@@ -331,7 +410,7 @@ export const saveDatabaseToDrive = async (
 
   if (fileId) {
     // Update existing file (PATCH) with If-Match concurrency guard
-    const updateUrl = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`;
+    const updateUrl = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id,name,modifiedTime,etag`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json'
