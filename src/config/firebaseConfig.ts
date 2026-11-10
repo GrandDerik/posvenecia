@@ -1,7 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import rawConfig from '../../firebase-applet-config.json';
 
 export interface FirebaseClientConfig {
   apiKey: string;
@@ -15,17 +14,17 @@ export interface FirebaseClientConfig {
   oAuthClientId?: string;
 }
 
-// Read configuration with precedence: env variables if set, fallback to firebase-applet-config.json
+// Read configuration exclusively from Vite environment variables (import.meta.env)
 export const firebaseConfig: FirebaseClientConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || rawConfig.apiKey || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || rawConfig.authDomain || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || rawConfig.projectId || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || rawConfig.storageBucket || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || rawConfig.messagingSenderId || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || rawConfig.appId || '',
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || rawConfig.firestoreDatabaseId || '',
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || rawConfig.measurementId || '',
-  oAuthClientId: import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || rawConfig.oAuthClientId || ''
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || '',
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || '',
+  oAuthClientId: import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || ''
 };
 
 export const isFirebaseConfigured = Boolean(
@@ -36,8 +35,20 @@ export const isFirebaseConfigured = Boolean(
   firebaseConfig.projectId !== 'tu-proyecto'
 );
 
+// Safe fallback configuration to ensure the application never crashes if environment variables are not yet loaded
+const safeConfig = isFirebaseConfigured
+  ? firebaseConfig
+  : {
+      apiKey: firebaseConfig.apiKey || 'AIzaSyPlaceholderKeyForLocalModeOnly123456',
+      authDomain: firebaseConfig.authDomain || 'posvenecia-local.firebaseapp.com',
+      projectId: firebaseConfig.projectId || 'posvenecia-local',
+      storageBucket: firebaseConfig.storageBucket || 'posvenecia-local.firebasestorage.app',
+      messagingSenderId: firebaseConfig.messagingSenderId || '123456789012',
+      appId: firebaseConfig.appId || '1:123456789012:web:placeholder'
+    };
+
 // Initialize Firebase App instance
-export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+export const app = getApps().length === 0 ? initializeApp(safeConfig) : getApp();
 
 // Initialize Auth
 export const auth = getAuth(app);
