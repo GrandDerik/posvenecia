@@ -1,13 +1,11 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
-  getAuth, 
   GoogleAuthProvider, 
   signInWithPopup, 
   signOut, 
   onAuthStateChanged, 
   User 
 } from 'firebase/auth';
-import { firebaseConfig, isFirebaseConfigured } from '../config/firebaseConfig';
+import { firebaseConfig, isFirebaseConfigured, auth } from '../config/firebaseConfig';
 import { 
   Product, 
   Sale, 
@@ -20,17 +18,7 @@ import {
   CashShift
 } from '../types';
 
-// Initialize Firebase App gracefully (with fallback config so app never crashes if env is empty)
-const safeConfig = isFirebaseConfigured ? firebaseConfig : {
-  apiKey: 'AIzaSyPlaceholderKeyForLocalModeOnly123456',
-  authDomain: 'posvenecia-local.firebaseapp.com',
-  projectId: 'posvenecia-local',
-  storageBucket: 'posvenecia-local.firebasestorage.app',
-  messagingSenderId: '123456789012',
-  appId: '1:123456789012:web:placeholder'
-};
-const app = getApps().length === 0 ? initializeApp(safeConfig) : getApp();
-export const auth = getAuth(app);
+export { auth };
 
 // Provider with Drive scopes
 const provider = new GoogleAuthProvider();

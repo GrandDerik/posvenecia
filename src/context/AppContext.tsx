@@ -49,10 +49,35 @@ import {
   syncPendingOfflineData
 } from '../services/indexedDBService';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { testConnection } from '../config/firebaseConfig';
+import { 
+  subscribeToStoreRealtime,
+  saveSaleAtomic,
+  cancelSaleAtomic,
+  saveProductToFirestore,
+  deleteProductFromFirestore,
+  adjustProductStockInFirestore,
+  saveExpenseToFirestore,
+  deleteExpenseFromFirestore,
+  saveFiadoToFirestore,
+  saveClientToFirestore,
+  deleteClientFromFirestore,
+  saveCuentaPorPagarToFirestore,
+  deleteCuentaPorPagarFromFirestore,
+  saveGastoOperativoToFirestore,
+  deleteGastoOperativoFromFirestore,
+  saveCashShiftToFirestore,
+  saveStoreMetadataToFirestore,
+  checkAndMigrateLocalDataToFirestore
+} from '../services/firestoreSyncService';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
+export type FirestoreSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated';
 
 interface AppContextType {
+  // Realtime Cloud Database (Firebase Firestore)
+  firestoreSyncStatus: FirestoreSyncStatus;
+  backupClosingToDrive: () => Promise<boolean>;
   // BCV Rate (USD)
   bcvRate: number;
   updateBcvRate: (newRate: number) => void;
@@ -475,14 +500,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     triggerSync: syncOfflineData
   } = useNetworkStatus(handleReconnected, executeCloudSyncCallback);
 
-  // Initialize IndexedDB on mount
+  // Realtime Cloud Database (Firestore) status and unsubscribe ref
+  const [firestoreSyncStatus, setFirestoreSyncStatus] = useState<FirestoreSyncStatus>('unauthenticated');
+  const firestoreUnsubRef = useRef<(() => void) | null>(null);
+
+  // Initialize IndexedDB and verify Firestore connection on mount
   useEffect(() => {
     initIndexedDB().catch(err => console.error('IndexedDB init error:', err));
+    testConnection().catch(e => console.warn('Firestore connection check:', e));
   }, []);
 
-  // Ref to track if user data has loaded from Drive or local scope to avoid overwriting
+  // Ref to track if user data has loaded from Firestore or local scope to avoid overwriting
   const isDataLoadedRef = useRef(false);
-  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Ref with latest state values to decouple callbacks from re-renders and eliminate freezing loops
   const latestDataRef = useRef({
@@ -540,10 +569,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setCashShift(newShift);
     setIsAperturaModalOpen(false);
-  }, [googleUser?.name]);
+    if (googleUser?.uid) {
+      saveStoreMetadataToFirestore(googleUser.uid, { activeCashShift: newShift }).catch(e => console.warn('Sync open shift error:', e));
+    }
+  }, [googleUser?.uid, googleUser?.name]);
 
   /**
-   * Cierre de Caja al final de la jornada diaria
+   * Cierre de Caja al final de la jornada diaria:
+   * 1. Registra el arqueo y balance del turno
+   * 2. Guarda el cierre en Firestore en tiempo real para todos los dispositivos
+   * 3. Sube automáticamente la copia de respaldo segura del día (posvenecia_database.json) a Google Drive
    */
   const closeCashShift = useCallback((countedUSD: number, countedBs: number, closedNotes?: string, countedBanks?: BankInitialBalance[]): CashShift => {
     const now = new Date();
@@ -632,8 +667,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCashShiftHistory(prev => [closedShift, ...prev]);
     setIsCierreModalOpen(false);
 
+    // Sync closed shift to Firestore and trigger closing backup to Google Drive
+    if (googleUser?.uid) {
+      saveCashShiftToFirestore(googleUser.uid, closedShift).catch(e => console.warn('Sync close shift error:', e));
+      saveStoreMetadataToFirestore(googleUser.uid, { activeCashShift: null }).catch(e => console.warn('Sync close shift meta error:', e));
+      syncToGoogleDriveRef.current().then(() => {
+        console.info('[PosVenecia] Respaldo de cierre guardado en Google Drive automáticamente.');
+      }).catch(e => console.warn('Drive closing backup notice:', e));
+    }
+
     return closedShift;
-  }, [cashShift, sales, expenses, googleUser?.name]);
+  }, [cashShift, sales, expenses, googleUser?.uid, googleUser?.name]);
 
   /**
    * Load scoped storage for active user (IndexedDB as robust storage with localStorage fast-cache)
@@ -1271,7 +1315,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   buildCurrentPayloadRef.current = buildCurrentPayload;
 
   /**
-   * Firebase Auth initialization and auto-sync on mount (Strictly single-mount listener)
+   * Firebase Auth initialization and real-time Firestore synchronization on mount (Strictly single-mount listener)
    */
   useEffect(() => {
     const unsubscribe = initAuth(async (firebaseUser, token) => {
@@ -1288,108 +1332,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           autoSyncEnabled: true
         };
         setGoogleUser(gUser);
-        setDriveSyncStatus(token ? 'syncing' : 'token_expired');
 
         // First load any local cached records for this specific user
         loadScopedLocalStorageRef.current(firebaseUser.uid);
         isDataLoadedRef.current = true;
 
-        // If we have access token, check Google Drive for remote database file
-        if (token) {
-          try {
-            const meta = await getRemoteDatabaseMetadata(token);
-            if (meta && meta.fileId) {
-              lastDriveFileIdRef.current = meta.fileId;
-              const remoteRes = await readDatabaseFromDrive(token, meta.fileId);
-              if (remoteRes?.data) {
-                const localPayload = buildCurrentPayloadRef.current();
-                const merged = mergeDatabasePayloads(localPayload, remoteRes.data);
-
-                setProducts(merged.products);
-                setSales(merged.sales);
-                setExpenses(merged.expenses);
-                setFiados(merged.fiados);
-                setClients(merged.clients);
-                setCuentasPorPagar(merged.cuentasPorPagar);
-                setGastosOperativos(merged.gastosOperativos);
-                if (merged.cashShift !== undefined) {
-                  setCashShift(merged.cashShift);
-                }
-                if (merged.cashShiftHistory) {
-                  setCashShiftHistory(merged.cashShiftHistory);
-                }
-                if (merged.businessInfo) setBusinessInfo(merged.businessInfo);
-                if (merged.bcvRate) setBcvRateState(merged.bcvRate);
-                if (merged.bcvEuroRate) setBcvEuroRateState(merged.bcvEuroRate);
-                if (merged.tombstones) {
-                  tombstonesRef.current = merged.tombstones;
-                }
-
-                saveScopedLocalStorageRef.current(firebaseUser.uid, {
-                  products: merged.products,
-                  sales: merged.sales,
-                  expenses: merged.expenses,
-                  fiados: merged.fiados,
-                  clients: merged.clients,
-                  cuentasPorPagar: merged.cuentasPorPagar,
-                  gastosOperativos: merged.gastosOperativos,
-                  businessInfo: merged.businessInfo || DEFAULT_BUSINESS_INFO,
-                  customCategories: [],
-                  cashShift: merged.cashShift,
-                  cashShiftHistory: merged.cashShiftHistory || []
-                });
-
-                if (meta.modifiedTime) {
-                  lastRemoteModifiedTimeRef.current = meta.modifiedTime;
-                }
-                if (remoteRes.etag || meta.etag) {
-                  lastRemoteEtagRef.current = remoteRes.etag || meta.etag || null;
-                }
-              }
-            } else {
-              // Remote file not created yet in Google Drive:
-              // PRESERVE local products and upload them to initialize the user's cloud database!
-              const localPayload = buildCurrentPayloadRef.current();
-              const saveRes = await saveDatabaseToDrive(token, localPayload).catch(e => {
-                console.warn('Init drive file error', e);
-                return null;
-              });
-              if (saveRes?.fileId) {
-                lastDriveFileIdRef.current = saveRes.fileId;
-              }
-              if (saveRes?.modifiedTime) {
-                lastRemoteModifiedTimeRef.current = saveRes.modifiedTime;
-              }
-              if (saveRes?.etag) {
-                lastRemoteEtagRef.current = saveRes.etag;
-              }
-            }
-            setDriveSyncStatus('synced');
-            setLastDriveSyncTime(new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' }));
-          } catch (e) {
-            console.warn('Drive sync error during login:', e);
-            setDriveSyncStatus('error');
-          }
+        // Clean up any previous Firestore real-time listener
+        if (firestoreUnsubRef.current) {
+          firestoreUnsubRef.current();
         }
+
+        // Realtime multi-device subscription with Firebase Firestore!
+        setFirestoreSyncStatus('syncing');
+        firestoreUnsubRef.current = subscribeToStoreRealtime(firebaseUser.uid, {
+          onProducts: (newProds) => setProducts(newProds),
+          onSales: (newSales) => setSales(newSales),
+          onExpenses: (newExpenses) => setExpenses(newExpenses),
+          onFiados: (newFiados) => setFiados(newFiados),
+          onClients: (newClients) => setClients(newClients),
+          onCuentasPorPagar: (newCPP) => setCuentasPorPagar(newCPP),
+          onGastosOperativos: (newGastos) => setGastosOperativos(newGastos),
+          onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
+          onMetadata: (metadata) => {
+            if (metadata.businessInfo) setBusinessInfo(metadata.businessInfo);
+            if (metadata.bcvRate) setBcvRateState(metadata.bcvRate);
+            if (metadata.bcvEuroRate) setBcvEuroRateState(metadata.bcvEuroRate);
+            if (metadata.activeCashShift !== undefined) setCashShift(metadata.activeCashShift);
+            if (metadata.customCategories) setCustomCategories(metadata.customCategories);
+          },
+          onError: (err) => {
+            console.warn('[PosVenecia Firestore Realtime] Error:', err);
+            setFirestoreSyncStatus('error');
+          }
+        });
+        setFirestoreSyncStatus('synced');
+
+        // Migrate local catalog to Firestore if the cloud store is newly created
+        const curPayload = buildCurrentPayloadRef.current();
+        checkAndMigrateLocalDataToFirestore(firebaseUser.uid, {
+          products: curPayload.products,
+          sales: curPayload.sales,
+          expenses: curPayload.expenses,
+          fiados: curPayload.fiados,
+          clients: curPayload.clients,
+          cuentasPorPagar: curPayload.cuentasPorPagar,
+          gastosOperativos: curPayload.gastosOperativos,
+          cashShiftHistory: curPayload.cashShiftHistory || [],
+          businessInfo: curPayload.businessInfo,
+          bcvRate: curPayload.bcvRate,
+          bcvEuroRate: curPayload.bcvEuroRate,
+          cashShift: curPayload.cashShift
+        }).catch(e => console.warn('Firestore initial migration check:', e));
+
+        setDriveSyncStatus(token ? 'synced' : 'token_expired');
       } else {
-        // No authenticated user: clean state []
+        if (firestoreUnsubRef.current) {
+          firestoreUnsubRef.current();
+          firestoreUnsubRef.current = null;
+        }
         setGoogleUser(null);
+        setFirestoreSyncStatus('unauthenticated');
         setDriveSyncStatus('unauthenticated');
         loadScopedLocalStorageRef.current(undefined);
         isDataLoadedRef.current = true;
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (firestoreUnsubRef.current) {
+        firestoreUnsubRef.current();
+      }
+    };
   }, []); // Run ONLY once on mount!
 
   /**
-   * Real-time debounced auto-save to Google Drive & scoped storage
+   * Save local fast-cache (localStorage + IndexedDB) on state changes for offline reliability
    */
   useEffect(() => {
     if (!isDataLoadedRef.current || !googleUser?.uid) return;
 
-    // Save to local scoped storage immediately
     saveScopedLocalStorage(googleUser.uid, {
       products,
       sales,
@@ -1403,39 +1425,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       cashShift,
       cashShiftHistory
     });
-
-    // Fast debounced upload to Google Drive (1.5 seconds)
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current);
-    }
-
-    autoSaveTimerRef.current = setTimeout(() => {
-      const token = getGoogleAccessToken();
-      if (token && googleUser?.isConnected) {
-        syncToGoogleDrive();
-      }
-    }, 1500);
-
-    // Flush pending changes immediately if user switches tabs or navigates away
-    const handleVisibilityFlush = () => {
-      if (document.visibilityState === 'hidden' && autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current);
-        const token = getGoogleAccessToken();
-        if (token && googleUser?.isConnected) {
-          syncToGoogleDrive();
-        }
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityFlush);
-    window.addEventListener('pagehide', handleVisibilityFlush);
-
-    return () => {
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current);
-      }
-      document.removeEventListener('visibilitychange', handleVisibilityFlush);
-      window.removeEventListener('pagehide', handleVisibilityFlush);
-    };
   }, [
     products, 
     sales, 
@@ -1449,47 +1438,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     cashShift, 
     cashShiftHistory,
     googleUser?.uid, 
-    googleUser?.isConnected,
-    saveScopedLocalStorage,
-    syncToGoogleDrive
+    saveScopedLocalStorage
   ]);
 
   /**
-   * Continuous multi-device polling & window focus synchronization
-   */
-  useEffect(() => {
-    if (!googleUser?.isConnected) return;
-
-    // Background interval: check every 7 seconds for changes from other devices
-    const intervalId = setInterval(() => {
-      checkRemoteChangesForMultiDevice();
-    }, 7000);
-
-    // Immediate check when tab or window gains focus or becomes visible
-    const handleFocusOrVisible = () => {
-      if (document.visibilityState === 'visible') {
-        checkRemoteChangesForMultiDevice();
-      }
-    };
-
-    window.addEventListener('focus', handleFocusOrVisible);
-    document.addEventListener('visibilitychange', handleFocusOrVisible);
-
-    return () => {
-      clearInterval(intervalId);
-      window.removeEventListener('focus', handleFocusOrVisible);
-      document.removeEventListener('visibilitychange', handleFocusOrVisible);
-    };
-  }, [googleUser?.isConnected, checkRemoteChangesForMultiDevice]);
-
-  /**
-   * Google Sign-in flow handler
+   * Google Sign-in flow handler:
+   * Logs in with Google, attaches Firestore real-time listeners, and starts session
    */
   const loginWithGoogle = async () => {
     try {
       setIsDriveSyncing(true);
-      setDriveSyncStatus('syncing');
-      const { user, accessToken } = await signInWithGoogle();
+      setFirestoreSyncStatus('syncing');
+      const { user } = await signInWithGoogle();
       
       const gUser: GoogleAccount = {
         uid: user.uid,
@@ -1502,82 +1462,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       setGoogleUser(gUser);
 
-      // Check user's Google Drive for existing database
-      const meta = await getRemoteDatabaseMetadata(accessToken);
-      if (meta && meta.fileId) {
-        lastDriveFileIdRef.current = meta.fileId;
-        const remoteRes = await readDatabaseFromDrive(accessToken, meta.fileId);
-        if (remoteRes?.data) {
-          const localPayload = buildCurrentPayloadRef.current();
-          const merged = mergeDatabasePayloads(localPayload, remoteRes.data);
-
-          setProducts(merged.products);
-          setSales(merged.sales);
-          setExpenses(merged.expenses);
-          setFiados(merged.fiados);
-          setClients(merged.clients);
-          setCuentasPorPagar(merged.cuentasPorPagar);
-          setGastosOperativos(merged.gastosOperativos);
-          if (merged.cashShift !== undefined) {
-            setCashShift(merged.cashShift);
-          }
-          if (merged.cashShiftHistory) {
-            setCashShiftHistory(merged.cashShiftHistory);
-          }
-          if (merged.businessInfo) setBusinessInfo(merged.businessInfo);
-          if (merged.bcvRate) setBcvRateState(merged.bcvRate);
-          if (merged.bcvEuroRate) setBcvEuroRateState(merged.bcvEuroRate);
-          if (merged.tombstones) {
-            tombstonesRef.current = merged.tombstones;
-          }
-
-          saveScopedLocalStorageRef.current(user.uid, {
-            products: merged.products,
-            sales: merged.sales,
-            expenses: merged.expenses,
-            fiados: merged.fiados,
-            clients: merged.clients,
-            cuentasPorPagar: merged.cuentasPorPagar,
-            gastosOperativos: merged.gastosOperativos,
-            businessInfo: merged.businessInfo || DEFAULT_BUSINESS_INFO,
-            customCategories: [],
-            cashShift: merged.cashShift,
-            cashShiftHistory: merged.cashShiftHistory || []
-          });
-
-          if (meta.modifiedTime) {
-            lastRemoteModifiedTimeRef.current = meta.modifiedTime;
-          }
-          if (remoteRes.etag || meta.etag) {
-            lastRemoteEtagRef.current = remoteRes.etag || meta.etag || null;
-          }
+      // Connect Firestore real-time listeners
+      if (firestoreUnsubRef.current) firestoreUnsubRef.current();
+      firestoreUnsubRef.current = subscribeToStoreRealtime(user.uid, {
+        onProducts: (newProds) => setProducts(newProds),
+        onSales: (newSales) => setSales(newSales),
+        onExpenses: (newExpenses) => setExpenses(newExpenses),
+        onFiados: (newFiados) => setFiados(newFiados),
+        onClients: (newClients) => setClients(newClients),
+        onCuentasPorPagar: (newCPP) => setCuentasPorPagar(newCPP),
+        onGastosOperativos: (newGastos) => setGastosOperativos(newGastos),
+        onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
+        onMetadata: (metadata) => {
+          if (metadata.businessInfo) setBusinessInfo(metadata.businessInfo);
+          if (metadata.bcvRate) setBcvRateState(metadata.bcvRate);
+          if (metadata.bcvEuroRate) setBcvEuroRateState(metadata.bcvEuroRate);
+          if (metadata.activeCashShift !== undefined) setCashShift(metadata.activeCashShift);
+          if (metadata.customCategories) setCustomCategories(metadata.customCategories);
+        },
+        onError: (err) => {
+          console.warn('[PosVenecia Firestore Realtime] Error:', err);
+          setFirestoreSyncStatus('error');
         }
-      } else {
-        // Remote file not created yet in Google Drive:
-        // PRESERVE local products and upload them to initialize the user's cloud database!
-        const localPayload = buildCurrentPayloadRef.current();
-        const saveRes = await saveDatabaseToDrive(accessToken, localPayload).catch(e => {
-          console.warn('Init drive file error', e);
-          return null;
-        });
-        if (saveRes?.fileId) {
-          lastDriveFileIdRef.current = saveRes.fileId;
-        }
-        if (saveRes?.modifiedTime) {
-          lastRemoteModifiedTimeRef.current = saveRes.modifiedTime;
-        }
-        if (saveRes?.etag) {
-          lastRemoteEtagRef.current = saveRes.etag;
-        }
-      }
+      });
+      setFirestoreSyncStatus('synced');
 
-      setDriveSyncStatus('synced');
-      setLastDriveSyncTime(new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' }));
+      // Migrate existing local products/sales if Firestore was empty
+      const curPayload = buildCurrentPayloadRef.current();
+      checkAndMigrateLocalDataToFirestore(user.uid, {
+        products: curPayload.products,
+        sales: curPayload.sales,
+        expenses: curPayload.expenses,
+        fiados: curPayload.fiados,
+        clients: curPayload.clients,
+        cuentasPorPagar: curPayload.cuentasPorPagar,
+        gastosOperativos: curPayload.gastosOperativos,
+        cashShiftHistory: curPayload.cashShiftHistory || [],
+        businessInfo: curPayload.businessInfo,
+        bcvRate: curPayload.bcvRate,
+        bcvEuroRate: curPayload.bcvEuroRate,
+        cashShift: curPayload.cashShift
+      }).catch(e => console.warn('Firestore initial migration check:', e));
+
       setIsSessionStarted(true);
       localStorage.setItem('posvenecia_session_started', 'true');
     } catch (err: any) {
       console.error('Login error:', err);
-      setDriveSyncStatus('error');
+      setFirestoreSyncStatus('error');
       throw err;
     } finally {
       setIsDriveSyncing(false);
@@ -1590,11 +1521,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
    */
   const logoutGoogle = async () => {
     try {
+      if (firestoreUnsubRef.current) {
+        firestoreUnsubRef.current();
+        firestoreUnsubRef.current = null;
+      }
       await logOutGoogle();
     } catch (err) {
       console.warn('Logout error from Firebase auth:', err);
     } finally {
       setGoogleUser(null);
+      setFirestoreSyncStatus('unauthenticated');
       setDriveSyncStatus('unauthenticated');
       setIsSessionStarted(false);
       localStorage.removeItem('posvenecia_session_started');
@@ -1631,17 +1567,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ...products.map(p => p.category)
   ])).filter(Boolean);
 
-  // Product CRUD
+  // Product CRUD with real-time Firestore sync
   const addProduct = (prodData: Omit<Product, 'id'>) => {
     const newProd: Product = {
       ...prodData,
       id: 'prod-' + Date.now()
     };
     setProducts(prev => [newProd, ...prev]);
+    if (googleUser?.uid) {
+      saveProductToFirestore(googleUser.uid, newProd).catch(e => console.warn('Firestore addProduct error:', e));
+    }
   };
 
   const updateProduct = (updated: Product) => {
     setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
+    if (googleUser?.uid) {
+      saveProductToFirestore(googleUser.uid, updated).catch(e => console.warn('Firestore updateProduct error:', e));
+    }
   };
 
   const deleteProduct = (id: string) => {
@@ -1650,10 +1592,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id
     ];
     setProducts(prev => prev.filter(p => p.id !== id));
+    if (googleUser?.uid) {
+      deleteProductFromFirestore(googleUser.uid, id).catch(e => console.warn('Firestore deleteProduct error:', e));
+    }
   };
 
   const adjustStock = (id: string, newStock: number): boolean => {
     let found = false;
+    const safeStock = Math.max(0, newStock);
     setProducts(prev => {
       const exists = prev.some(p => p.id === id);
       if (!exists) {
@@ -1661,8 +1607,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return prev;
       }
       found = true;
-      return prev.map(p => p.id === id ? { ...p, stock: Math.max(0, newStock) } : p);
+      return prev.map(p => p.id === id ? { ...p, stock: safeStock } : p);
     });
+    if (found && googleUser?.uid) {
+      adjustProductStockInFirestore(googleUser.uid, id, safeStock).catch(e => console.warn('Firestore adjustStock error:', e));
+    }
     return found;
   };
 
@@ -1837,12 +1786,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // Record Fiado if credit
+    let createdFiado: FiadoRecord | undefined = undefined;
     if (paymentDetails.method === 'fiao' || (paymentDetails.method === 'pago_combinado' && (paymentDetails.combinedBreakdown?.fiaoRemaining || 0) > 0)) {
       const remainingDebt = paymentDetails.method === 'fiao' 
         ? (paymentDetails.fiaoRemainingUSD ?? totalUSD)
         : (paymentDetails.combinedBreakdown?.fiaoRemaining || 0);
 
-      const newFiado: FiadoRecord = {
+      createdFiado = {
         id: 'fiado-' + Date.now(),
         saleId: newSale.id,
         invoiceNumber: newSale.invoiceNumber,
@@ -1856,7 +1806,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         status: 'pendiente',
         abonos: []
       };
-      setFiados(prev => [newFiado, ...prev]);
+      setFiados(prev => [createdFiado!, ...prev]);
     }
 
     setSales(prev => [newSale, ...prev]);
@@ -1865,6 +1815,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Persist immediately in IndexedDB for Offline-First architecture
     saveOfflineSale(newSale).catch(e => console.error('Error saving sale to IndexedDB:', e));
+
+    // Save atomically in Firebase Firestore in real time for instant multi-device reflection!
+    if (googleUser?.uid) {
+      const stockDeductions = cart
+        .filter(item => !item.product.isService && item.product.itemType !== 'servicio')
+        .map(item => ({ productId: item.product.id, quantity: item.quantity }));
+      saveSaleAtomic(googleUser.uid, newSale, stockDeductions, createdFiado).catch(e =>
+        console.warn('Firestore atomic sale error:', e)
+      );
+    }
 
     return newSale;
   };
@@ -1902,14 +1862,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 3. Void/cancel associated Fiado debt
+    const associatedFiado = fiados.find(f => f.saleId === saleId);
     setFiados(prevFiados => prevFiados.filter(f => f.saleId !== saleId));
-    // Note: Past closed shifts in cashShiftHistory remain immutable for fiscal closing integrity
+
+    // 4. Cancel atomically in Firebase Firestore in real time!
+    if (googleUser?.uid) {
+      const stockRestorations = (targetSale.items || [])
+        .filter(item => !item.product.isService && item.product.itemType !== 'servicio')
+        .map(item => ({ productId: item.product.id, quantity: item.quantity }));
+      cancelSaleAtomic(googleUser.uid, targetSale, stockRestorations, associatedFiado?.id).catch(e =>
+        console.warn('Firestore atomic cancelSale error:', e)
+      );
+    }
   };
 
   const updateSale = (updatedSale: Sale) => {
     setSales(prev => prev.map(s => s.id === updatedSale.id ? updatedSale : s));
     setLastCompletedSale(prev => prev?.id === updatedSale.id ? updatedSale : prev);
-    // Note: Past closed shifts in cashShiftHistory remain immutable for fiscal closing integrity
+    if (googleUser?.uid) {
+      saveSaleAtomic(googleUser.uid, updatedSale, []).catch(e => console.warn('Firestore updateSale error:', e));
+    }
   };
 
   // Expenses operations
@@ -1927,6 +1899,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Persist immediately in IndexedDB for Offline-First architecture
     saveOfflineExpense(newExp).catch(e => console.error('Error saving expense to IndexedDB:', e));
+
+    if (googleUser?.uid) {
+      saveExpenseToFirestore(googleUser.uid, newExp).catch(e => console.warn('Firestore addExpense error:', e));
+    }
   };
 
   const deleteExpense = (id: string) => {
@@ -1935,6 +1911,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id
     ];
     setExpenses(prev => prev.filter(e => e.id !== id));
+    if (googleUser?.uid) {
+      deleteExpenseFromFirestore(googleUser.uid, id).catch(e => console.warn('Firestore deleteExpense error:', e));
+    }
   };
 
   // Fiados operations
@@ -1958,12 +1937,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           reference,
           notes
         };
-        return {
+        const updatedFiado: FiadoRecord = {
           ...f,
           remainingDebtUSD: newRemaining,
           status: newRemaining <= 0 ? 'saldado' : 'parcial',
           abonos: [newAbono, ...f.abonos]
         };
+        if (googleUser?.uid) {
+          saveFiadoToFirestore(googleUser.uid, updatedFiado).catch(e => console.warn('Firestore fiado abono error:', e));
+        }
+        return updatedFiado;
       }
       return f;
     }));
@@ -1991,6 +1974,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       abonos: []
     };
     setFiados(prev => [newFiado, ...prev]);
+    if (googleUser?.uid) {
+      saveFiadoToFirestore(googleUser.uid, newFiado).catch(e => console.warn('Firestore createManualFiado error:', e));
+    }
   };
 
   // Cuentas por Pagar (Proveedores)
@@ -2004,10 +1990,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       abonos: []
     };
     setCuentasPorPagar(prev => [newCuenta, ...prev]);
+    if (googleUser?.uid) {
+      saveCuentaPorPagarToFirestore(googleUser.uid, newCuenta).catch(e => console.warn('Firestore addCuentaPorPagar error:', e));
+    }
   };
 
   const updateCuentaPorPagar = (updated: CuentaPorPagar) => {
     setCuentasPorPagar(prev => prev.map(c => c.id === updated.id ? updated : c));
+    if (googleUser?.uid) {
+      saveCuentaPorPagarToFirestore(googleUser.uid, updated).catch(e => console.warn('Firestore updateCuentaPorPagar error:', e));
+    }
   };
 
   const deleteCuentaPorPagar = (id: string) => {
@@ -2016,6 +2008,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id
     ];
     setCuentasPorPagar(prev => prev.filter(c => c.id !== id));
+    if (googleUser?.uid) {
+      deleteCuentaPorPagarFromFirestore(googleUser.uid, id).catch(e => console.warn('Firestore deleteCuentaPorPagar error:', e));
+    }
   };
 
   const addAbonoToCuentaPorPagar = (cuentaId: string, amountUSD: number, method: PaymentMethod, reference?: string, notes?: string) => {
@@ -2034,13 +2029,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           notes: notes || 'Abono realizado a proveedor'
         };
 
-        return {
+        const updatedCuenta: CuentaPorPagar = {
           ...c,
           paidAmountUSD: newPaid,
           remainingUSD: newRemaining,
           status: newRemaining <= 0 ? 'pagada' : 'parcial',
           abonos: [newAbono, ...c.abonos]
         };
+
+        if (googleUser?.uid) {
+          saveCuentaPorPagarToFirestore(googleUser.uid, updatedCuenta).catch(e => console.warn('Firestore abono cpp error:', e));
+        }
+
+        return updatedCuenta;
       }
       return c;
     }));
@@ -2053,10 +2054,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: 'gasto-' + Date.now()
     };
     setGastosOperativos(prev => [newGasto, ...prev]);
+    if (googleUser?.uid) {
+      saveGastoOperativoToFirestore(googleUser.uid, newGasto).catch(e => console.warn('Firestore addGastoOperativo error:', e));
+    }
   };
 
   const updateGastoOperativo = (updated: GastoOperativo) => {
     setGastosOperativos(prev => prev.map(g => g.id === updated.id ? updated : g));
+    if (googleUser?.uid) {
+      saveGastoOperativoToFirestore(googleUser.uid, updated).catch(e => console.warn('Firestore updateGastoOperativo error:', e));
+    }
   };
 
   const deleteGastoOperativo = (id: string) => {
@@ -2065,18 +2072,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id
     ];
     setGastosOperativos(prev => prev.filter(g => g.id !== id));
+    if (googleUser?.uid) {
+      deleteGastoOperativoFromFirestore(googleUser.uid, id).catch(e => console.warn('Firestore deleteGastoOperativo error:', e));
+    }
   };
 
   const markGastoOperativoPagado = (id: string, paymentMethod: PaymentMethod, reference?: string) => {
     setGastosOperativos(prev => prev.map(g => {
       if (g.id === id) {
-        return {
+        const updatedGasto: GastoOperativo = {
           ...g,
           status: 'pagado',
           paymentDate: new Date().toISOString(),
           paymentMethod,
           reference
         };
+        if (googleUser?.uid) {
+          saveGastoOperativoToFirestore(googleUser.uid, updatedGasto).catch(e => console.warn('Firestore markGastoPagado error:', e));
+        }
+        return updatedGasto;
       }
       return g;
     }));
@@ -2090,6 +2104,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString()
     };
     setClients(prev => [newClient, ...prev]);
+    if (googleUser?.uid) {
+      saveClientToFirestore(googleUser.uid, newClient).catch(e => console.warn('Firestore addClient error:', e));
+    }
     return newClient;
   };
 
@@ -2097,6 +2114,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setClients(prev => prev.map(c => c.id === updated.id ? updated : c));
     if (selectedClientForPOS?.id === updated.id) {
       setSelectedClientForPOS(updated);
+    }
+    if (googleUser?.uid) {
+      saveClientToFirestore(googleUser.uid, updated).catch(e => console.warn('Firestore updateClient error:', e));
     }
   };
 
@@ -2108,6 +2128,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setClients(prev => prev.filter(c => c.id !== id));
     if (selectedClientForPOS?.id === id) {
       setSelectedClientForPOS(null);
+    }
+    if (googleUser?.uid) {
+      deleteClientFromFirestore(googleUser.uid, id).catch(e => console.warn('Firestore deleteClient error:', e));
     }
   };
 
@@ -2222,6 +2245,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateGastoOperativo,
         deleteGastoOperativo,
         markGastoOperativoPagado,
+        firestoreSyncStatus,
+        backupClosingToDrive: syncToGoogleDrive,
         googleUser,
         isAuthLoading,
         isDriveSyncing,

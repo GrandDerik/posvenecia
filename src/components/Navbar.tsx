@@ -315,15 +315,16 @@ export const Navbar: React.FC = () => {
               </button>
             ) : null}
 
-            {/* Multi-Device Cloud Sync Status Button */}
+            {/* Multi-Device Realtime Cloud Sync Status Button */}
             <button
               type="button"
               onClick={() => setIsGoogleModalOpen(true)}
               className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition-all active:scale-95 cursor-pointer shadow-2xs"
-              title="Sincronización multi-dispositivo en la nube (Google Drive). Clic para ver estado o sincronizar manualmente."
+              title="Sincronización en tiempo real multi-dispositivo (Firebase Firestore) y respaldo seguro en Google Drive. Clic para gestionar."
             >
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
               <Cloud className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>Multi-Dispositivo</span>
+              <span>Tiempo Real</span>
             </button>
 
             {/* Daily Cash Shift Status Button */}

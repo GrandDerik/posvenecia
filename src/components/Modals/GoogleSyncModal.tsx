@@ -309,110 +309,86 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
           )}
         </div>
 
-        {/* SECTION 2: GOOGLE DRIVE DIRECT STORAGE */}
+        {/* SECTION 2: ARCHITECTURE: FIRESTORE REALTIME & GOOGLE DRIVE CLOSING BACKUP */}
         <div className="border border-slate-200 rounded-2xl p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="p-1.5 bg-blue-100 text-blue-700 rounded-lg">
+              <span className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg">
                 <Database className="w-4 h-4" />
               </span>
               <div>
                 <h4 className="font-extrabold text-slate-900 text-sm">
-                  Almacenamiento en Google Drive
+                  Base de Datos en Tiempo Real (Firebase Firestore)
                 </h4>
                 <p className="text-[11px] text-slate-500">
-                  Archivo privado: <span className="font-mono font-bold text-slate-700">posvenecia_database.json</span>
+                  Sincronización multi-dispositivo en milisegundos sin límite de tokens
                 </p>
               </div>
             </div>
 
-            {/* Sync Badge */}
-            {isDriveSyncing ? (
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1">
-                <RefreshCw className="w-3 h-3 animate-spin text-blue-600" /> Sincronizando
-              </span>
-            ) : driveSyncStatus === 'synced' ? (
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Al día en Drive
-              </span>
-            ) : driveSyncStatus === 'error' ? (
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
-                <AlertCircle className="w-3 h-3 text-rose-600" /> Requiere sincronizar
-              </span>
-            ) : (
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-                Sin sincronizar
-              </span>
-            )}
+            {/* Realtime Live Badge */}
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              En Vivo
+            </span>
           </div>
 
-          <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 space-y-1.5 text-xs text-slate-600">
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="text-slate-500 font-medium">Ubicación en Google Drive:</span>
-              <span className="font-mono font-bold text-slate-800 flex items-center gap-1">
-                <FolderLock className="w-3 h-3 text-amber-600" /> Carpeta Privada de App (appDataFolder)
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="text-slate-500 font-medium">Último respaldo en Drive:</span>
-              <span className="font-semibold text-slate-800 font-mono">
-                {lastDriveSyncTime || 'Aún no respaldado'}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-1.5 pt-1 text-[11px] text-slate-700">
-              <div>📦 {products.length} Productos/Servicios</div>
-              <div>🛒 {sales.length} Ventas registradas</div>
-              <div>👥 {clients.length} Clientes habituales</div>
-              <div>💳 {cuentasPorPagar.length} Cuentas por pagar</div>
-              <div>🏢 {gastosOperativos.length} Gastos del mes</div>
-              <div>🔒 Multi-usuario aislado</div>
-            </div>
-          </div>
-
-          {/* Drive Action Buttons */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
-            <button
-              type="button"
-              disabled={isDriveSyncing || !googleUser?.isConnected}
-              onClick={handleManualSync}
-              className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isDriveSyncing ? 'animate-spin' : ''}`} />
-              <span>{isDriveSyncing ? 'Guardando en Drive...' : 'Guardar en Google Drive'}</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={isDriveSyncing || !googleUser?.isConnected}
-              onClick={handleManualReload}
-              className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
-              title="Descargar la base de datos guardada en tu Google Drive"
-            >
-              <Cloud className="w-3.5 h-3.5 text-blue-600" />
-              <span>Cargar desde Drive</span>
-            </button>
-          </div>
-
-          {/* Multi-Device Synchronize Card */}
-          <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-2">
-            <div className="flex items-center gap-2">
-              <RefreshCw className="w-4 h-4 text-emerald-700 shrink-0" />
-              <div className="text-xs font-extrabold text-emerald-950">
-                Sincronización Multi-Dispositivo con una Sola Cuenta
-              </div>
+          <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-1.5 text-xs text-emerald-950">
+            <div className="font-bold flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Operación Diaria Multi-Dispositivo</span>
             </div>
             <p className="text-[11px] text-emerald-800 leading-relaxed">
-              Puedes abrir PosVenecia en tu teléfono, tablet y computadora de caja con esta misma cuenta Google. Toda la información de ventas, inventario, cierres de caja y cuentas por pagar se mantiene idéntica en todos tus dispositivos.
+              Cada venta, ajuste de inventario, cliente o gasto se refleja al instante en todos tus teléfonos, tablets y computadoras conectadas con esta misma cuenta de Google.
             </p>
-            <button
-              type="button"
-              disabled={isDriveSyncing || !googleUser?.isConnected}
-              onClick={handleMultiDeviceSync}
-              className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isDriveSyncing ? 'animate-spin' : ''}`} />
-              <span>Sincronizar y Comprobar Cambios de Otros Dispositivos</span>
-            </button>
+          </div>
+
+          {/* Google Drive Closing Backup Card */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FolderLock className="w-4 h-4 text-amber-600 shrink-0" />
+                <span className="font-bold text-slate-900 text-xs">
+                  Respaldo de Cierre de Caja (Google Drive)
+                </span>
+              </div>
+              {isDriveSyncing ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin text-blue-600" /> Respaldando
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-800 border border-blue-200">
+                  {lastDriveSyncTime ? `Último: ${lastDriveSyncTime}` : 'Al Cerrar Caja'}
+                </span>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-600 leading-relaxed">
+              Al finalizar tu jornada comercial y presionar <strong className="text-slate-800">Cerrar Caja</strong>, el sistema empaqueta automáticamente toda la base de datos (<span className="font-mono text-slate-800 font-bold">posvenecia_database.json</span>) y la sube de forma segura y privada a tu Google Drive personal.
+            </p>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={isDriveSyncing || !googleUser?.isConnected}
+                onClick={handleManualSync}
+                className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isDriveSyncing ? 'animate-spin' : ''}`} />
+                <span>{isDriveSyncing ? 'Guardando...' : 'Respaldar en Google Drive Ahora'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isDriveSyncing || !googleUser?.isConnected}
+                onClick={handleManualReload}
+                className="flex-1 py-2 px-3 bg-white hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold border border-slate-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                title="Descargar y restaurar el respaldo de tu Google Drive"
+              >
+                <Cloud className="w-3.5 h-3.5 text-blue-600" />
+                <span>Restaurar desde Drive</span>
+              </button>
+            </div>
           </div>
         </div>
 

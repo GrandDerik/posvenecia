@@ -1,0 +1,243 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Inventory product or quick service item in the store catalog",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "code": { "type": "string", "maxLength": 100 },
+        "name": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 100 },
+        "costUSD": { "type": "number" },
+        "priceUSD": { "type": "number" },
+        "priceBsFixed": { "type": "number" },
+        "stock": { "type": "number" },
+        "minStock": { "type": "number" },
+        "isExemptFromIVA": { "type": "boolean" },
+        "unit": { "type": "string", "maxLength": 50 },
+        "imageUrl": { "type": "string", "maxLength": 2000 },
+        "itemType": { "type": "string", "maxLength": 50 },
+        "isService": { "type": "boolean" },
+        "purchaseNote": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["id", "code", "name", "category", "priceUSD", "stock"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "Completed or canceled sales transaction record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 100 },
+        "invoiceNumber": { "type": "string", "maxLength": 100 },
+        "controlNumber": { "type": "string", "maxLength": 100 },
+        "clientName": { "type": "string", "maxLength": 200 },
+        "clientRIF": { "type": "string", "maxLength": 50 },
+        "clientPhone": { "type": "string", "maxLength": 50 },
+        "clientAddress": { "type": "string", "maxLength": 500 },
+        "subtotalUSD": { "type": "number" },
+        "exemptUSD": { "type": "number" },
+        "taxableUSD": { "type": "number" },
+        "ivaUSD": { "type": "number" },
+        "igtfUSD": { "type": "number" },
+        "totalUSD": { "type": "number" },
+        "bcvRate": { "type": "number" },
+        "subtotalBs": { "type": "number" },
+        "exemptBs": { "type": "number" },
+        "taxableBs": { "type": "number" },
+        "ivaBs": { "type": "number" },
+        "igtfBs": { "type": "number" },
+        "totalBs": { "type": "number" },
+        "paymentMethod": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "maxLength": 50 },
+        "cashierName": { "type": "string", "maxLength": 100 },
+        "syncStatus": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "date", "invoiceNumber", "totalUSD", "paymentMethod", "status"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Purchases and outgoing operational expenses (Libro de Compras)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 100 },
+        "invoiceNumber": { "type": "string", "maxLength": 100 },
+        "controlNumber": { "type": "string", "maxLength": 100 },
+        "supplierName": { "type": "string", "maxLength": 200 },
+        "supplierRIF": { "type": "string", "maxLength": 50 },
+        "description": { "type": "string", "maxLength": 500 },
+        "category": { "type": "string", "maxLength": 100 },
+        "amountUSD": { "type": "number" },
+        "amountBs": { "type": "number" },
+        "baseImponibleBs": { "type": "number" },
+        "ivaBs": { "type": "number" },
+        "retencionIVABs": { "type": "number" },
+        "retencionISLRBs": { "type": "number" },
+        "bcvRate": { "type": "number" },
+        "paymentMethod": { "type": "string", "maxLength": 50 },
+        "reference": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "date", "supplierName", "amountUSD", "amountBs", "category"]
+    },
+    "FiadoRecord": {
+      "title": "FiadoRecord",
+      "description": "Credit account receivable (Cuentas por cobrar / Fiados)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "saleId": { "type": "string", "maxLength": 128 },
+        "invoiceNumber": { "type": "string", "maxLength": 100 },
+        "clientName": { "type": "string", "maxLength": 200 },
+        "clientCI": { "type": "string", "maxLength": 50 },
+        "clientPhone": { "type": "string", "maxLength": 50 },
+        "clientAddress": { "type": "string", "maxLength": 500 },
+        "date": { "type": "string", "maxLength": 100 },
+        "originalDebtUSD": { "type": "number" },
+        "remainingDebtUSD": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "clientName", "originalDebtUSD", "remainingDebtUSD", "status"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Registered customer profile for invoicing and credit",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "rif": { "type": "string", "maxLength": 50 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "address": { "type": "string", "maxLength": 500 },
+        "email": { "type": "string", "maxLength": 200 },
+        "creditLimitUSD": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "name", "rif", "phone"]
+    },
+    "CuentaPorPagar": {
+      "title": "CuentaPorPagar",
+      "description": "Supplier account payable (Cuentas por pagar a proveedores)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "supplierName": { "type": "string", "maxLength": 200 },
+        "supplierRIF": { "type": "string", "maxLength": 50 },
+        "supplierPhone": { "type": "string", "maxLength": 50 },
+        "invoiceNumber": { "type": "string", "maxLength": 100 },
+        "controlNumber": { "type": "string", "maxLength": 100 },
+        "date": { "type": "string", "maxLength": 100 },
+        "dueDate": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "totalAmountUSD": { "type": "number" },
+        "paidAmountUSD": { "type": "number" },
+        "remainingUSD": { "type": "number" },
+        "status": { "type": "string", "maxLength": 50 },
+        "notes": { "type": "string", "maxLength": 1000 }
+      },
+      "required": ["id", "supplierName", "invoiceNumber", "totalAmountUSD", "status"]
+    },
+    "GastoOperativo": {
+      "title": "GastoOperativo",
+      "description": "Fixed or variable operational expense (alquiler, nómina, luz)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "concept": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 100 },
+        "type": { "type": "string", "maxLength": 50 },
+        "month": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 100 },
+        "dueDate": { "type": "string", "maxLength": 100 },
+        "amountUSD": { "type": "number" },
+        "amountBs": { "type": "number" },
+        "bcvRate": { "type": "number" },
+        "status": { "type": "string", "maxLength": 50 },
+        "paymentDate": { "type": "string", "maxLength": 100 },
+        "paymentMethod": { "type": "string", "maxLength": 50 },
+        "reference": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 1000 }
+      },
+      "required": ["id", "concept", "category", "amountUSD", "status"]
+    },
+    "CashShift": {
+      "title": "CashShift",
+      "description": "Daily register shift history and cash balance report (Arqueo y Cierre)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "isOpen": { "type": "boolean" },
+        "openedAt": { "type": "string", "maxLength": 100 },
+        "openedDateFormatted": { "type": "string", "maxLength": 100 },
+        "closedAt": { "type": "string", "maxLength": 100 },
+        "closedDateFormatted": { "type": "string", "maxLength": 100 },
+        "initialCashUSD": { "type": "number" },
+        "initialCashBs": { "type": "number" },
+        "expectedCashUSD": { "type": "number" },
+        "expectedCashBs": { "type": "number" },
+        "countedCashUSD": { "type": "number" },
+        "countedCashBs": { "type": "number" },
+        "differenceUSD": { "type": "number" },
+        "differenceBs": { "type": "number" },
+        "closedNotes": { "type": "string", "maxLength": 1000 },
+        "openedBy": { "type": "string", "maxLength": 100 },
+        "closedBy": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "isOpen", "openedAt"]
+    },
+    "StoreMetadata": {
+      "title": "StoreMetadata",
+      "description": "Store configuration, active shift, BCV exchange rates and business profile",
+      "type": "object",
+      "properties": {
+        "updatedAt": { "type": "string", "maxLength": 100 },
+        "bcvRate": { "type": "number" },
+        "bcvEuroRate": { "type": "number" },
+        "lastUpdatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["updatedAt"]
+    }
+  },
+  "firestore": {
+    "/businesses/{businessId}/products/{productId}": {
+      "schema": { "$ref": "Product" },
+      "description": "Store catalog products and inventory"
+    },
+    "/businesses/{businessId}/sales/{saleId}": {
+      "schema": { "$ref": "Sale" },
+      "description": "Store completed and canceled sales transactions"
+    },
+    "/businesses/{businessId}/expenses/{expenseId}": {
+      "schema": { "$ref": "Expense" },
+      "description": "Store expenses and purchases book"
+    },
+    "/businesses/{businessId}/fiados/{fiadoId}": {
+      "schema": { "$ref": "FiadoRecord" },
+      "description": "Accounts receivable and customer credits"
+    },
+    "/businesses/{businessId}/clients/{clientId}": {
+      "schema": { "$ref": "Client" },
+      "description": "Store customer directory"
+    },
+    "/businesses/{businessId}/cuentasPorPagar/{cuentaId}": {
+      "schema": { "$ref": "CuentaPorPagar" },
+      "description": "Supplier accounts payable"
+    },
+    "/businesses/{businessId}/gastosOperativos/{gastoId}": {
+      "schema": { "$ref": "GastoOperativo" },
+      "description": "Monthly recurring and eventual operational expenses"
+    },
+    "/businesses/{businessId}/cashShiftHistory/{shiftId}": {
+      "schema": { "$ref": "CashShift" },
+      "description": "Historical cash register shifts and closures"
+    },
+    "/businesses/{businessId}/metadata/{docId}": {
+      "schema": { "$ref": "StoreMetadata" },
+      "description": "Business profile, BCV exchange rates, and active shift state"
+    }
+  }
+}
