@@ -72,33 +72,6 @@ const AppContent: React.FC = () => {
       {/* Top Navbar with BCV ticker and tabs */}
       <Navbar />
 
-      {/* Google Drive Token Expired / Reconnect Banner */}
-      {googleUser?.isConnected && driveSyncStatus === 'token_expired' && (
-        <div className="bg-amber-400 border-b border-amber-500 text-slate-950 px-4 py-3 shadow-sm animate-in slide-in-from-top-2">
-          <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-amber-600/30 text-amber-950 border border-amber-600/40 flex items-center justify-center shrink-0">
-                <RotateCw className="w-4 h-4 animate-spin" />
-              </div>
-              <div>
-                <span className="font-extrabold text-sm block text-amber-950">Sincronización multi-dispositivo en pausa</span>
-                <span className="text-slate-800 font-medium">
-                  Tu sesión con Google Drive venció (~60 min). Reconecta tu cuenta en 1 clic para cargar y sincronizar los productos de tu teléfono en esta PC.
-                </span>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => renewGoogleSession()}
-              disabled={isDriveSyncing}
-              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-black text-white font-extrabold shadow-md hover:shadow-lg transition-all active:scale-95 flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-60"
-            >
-              <RotateCw className={`w-3.5 h-3.5 ${isDriveSyncing ? 'animate-spin' : ''}`} />
-              <span>{isDriveSyncing ? 'Sincronizando...' : 'Conectar y Sincronizar'}</span>
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Main Tab Content */}
       <main className="flex-1 pb-12">

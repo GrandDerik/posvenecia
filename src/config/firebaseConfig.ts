@@ -14,17 +14,17 @@ export interface FirebaseClientConfig {
   oAuthClientId?: string;
 }
 
-// Read configuration exclusively from Vite environment variables (import.meta.env)
+// Read configuration exclusively from Vite environment variables (import.meta.env) with active project defaults
 export const firebaseConfig: FirebaseClientConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || '',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyDKMG2tIxJNlEWH9zfZODyLFvw3ckkSZSw',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'gen-lang-client-0878270695.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'gen-lang-client-0878270695',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'gen-lang-client-0878270695.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '304580032049',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:304580032049:web:ffebf0cb8a0ce41cbbc710',
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || 'ai-studio-puntodeventavene-02f013f6-59ff-468a-bab5-b3cb84f54e52',
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || '',
-  oAuthClientId: import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || ''
+  oAuthClientId: import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || '304580032049-he01jhueqb8b2g7du98aks9co0f62hft.apps.googleusercontent.com'
 };
 
 export const isFirebaseConfigured = Boolean(
@@ -32,7 +32,8 @@ export const isFirebaseConfigured = Boolean(
   firebaseConfig.projectId &&
   firebaseConfig.apiKey !== 'AIzaSy...' &&
   !firebaseConfig.apiKey.includes('...') &&
-  firebaseConfig.projectId !== 'tu-proyecto'
+  firebaseConfig.projectId !== 'tu-proyecto' &&
+  firebaseConfig.projectId !== 'posvenecia-local'
 );
 
 // Safe fallback configuration to ensure the application never crashes if environment variables are not yet loaded

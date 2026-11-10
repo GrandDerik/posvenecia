@@ -56,6 +56,7 @@ export const Navbar: React.FC = () => {
     syncOfflineData,
     logoutGoogle,
     driveSyncStatus,
+    firestoreSyncStatus,
     renewGoogleSession
   } = useApp();
 
@@ -258,36 +259,16 @@ export const Navbar: React.FC = () => {
               </span>
 
               {googleUser?.isConnected ? (
-                driveSyncStatus === 'token_expired' ? (
-                  <span 
-                    className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping shrink-0" 
-                    title="Sesión de Google Drive expirada. Clic para renovar." 
-                  />
-                ) : (
-                  <span 
-                    className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" 
-                    title="Sincronizado con Google Drive" 
-                  />
-                )
+                <span 
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    firestoreSyncStatus === 'synced' ? 'bg-emerald-500 animate-pulse' : 'bg-blue-500'
+                  }`} 
+                  title={firestoreSyncStatus === 'synced' ? 'Sincronizado en tiempo real (Cloud Firestore)' : 'Conectando a la nube...'} 
+                />
               ) : (
                 <span className="text-[10px] font-semibold text-blue-600 sm:hidden">Entrar</span>
               )}
             </button>
-
-            {/* Token Expired Direct 1-Click Renew Pill */}
-            {driveSyncStatus === 'token_expired' && (
-              <button
-                type="button"
-                onClick={async () => {
-                  await renewGoogleSession();
-                }}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[11px] shadow-sm animate-pulse cursor-pointer transition-all"
-                title="Tu token de Google Drive ha expirado (~60 min). Clic para renovar la sesión y reactivar el respaldo automático."
-              >
-                <RotateCw className="w-3 h-3 animate-spin" />
-                <span>⚠️ Renovar Drive</span>
-              </button>
-            )}
 
             {/* Network Status & Offline-First Pill */}
             {!isOnline ? (

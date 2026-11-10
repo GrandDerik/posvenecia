@@ -9,7 +9,7 @@ import {
   increment,
   Unsubscribe
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../config/firebaseConfig';
+import { db, handleFirestoreError, OperationType, auth } from '../config/firebaseConfig';
 import { 
   Product, 
   Sale, 
@@ -46,6 +46,43 @@ export interface FirestoreStoreListeners {
 }
 
 /**
+ * Strips all `undefined` fields recursively from any object or array.
+ * CRITICAL: Cloud Firestore strictly crashes if any document property is `undefined`.
+ */
+export const cleanForFirestore = <T>(data: T): T => {
+  if (data === null || data === undefined) {
+    return null as unknown as T;
+  }
+  if (Array.isArray(data)) {
+    return data
+      .filter((item) => item !== undefined)
+      .map((item) => cleanForFirestore(item)) as unknown as T;
+  }
+  if (typeof data === 'object' && !(data instanceof Date)) {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        cleaned[key] = cleanForFirestore(value);
+      }
+    }
+    return cleaned as T;
+  }
+  return data;
+};
+
+/**
+ * Derives the canonical unique businessId directly from the authenticated Google user.
+ * Guarantees all devices logged in with the same Google account map to the exact same Firestore path.
+ */
+export const getCanonicalBusinessId = (uidOrEmail?: string | null): string => {
+  const candidate = uidOrEmail?.trim() || auth.currentUser?.uid;
+  if (!candidate) {
+    throw new Error('No hay sesión de usuario autenticada para interactuar con Cloud Firestore.');
+  }
+  return candidate;
+};
+
+/**
  * Subscribe to all store collections in real-time for instant multi-device sync
  */
 export const subscribeToStoreRealtime = (
@@ -62,6 +99,8 @@ export const subscribeToStoreRealtime = (
     }
   };
 
+  console.info(`[PosVenecia Firestore] Iniciando suscripción en tiempo real para businessId: ${businessId}`);
+
   // 1. Products
   const productsPath = `businesses/${businessId}/products`;
   unsubscribers.push(
@@ -72,6 +111,7 @@ export const subscribeToStoreRealtime = (
         snapshot.forEach((d) => {
           products.push(d.data() as Product);
         });
+        console.info(`[PosVenecia Firestore] onSnapshot: ${products.length} productos recibidos (fromCache: ${snapshot.metadata.fromCache})`);
         callbacks.onProducts(products);
       },
       (err) => handleErr(OperationType.GET, productsPath, err)
@@ -226,9 +266,10 @@ export const saveSaleAtomic = async (
   try {
     const batch = writeBatch(db);
 
-    // 1. Add sale doc
+    // 1. Add sale doc cleaned of any undefined values
+    const cleanedSale = cleanForFirestore(sale);
     const saleRef = doc(db, 'businesses', businessId, 'sales', sale.id);
-    batch.set(saleRef, sale);
+    batch.set(saleRef, cleanedSale);
 
     // 2. Decrement stock for physical products
     for (const item of stockDeductions) {
@@ -242,11 +283,13 @@ export const saveSaleAtomic = async (
 
     // 3. Add fiado doc if payment is fiao or has remaining credit
     if (newFiado) {
+      const cleanedFiado = cleanForFirestore(newFiado);
       const fiadoRef = doc(db, 'businesses', businessId, 'fiados', newFiado.id);
-      batch.set(fiadoRef, newFiado);
+      batch.set(fiadoRef, cleanedFiado);
     }
 
     await batch.commit();
+    console.info(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} guardada en Firestore.`);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -290,18 +333,21 @@ export const cancelSaleAtomic = async (
     }
 
     await batch.commit();
+    console.info(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} anulada en Firestore.`);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 };
 
 /**
- * Save or update a product in Firestore
+ * Save or update a product in Firestore directly using setDoc with merge
  */
 export const saveProductToFirestore = async (businessId: string, product: Product): Promise<void> => {
   const path = `businesses/${businessId}/products/${product.id}`;
   try {
-    await setDoc(doc(db, 'businesses', businessId, 'products', product.id), product, { merge: true });
+    const cleaned = cleanForFirestore(product);
+    await setDoc(doc(db, 'businesses', businessId, 'products', product.id), cleaned, { merge: true });
+    console.info(`[PosVenecia Firestore] Producto guardado: ${product.name} (${product.id})`);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -314,6 +360,7 @@ export const deleteProductFromFirestore = async (businessId: string, productId: 
   const path = `businesses/${businessId}/products/${productId}`;
   try {
     await deleteDoc(doc(db, 'businesses', businessId, 'products', productId));
+    console.info(`[PosVenecia Firestore] Producto eliminado: ${productId}`);
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
   }
@@ -327,6 +374,7 @@ export const adjustProductStockInFirestore = async (businessId: string, productI
   try {
     const prodRef = doc(db, 'businesses', businessId, 'products', productId);
     await setDoc(prodRef, { stock: newStock }, { merge: true });
+    console.info(`[PosVenecia Firestore] Stock ajustado a ${newStock} para producto ${productId}`);
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
@@ -338,7 +386,8 @@ export const adjustProductStockInFirestore = async (businessId: string, productI
 export const saveExpenseToFirestore = async (businessId: string, expense: Expense): Promise<void> => {
   const path = `businesses/${businessId}/expenses/${expense.id}`;
   try {
-    await setDoc(doc(db, 'businesses', businessId, 'expenses', expense.id), expense, { merge: true });
+    const cleaned = cleanForFirestore(expense);
+    await setDoc(doc(db, 'businesses', businessId, 'expenses', expense.id), cleaned, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -362,7 +411,8 @@ export const deleteExpenseFromFirestore = async (businessId: string, expenseId: 
 export const saveFiadoToFirestore = async (businessId: string, fiado: FiadoRecord): Promise<void> => {
   const path = `businesses/${businessId}/fiados/${fiado.id}`;
   try {
-    await setDoc(doc(db, 'businesses', businessId, 'fiados', fiado.id), fiado, { merge: true });
+    const cleaned = cleanForFirestore(fiado);
+    await setDoc(doc(db, 'businesses', businessId, 'fiados', fiado.id), cleaned, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -374,7 +424,8 @@ export const saveFiadoToFirestore = async (businessId: string, fiado: FiadoRecor
 export const saveClientToFirestore = async (businessId: string, client: Client): Promise<void> => {
   const path = `businesses/${businessId}/clients/${client.id}`;
   try {
-    await setDoc(doc(db, 'businesses', businessId, 'clients', client.id), client, { merge: true });
+    const cleaned = cleanForFirestore(client);
+    await setDoc(doc(db, 'businesses', businessId, 'clients', client.id), cleaned, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -398,7 +449,8 @@ export const deleteClientFromFirestore = async (businessId: string, clientId: st
 export const saveCuentaPorPagarToFirestore = async (businessId: string, cuenta: CuentaPorPagar): Promise<void> => {
   const path = `businesses/${businessId}/cuentasPorPagar/${cuenta.id}`;
   try {
-    await setDoc(doc(db, 'businesses', businessId, 'cuentasPorPagar', cuenta.id), cuenta, { merge: true });
+    const cleaned = cleanForFirestore(cuenta);
+    await setDoc(doc(db, 'businesses', businessId, 'cuentasPorPagar', cuenta.id), cleaned, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -422,7 +474,8 @@ export const deleteCuentaPorPagarFromFirestore = async (businessId: string, cuen
 export const saveGastoOperativoToFirestore = async (businessId: string, gasto: GastoOperativo): Promise<void> => {
   const path = `businesses/${businessId}/gastosOperativos/${gasto.id}`;
   try {
-    await setDoc(doc(db, 'businesses', businessId, 'gastosOperativos', gasto.id), gasto, { merge: true });
+    const cleaned = cleanForFirestore(gasto);
+    await setDoc(doc(db, 'businesses', businessId, 'gastosOperativos', gasto.id), cleaned, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -446,7 +499,8 @@ export const deleteGastoOperativoFromFirestore = async (businessId: string, gast
 export const saveCashShiftToFirestore = async (businessId: string, shift: CashShift): Promise<void> => {
   const path = `businesses/${businessId}/cashShiftHistory/${shift.id}`;
   try {
-    await setDoc(doc(db, 'businesses', businessId, 'cashShiftHistory', shift.id), shift, { merge: true });
+    const cleaned = cleanForFirestore(shift);
+    await setDoc(doc(db, 'businesses', businessId, 'cashShiftHistory', shift.id), cleaned, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -461,14 +515,11 @@ export const saveStoreMetadataToFirestore = async (
 ): Promise<void> => {
   const path = `businesses/${businessId}/metadata/store`;
   try {
-    await setDoc(
-      doc(db, 'businesses', businessId, 'metadata', 'store'),
-      {
-        ...metadata,
-        updatedAt: new Date().toISOString()
-      },
-      { merge: true }
-    );
+    const cleaned = cleanForFirestore({
+      ...metadata,
+      updatedAt: new Date().toISOString()
+    });
+    await setDoc(doc(db, 'businesses', businessId, 'metadata', 'store'), cleaned, { merge: true });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
@@ -514,7 +565,7 @@ export const checkAndMigrateLocalDataToFirestore = async (
       const chunk = localData.products.slice(i, i + chunkSize);
       const batch = writeBatch(db);
       for (const p of chunk) {
-        batch.set(doc(db, 'businesses', businessId, 'products', p.id), p);
+        batch.set(doc(db, 'businesses', businessId, 'products', p.id), cleanForFirestore(p));
       }
       await batch.commit();
     }
@@ -523,7 +574,7 @@ export const checkAndMigrateLocalDataToFirestore = async (
     if (localData.clients.length > 0) {
       const batch = writeBatch(db);
       for (const c of localData.clients) {
-        batch.set(doc(db, 'businesses', businessId, 'clients', c.id), c);
+        batch.set(doc(db, 'businesses', businessId, 'clients', c.id), cleanForFirestore(c));
       }
       await batch.commit();
     }
@@ -534,7 +585,7 @@ export const checkAndMigrateLocalDataToFirestore = async (
         const chunk = localData.sales.slice(i, i + chunkSize);
         const batch = writeBatch(db);
         for (const s of chunk) {
-          batch.set(doc(db, 'businesses', businessId, 'sales', s.id), s);
+          batch.set(doc(db, 'businesses', businessId, 'sales', s.id), cleanForFirestore(s));
         }
         await batch.commit();
       }
