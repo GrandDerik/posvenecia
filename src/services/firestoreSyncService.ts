@@ -1,6 +1,7 @@
 import { 
   collection, 
   doc, 
+  getDoc,
   onSnapshot, 
   setDoc, 
   deleteDoc, 
@@ -347,14 +348,20 @@ export const saveSaleAtomic = async (
       const saleRef = doc(db, 'businesses', businessId, 'sales', sale.id);
       batch.set(saleRef, cleanedSale);
 
-      // 2. Decrement stock for physical products
+      // 2. Consolidate deductions by productId to guarantee each product is decremented exactly once in the batch
+      const consolidatedDeductions = new Map<string, number>();
       for (const item of stockDeductions) {
         if (item.productId && item.quantity > 0) {
-          const prodRef = doc(db, 'businesses', businessId, 'products', item.productId);
-          batch.update(prodRef, {
-            stock: increment(-item.quantity)
-          });
+          const current = consolidatedDeductions.get(item.productId) || 0;
+          consolidatedDeductions.set(item.productId, current + item.quantity);
         }
+      }
+
+      for (const [productId, quantity] of consolidatedDeductions.entries()) {
+        const prodRef = doc(db, 'businesses', businessId, 'products', productId);
+        batch.update(prodRef, {
+          stock: increment(-quantity)
+        });
       }
 
       // 3. Add fiado doc if payment is fiao or has remaining credit
@@ -392,14 +399,20 @@ export const cancelSaleAtomic = async (
       const saleRef = doc(db, 'businesses', businessId, 'sales', sale.id);
       batch.update(saleRef, { status: 'anulada' });
 
-      // 2. Restore physical product stock
+      // 2. Restore physical product stock (consolidated by productId)
+      const consolidatedRestorations = new Map<string, number>();
       for (const item of stockRestorations) {
         if (item.productId && item.quantity > 0) {
-          const prodRef = doc(db, 'businesses', businessId, 'products', item.productId);
-          batch.update(prodRef, {
-            stock: increment(item.quantity)
-          });
+          const current = consolidatedRestorations.get(item.productId) || 0;
+          consolidatedRestorations.set(item.productId, current + item.quantity);
         }
+      }
+
+      for (const [productId, quantity] of consolidatedRestorations.entries()) {
+        const prodRef = doc(db, 'businesses', businessId, 'products', productId);
+        batch.update(prodRef, {
+          stock: increment(quantity)
+        });
       }
 
       // 3. If fiado, mark it as saldado/anulado
@@ -665,9 +678,26 @@ export const flushPendingQueueToFirestore = async (
     try {
       if (item.action === 'create_sale' && item.payload) {
         const sale = item.payload as Sale;
-        const stockDeductions = (sale.items || [])
-          .filter(i => !i.product.isService && i.product.itemType !== 'servicio')
-          .map(i => ({ productId: i.product.id, quantity: i.quantity }));
+        // Verify if the sale was already saved in Firestore to prevent duplicate inventory decrement
+        const saleRef = doc(db, 'businesses', businessId, 'sales', sale.id);
+        const existingSnap = await getDoc(saleRef);
+        if (existingSnap.exists()) {
+          console.info(`[PosVenecia Sync] Venta ${sale.invoiceNumber} ya existía en Firestore. Omitiendo duplicación de inventario.`);
+          syncedIds.push(item.id);
+          continue;
+        }
+
+        const deductionMap = new Map<string, number>();
+        (sale.items || []).forEach(i => {
+          if (!i.product.isService && i.product.itemType !== 'servicio' && i.product.id) {
+            const cur = deductionMap.get(i.product.id) || 0;
+            deductionMap.set(i.product.id, cur + i.quantity);
+          }
+        });
+        const stockDeductions = Array.from(deductionMap.entries()).map(([productId, quantity]) => ({
+          productId,
+          quantity
+        }));
         await saveSaleAtomic(businessId, sale, stockDeductions);
         syncedIds.push(item.id);
       } else if (item.action === 'create_expense' && item.payload) {

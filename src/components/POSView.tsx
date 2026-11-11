@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   Search, 
@@ -115,6 +115,10 @@ export const POSView: React.FC = () => {
   const [combinedData, setCombinedData] = useState<any>(null);
   const [fiadoData, setFiadoData] = useState<any>(null);
 
+  // Double-submit protection
+  const [isProcessingCheckout, setIsProcessingCheckout] = useState(false);
+  const isProcessingCheckoutRef = useRef(false);
+
   // Manager PIN modal state to authorize disabling fiscal IVA
   const [isManagerPinModalOpen, setIsManagerPinModalOpen] = useState(false);
   const [managerPinInput, setManagerPinInput] = useState('');
@@ -225,8 +229,13 @@ export const POSView: React.FC = () => {
     }
   };
 
-  // Finalize sale checkout
+  // Finalize sale checkout with double-submit protection
   const handleCheckout = () => {
+    if (isProcessingCheckoutRef.current) {
+      console.warn('[POSView] Prevenido doble envío de venta (double-submit protection)');
+      return;
+    }
+
     if (cart.length === 0) return;
 
     if (!isCashRegisterOpen) {
@@ -254,37 +263,51 @@ export const POSView: React.FC = () => {
       return;
     }
 
-    const paymentDetails: PaymentDetails = {
-      method: selectedMethod,
-      pagoMovilRef: pagoMovilData?.ref,
-      pagoMovilBank: pagoMovilData?.bank,
-      pagoMovilPhone: pagoMovilData?.phone,
-      pagoMovilCI: pagoMovilData?.ci,
-      transferenciaRef: selectedMethod === 'transferencia' ? transferenciaRef : undefined,
-      transferenciaBank: selectedMethod === 'transferencia' ? transferenciaBank : undefined,
-      fiaoClientName: fiadoData?.clientName,
-      fiaoClientCI: fiadoData?.clientCI,
-      fiaoInitialAbonoUSD: fiadoData?.initialAbonoUSD,
-      fiaoInitialAbonoBs: fiadoData?.initialAbonoBs,
-      fiaoRemainingUSD: fiadoData?.remainingUSD,
-      combinedBreakdown: combinedData
-    };
+    // Lock immediate submission
+    isProcessingCheckoutRef.current = true;
+    setIsProcessingCheckout(true);
 
-    const finalClient = {
-      name: fiadoData?.clientName || clientName,
-      rif: fiadoData?.clientCI || clientRIF,
-      phone: fiadoData?.clientPhone || clientPhone,
-      address: fiadoData?.clientAddress || clientAddress
-    };
+    try {
+      const paymentDetails: PaymentDetails = {
+        method: selectedMethod,
+        pagoMovilRef: pagoMovilData?.ref,
+        pagoMovilBank: pagoMovilData?.bank,
+        pagoMovilPhone: pagoMovilData?.phone,
+        pagoMovilCI: pagoMovilData?.ci,
+        transferenciaRef: selectedMethod === 'transferencia' ? transferenciaRef : undefined,
+        transferenciaBank: selectedMethod === 'transferencia' ? transferenciaBank : undefined,
+        fiaoClientName: fiadoData?.clientName,
+        fiaoClientCI: fiadoData?.clientCI,
+        fiaoInitialAbonoUSD: fiadoData?.initialAbonoUSD,
+        fiaoInitialAbonoBs: fiadoData?.initialAbonoBs,
+        fiaoRemainingUSD: fiadoData?.remainingUSD,
+        combinedBreakdown: combinedData
+      };
 
-    const createdSale = completeSale(finalClient, paymentDetails);
+      const finalClient = {
+        name: fiadoData?.clientName || clientName,
+        rif: fiadoData?.clientCI || clientRIF,
+        phone: fiadoData?.clientPhone || clientPhone,
+        address: fiadoData?.clientAddress || clientAddress
+      };
 
-    // Reset flow states
-    setPagoMovilData(null);
-    setFiadoData(null);
-    setCombinedData(null);
-    setTransferenciaRef('');
-    setSuccessSale(createdSale);
+      const createdSale = completeSale(finalClient, paymentDetails);
+
+      // Reset flow states
+      setPagoMovilData(null);
+      setFiadoData(null);
+      setCombinedData(null);
+      setTransferenciaRef('');
+      setSuccessSale(createdSale);
+    } catch (err: any) {
+      console.error('[POSView] Error al procesar venta:', err);
+    } finally {
+      // Cooldown timer to prevent accidental double clicks
+      setTimeout(() => {
+        isProcessingCheckoutRef.current = false;
+        setIsProcessingCheckout(false);
+      }, 600);
+    }
   };
 
   // Filtered habitual clients
@@ -1122,10 +1145,22 @@ export const POSView: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleCheckout}
-                    className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
+                    disabled={isProcessingCheckout || cart.length === 0}
+                    className={`w-full py-3.5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all active:scale-98 flex items-center justify-center gap-2 ${
+                      isProcessingCheckout || cart.length === 0 ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+                    }`}
                   >
-                    <Check className="w-5 h-5" />
-                    <span>Cobrar ${formatUSD(totalUSD)} (Bs. {formatBs(totalBs)})</span>
+                    {isProcessingCheckout ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Procesando venta...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-5 h-5" />
+                        <span>Cobrar ${formatUSD(totalUSD)} (Bs. {formatBs(totalBs)})</span>
+                      </>
+                    )}
                   </button>
                 ) : (
                   <button

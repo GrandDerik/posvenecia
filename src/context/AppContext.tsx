@@ -1774,143 +1774,187 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const clearCart = () => setCart([]);
 
+  // Ref for double-submit protection in POS checkout
+  const isCompletingSaleRef = useRef(false);
+
   // Sales operations
   const completeSale = (
     clientData: { name: string; rif: string; phone?: string; address?: string },
     paymentDetails: PaymentDetails
   ): Sale => {
+    if (cart.length === 0) {
+      throw new Error('El carrito de compras está vacío.');
+    }
+
     if (!cashShift?.isOpen) {
       setIsAperturaModalOpen(true);
       throw new Error('La caja se encuentra cerrada. Debe abrir la caja para iniciar la jornada y procesar ventas.');
     }
 
-    let subtotalUSD = 0;
-    let exemptUSD = 0;
-    let taxableUSD = 0;
-
-    cart.forEach(item => {
-      const itemTotal = item.quantity * item.unitPriceUSD;
-      subtotalUSD += itemTotal;
-      if (item.product.isExemptFromIVA) {
-        exemptUSD += itemTotal;
-      } else {
-        taxableUSD += itemTotal;
-      }
-    });
-
-    const ivaUSD = applyIVA ? Number((taxableUSD * 0.16).toFixed(2)) : 0;
-    let igtfUSD = 0;
-    if (applyIGTF && paymentDetails.method === 'efectivo_usd') {
-      igtfUSD = Number(((subtotalUSD + ivaUSD) * 0.03).toFixed(2));
-    } else if (applyIGTF && paymentDetails.method === 'pago_combinado' && paymentDetails.combinedBreakdown?.usdCash) {
-      igtfUSD = Number((paymentDetails.combinedBreakdown.usdCash * 0.03).toFixed(2));
+    // Double-submit protection: reject concurrent executions
+    if (isCompletingSaleRef.current) {
+      console.warn('[PosVenecia] Intento de venta concurrente bloqueado (double-submit protection).');
+      throw new Error('Ya se está procesando una venta. Espere un momento.');
     }
+    isCompletingSaleRef.current = true;
 
-    const totalUSD = Number((subtotalUSD + ivaUSD + igtfUSD).toFixed(2));
-    const subtotalBs = Number((subtotalUSD * bcvRate).toFixed(2));
-    const exemptBs = Number((exemptUSD * bcvRate).toFixed(2));
-    const taxableBs = Number((taxableUSD * bcvRate).toFixed(2));
-    const ivaBs = Number((ivaUSD * bcvRate).toFixed(2));
-    const igtfBs = Number((igtfUSD * bcvRate).toFixed(2));
-    const totalBs = Number((totalUSD * bcvRate).toFixed(2));
+    try {
+      let subtotalUSD = 0;
+      let exemptUSD = 0;
+      let taxableUSD = 0;
 
-    // Multi-device terminal-scoped invoice numbering (e.g. FACT-C1-000048 vs FACT-C2-000048)
-    const terminalPrefix = `FACT-${terminalId}-`;
-    const terminalSales = sales.filter(s => s.invoiceNumber && s.invoiceNumber.startsWith(terminalPrefix));
-    const nextSeq = terminalSales.length + 1;
-    const invoiceNumber = `FACT-${terminalId}-${String(nextSeq).padStart(6, '0')}`;
-    const controlNumber = `00-${String(sales.length + 1).padStart(5, '0')}`;
-
-    const snapshotItems: CartItem[] = cart.map(item => ({
-      ...item,
-      product: { ...item.product }
-    }));
-
-    const newSale: Sale = {
-      id: 'sale-' + Date.now(),
-      date: new Date().toISOString(),
-      invoiceNumber,
-      controlNumber,
-      clientName: clientData.name || 'Consumidor Final',
-      clientRIF: clientData.rif || 'V-00000000',
-      clientPhone: clientData.phone,
-      clientAddress: clientData.address,
-      items: snapshotItems,
-      subtotalUSD,
-      exemptUSD,
-      taxableUSD,
-      ivaUSD,
-      igtfUSD,
-      totalUSD,
-      bcvRate,
-      subtotalBs,
-      exemptBs,
-      taxableBs,
-      ivaBs,
-      igtfBs,
-      totalBs,
-      paymentMethod: paymentDetails.method,
-      paymentDetails,
-      status: 'completada',
-      cashierName: googleUser?.name || `Caja ${terminalId}`,
-      syncStatus: 'pending_sync'
-    };
-
-    // Deduct physical inventory
-    cart.forEach(item => {
-      if (!item.product.isService && item.product.itemType !== 'servicio') {
-        adjustStock(item.product.id, item.product.stock - item.quantity);
-      }
-    });
-
-    // Record Fiado if credit
-    let createdFiado: FiadoRecord | undefined = undefined;
-    if (paymentDetails.method === 'fiao' || (paymentDetails.method === 'pago_combinado' && (paymentDetails.combinedBreakdown?.fiaoRemaining || 0) > 0)) {
-      const remainingDebt = paymentDetails.method === 'fiao' 
-        ? (paymentDetails.fiaoRemainingUSD ?? totalUSD)
-        : (paymentDetails.combinedBreakdown?.fiaoRemaining || 0);
-
-      createdFiado = {
-        id: 'fiado-' + Date.now(),
-        saleId: newSale.id,
-        invoiceNumber: newSale.invoiceNumber,
-        clientName: clientData.name,
-        clientCI: clientData.rif.replace(/\D/g, '') || clientData.rif,
-        clientPhone: clientData.phone || '0414-0000000',
-        clientAddress: clientData.address,
-        date: newSale.date,
-        originalDebtUSD: remainingDebt,
-        remainingDebtUSD: remainingDebt,
-        status: 'pendiente',
-        abonos: []
-      };
-      setFiados(prev => [createdFiado!, ...prev]);
-    }
-
-    setSales(prev => [newSale, ...prev]);
-    setLastCompletedSale(newSale);
-    clearCart();
-
-    // Persist immediately in IndexedDB for Offline-First architecture
-    saveOfflineSale(newSale).catch(e => console.error('Error saving sale to IndexedDB:', e));
-
-    // Save atomically in Firebase Firestore in real time for instant multi-device reflection!
-    const businessId = auth.currentUser?.uid || googleUser?.uid;
-    if (businessId) {
-      const stockDeductions = snapshotItems
-        .filter(item => !item.product.isService && item.product.itemType !== 'servicio')
-        .map(item => ({ productId: item.product.id, quantity: item.quantity }));
-      saveSaleAtomic(businessId, newSale, stockDeductions, createdFiado).then(() => {
-        console.info(`[PosVenecia Firestore] Venta ${newSale.invoiceNumber} sincronizada y confirmada en Firestore.`);
-        // Mark sale as synced and purge from sync queue
-        removeSyncItemBySaleId(newSale.id).catch(err => console.warn('Remove sync item error:', err));
-        setSales(prev => prev.map(s => s.id === newSale.id ? { ...s, syncStatus: 'synced' } : s));
-      }).catch(e => {
-        console.error('Firestore atomic sale error:', e);
+      cart.forEach(item => {
+        const itemTotal = item.quantity * item.unitPriceUSD;
+        subtotalUSD += itemTotal;
+        if (item.product.isExemptFromIVA) {
+          exemptUSD += itemTotal;
+        } else {
+          taxableUSD += itemTotal;
+        }
       });
-    }
 
-    return newSale;
+      const ivaUSD = applyIVA ? Number((taxableUSD * 0.16).toFixed(2)) : 0;
+      let igtfUSD = 0;
+      if (applyIGTF && paymentDetails.method === 'efectivo_usd') {
+        igtfUSD = Number(((subtotalUSD + ivaUSD) * 0.03).toFixed(2));
+      } else if (applyIGTF && paymentDetails.method === 'pago_combinado' && paymentDetails.combinedBreakdown?.usdCash) {
+        igtfUSD = Number((paymentDetails.combinedBreakdown.usdCash * 0.03).toFixed(2));
+      }
+
+      const totalUSD = Number((subtotalUSD + ivaUSD + igtfUSD).toFixed(2));
+      const subtotalBs = Number((subtotalUSD * bcvRate).toFixed(2));
+      const exemptBs = Number((exemptUSD * bcvRate).toFixed(2));
+      const taxableBs = Number((taxableUSD * bcvRate).toFixed(2));
+      const ivaBs = Number((ivaUSD * bcvRate).toFixed(2));
+      const igtfBs = Number((igtfUSD * bcvRate).toFixed(2));
+      const totalBs = Number((totalUSD * bcvRate).toFixed(2));
+
+      // Multi-device terminal-scoped invoice numbering (e.g. FACT-C1-000048 vs FACT-C2-000048)
+      const terminalPrefix = `FACT-${terminalId}-`;
+      const terminalSales = sales.filter(s => s.invoiceNumber && s.invoiceNumber.startsWith(terminalPrefix));
+      const nextSeq = terminalSales.length + 1;
+      const invoiceNumber = `FACT-${terminalId}-${String(nextSeq).padStart(6, '0')}`;
+      const controlNumber = `00-${String(sales.length + 1).padStart(5, '0')}`;
+
+      const snapshotItems: CartItem[] = cart.map(item => ({
+        ...item,
+        product: { ...item.product }
+      }));
+
+      const newSale: Sale = {
+        id: 'sale-' + Date.now(),
+        date: new Date().toISOString(),
+        invoiceNumber,
+        controlNumber,
+        clientName: clientData.name || 'Consumidor Final',
+        clientRIF: clientData.rif || 'V-00000000',
+        clientPhone: clientData.phone,
+        clientAddress: clientData.address,
+        items: snapshotItems,
+        subtotalUSD,
+        exemptUSD,
+        taxableUSD,
+        ivaUSD,
+        igtfUSD,
+        totalUSD,
+        bcvRate,
+        subtotalBs,
+        exemptBs,
+        taxableBs,
+        ivaBs,
+        igtfBs,
+        totalBs,
+        paymentMethod: paymentDetails.method,
+        paymentDetails,
+        status: 'completada',
+        cashierName: googleUser?.name || `Caja ${terminalId}`,
+        syncStatus: 'pending_sync'
+      };
+
+      // Consolidate deductions by productId to guarantee each product is deducted exactly once
+      const deductionMap = new Map<string, number>();
+      snapshotItems.forEach(item => {
+        if (!item.product.isService && item.product.itemType !== 'servicio' && item.product.id) {
+          const cur = deductionMap.get(item.product.id) || 0;
+          deductionMap.set(item.product.id, cur + item.quantity);
+        }
+      });
+
+      const stockDeductions = Array.from(deductionMap.entries()).map(([productId, quantity]) => ({
+        productId,
+        quantity
+      }));
+
+      // Deduct physical inventory in local state optimistically (EXACTLY ONCE)
+      // Note: We do NOT call adjustStock() here because adjustStock() triggers an independent network write
+      // to Firestore, which would result in a double deduction when combined with saveSaleAtomic() in Firestore!
+      if (stockDeductions.length > 0) {
+        setProducts(prevProducts => {
+          const updated = prevProducts.map(prod => {
+            const qtyToDeduct = deductionMap.get(prod.id);
+            if (qtyToDeduct !== undefined && qtyToDeduct > 0) {
+              return {
+                ...prod,
+                stock: Math.max(0, prod.stock - qtyToDeduct)
+              };
+            }
+            return prod;
+          });
+          saveOfflineProducts(updated).catch(e => console.warn('Cache updated products in IndexedDB:', e));
+          return updated;
+        });
+      }
+
+      // Record Fiado if credit
+      let createdFiado: FiadoRecord | undefined = undefined;
+      if (paymentDetails.method === 'fiao' || (paymentDetails.method === 'pago_combinado' && (paymentDetails.combinedBreakdown?.fiaoRemaining || 0) > 0)) {
+        const remainingDebt = paymentDetails.method === 'fiao' 
+          ? (paymentDetails.fiaoRemainingUSD ?? totalUSD)
+          : (paymentDetails.combinedBreakdown?.fiaoRemaining || 0);
+
+        createdFiado = {
+          id: 'fiado-' + Date.now(),
+          saleId: newSale.id,
+          invoiceNumber: newSale.invoiceNumber,
+          clientName: clientData.name,
+          clientCI: clientData.rif.replace(/\D/g, '') || clientData.rif,
+          clientPhone: clientData.phone || '0414-0000000',
+          clientAddress: clientData.address,
+          date: newSale.date,
+          originalDebtUSD: remainingDebt,
+          remainingDebtUSD: remainingDebt,
+          status: 'pendiente',
+          abonos: []
+        };
+        setFiados(prev => [createdFiado!, ...prev]);
+      }
+
+      setSales(prev => [newSale, ...prev]);
+      setLastCompletedSale(newSale);
+      clearCart();
+
+      // Persist immediately in IndexedDB for Offline-First architecture
+      saveOfflineSale(newSale).catch(e => console.error('Error saving sale to IndexedDB:', e));
+
+      // Save atomically in Firebase Firestore in real time for instant multi-device reflection!
+      const businessId = auth.currentUser?.uid || googleUser?.uid;
+      if (businessId) {
+        saveSaleAtomic(businessId, newSale, stockDeductions, createdFiado).then(() => {
+          console.info(`[PosVenecia Firestore] Venta ${newSale.invoiceNumber} sincronizada y confirmada en Firestore.`);
+          // Mark sale as synced and purge from sync queue
+          removeSyncItemBySaleId(newSale.id).catch(err => console.warn('Remove sync item error:', err));
+          setSales(prev => prev.map(s => s.id === newSale.id ? { ...s, syncStatus: 'synced' } : s));
+        }).catch(e => {
+          console.error('Firestore atomic sale error:', e);
+        });
+      }
+
+      return newSale;
+    } finally {
+      setTimeout(() => {
+        isCompletingSaleRef.current = false;
+      }, 500);
+    }
   };
 
   const cancelSale = (saleId: string) => {
