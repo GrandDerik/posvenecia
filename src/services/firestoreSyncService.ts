@@ -20,7 +20,9 @@ import {
   CuentaPorPagar, 
   GastoOperativo, 
   CashShift, 
-  BusinessInfo 
+  BusinessInfo,
+  CreditNote,
+  InventoryDischarge
 } from '../types';
 import { getPendingSyncQueue, batchClearSyncQueue } from './indexedDBService';
 
@@ -54,6 +56,8 @@ export interface FirestoreStoreListeners {
   onCashShiftHistory: (history: CashShift[]) => void;
   onMetadata: (metadata: StoreMetadataDoc) => void;
   onCashRegisterStatus?: (status: CashRegisterStatusDoc) => void;
+  onCreditNotes?: (creditNotes: CreditNote[]) => void;
+  onInventoryDischarges?: (discharges: InventoryDischarge[]) => void;
   onError?: (error: Error) => void;
 }
 
@@ -293,6 +297,44 @@ export const subscribeToStoreRealtime = (
     )
   );
 
+  // 11. Credit Notes (Notas de Crédito y Devoluciones)
+  const creditNotesPath = `businesses/${businessId}/creditNotes`;
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, 'businesses', businessId, 'creditNotes'),
+      (snapshot) => {
+        const notes: CreditNote[] = [];
+        snapshot.forEach((d) => {
+          notes.push(d.data() as CreditNote);
+        });
+        notes.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        if (callbacks.onCreditNotes) {
+          callbacks.onCreditNotes(notes);
+        }
+      },
+      (err) => handleErr(OperationType.GET, creditNotesPath, err)
+    )
+  );
+
+  // 12. Inventory Discharges (Salidas por Daño, Vencimiento, Merma, Uso Interno)
+  const dischargesPath = `businesses/${businessId}/inventoryDischarges`;
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, 'businesses', businessId, 'inventoryDischarges'),
+      (snapshot) => {
+        const discharges: InventoryDischarge[] = [];
+        snapshot.forEach((d) => {
+          discharges.push(d.data() as InventoryDischarge);
+        });
+        discharges.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        if (callbacks.onInventoryDischarges) {
+          callbacks.onInventoryDischarges(discharges);
+        }
+      },
+      (err) => handleErr(OperationType.GET, dischargesPath, err)
+    )
+  );
+
   return () => {
     unsubscribers.forEach((unsub) => unsub());
   };
@@ -426,6 +468,142 @@ export const cancelSaleAtomic = async (
 
       await batch.commit();
       console.info(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} anulada en Firestore.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Atomic write for saveCreditNoteAtomic:
+ * 1. Saves Credit Note doc
+ * 2. Reincorporates returned products into stock (increment)
+ * 3. Updates original sale status to 'devuelta' or partial refund
+ */
+export const saveCreditNoteAtomic = async (
+  businessId: string,
+  creditNote: CreditNote,
+  stockRestorations: Array<{ productId: string; quantity: number }>,
+  updatedSale?: Sale
+): Promise<void> => {
+  const path = `businesses/${businessId}/creditNotes/${creditNote.id}`;
+  const op = (async () => {
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Add credit note doc
+      const cleanedNC = cleanForFirestore(creditNote);
+      const ncRef = doc(db, 'businesses', businessId, 'creditNotes', creditNote.id);
+      batch.set(ncRef, cleanedNC);
+
+      // 2. Reincorporate products into stock
+      const consolidatedRestorations = new Map<string, number>();
+      for (const item of stockRestorations) {
+        if (item.productId && item.quantity > 0) {
+          const current = consolidatedRestorations.get(item.productId) || 0;
+          consolidatedRestorations.set(item.productId, current + item.quantity);
+        }
+      }
+
+      for (const [productId, quantity] of consolidatedRestorations.entries()) {
+        const prodRef = doc(db, 'businesses', businessId, 'products', productId);
+        batch.update(prodRef, {
+          stock: increment(quantity)
+        });
+      }
+
+      // 3. Update original sale if provided
+      if (updatedSale) {
+        const cleanedSale = cleanForFirestore(updatedSale);
+        const saleRef = doc(db, 'businesses', businessId, 'sales', updatedSale.id);
+        batch.set(saleRef, cleanedSale, { merge: true });
+      }
+
+      await batch.commit();
+      console.info(`[PosVenecia Firestore] Nota de Crédito ${creditNote.creditNoteNumber} guardada y stock reincorporado en Firestore.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Atomic write for saveInventoryDischargeAtomic:
+ * 1. Saves Inventory Discharge record (Salida por daño/merma/uso interno)
+ * 2. Deducts product stock in Firestore (increment(-quantity))
+ * 3. Registers GastoOperativo (pérdida contable)
+ * 4. Registers Expense (para libro de compras/gastos y cuadre de caja)
+ */
+export const saveInventoryDischargeAtomic = async (
+  businessId: string,
+  discharge: InventoryDischarge,
+  associatedGastoOperativo: GastoOperativo,
+  associatedExpense: Expense
+): Promise<void> => {
+  const path = `businesses/${businessId}/inventoryDischarges/${discharge.id}`;
+  const op = (async () => {
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Add inventory discharge record
+      const cleanedDischarge = cleanForFirestore(discharge);
+      const discRef = doc(db, 'businesses', businessId, 'inventoryDischarges', discharge.id);
+      batch.set(discRef, cleanedDischarge);
+
+      // 2. Decrement physical product stock
+      if (discharge.productId && discharge.quantity > 0) {
+        const prodRef = doc(db, 'businesses', businessId, 'products', discharge.productId);
+        batch.update(prodRef, {
+          stock: increment(-discharge.quantity)
+        });
+      }
+
+      // 3. Create associated Gasto Operativo
+      const cleanedGasto = cleanForFirestore(associatedGastoOperativo);
+      const gastoRef = doc(db, 'businesses', businessId, 'gastosOperativos', associatedGastoOperativo.id);
+      batch.set(gastoRef, cleanedGasto);
+
+      // 4. Create associated Expense for Libro de Gastos y Cuadre de Caja
+      const cleanedExpense = cleanForFirestore(associatedExpense);
+      const expRef = doc(db, 'businesses', businessId, 'expenses', associatedExpense.id);
+      batch.set(expRef, cleanedExpense);
+
+      await batch.commit();
+      console.info(`[PosVenecia Firestore] Desincorporación ${discharge.dischargeNumber} (${discharge.reason}) guardada atómicamente en Firestore.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Delete credit note from Firestore
+ */
+export const deleteCreditNoteFromFirestore = async (businessId: string, id: string): Promise<void> => {
+  const path = `businesses/${businessId}/creditNotes/${id}`;
+  const op = (async () => {
+    try {
+      await deleteDoc(doc(db, 'businesses', businessId, 'creditNotes', id));
+      console.info(`[PosVenecia Firestore] Nota de crédito eliminada: ${id}`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Delete inventory discharge from Firestore
+ */
+export const deleteInventoryDischargeFromFirestore = async (businessId: string, id: string): Promise<void> => {
+  const path = `businesses/${businessId}/inventoryDischarges/${id}`;
+  const op = (async () => {
+    try {
+      await deleteDoc(doc(db, 'businesses', businessId, 'inventoryDischarges', id));
+      console.info(`[PosVenecia Firestore] Desincorporación eliminada: ${id}`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }

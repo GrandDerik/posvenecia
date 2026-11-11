@@ -63,7 +63,8 @@ export const POSView: React.FC = () => {
     baseCurrency,
     isCashRegisterOpen,
     setIsAperturaModalOpen,
-    managerPin
+    managerPin,
+    setIsCreditNoteModalOpen
   } = useApp();
 
   // Search & Filters
@@ -460,6 +461,16 @@ export const POSView: React.FC = () => {
                 >
                   <Truck className="w-3.5 h-3.5 text-amber-600" />
                   <span>+ Recargo</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCreditNoteModalOpen(true)}
+                  className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer shadow-2xs"
+                  title="Emitir Nota de Crédito o devolución de productos"
+                >
+                  <FileText className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Nota de Crédito</span>
                 </button>
               </div>
             </div>

@@ -18,7 +18,11 @@ import {
   GoogleAccount,
   CashShift,
   AppTheme,
-  BankInitialBalance
+  BankInitialBalance,
+  CreditNote,
+  CreditNoteItem,
+  InventoryDischarge,
+  InventoryDischargeReason
 } from '../types';
 import { fetchLiveBCVRate, fetchLiveBCVEuroRate } from '../utils/bcvFetcher';
 import { 
@@ -74,7 +78,9 @@ import {
   saveCashRegisterStatusToFirestore,
   waitForAllPendingWrites,
   flushPendingQueueToFirestore,
-  CashRegisterStatusDoc
+  CashRegisterStatusDoc,
+  saveCreditNoteAtomic,
+  saveInventoryDischargeAtomic
 } from '../services/firestoreSyncService';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
@@ -145,6 +151,37 @@ interface AppContextType {
   updateSale: (sale: Sale) => void;
   lastCompletedSale: Sale | null;
   setLastCompletedSale: (sale: Sale | null) => void;
+
+  // Notas de Crédito & Devoluciones
+  creditNotes: CreditNote[];
+  createCreditNote: (data: {
+    saleId: string;
+    reason: string;
+    refundMethod: PaymentMethod;
+    items: { productId: string; quantity: number }[];
+  }) => Promise<CreditNote>;
+  isCreditNoteModalOpen: boolean;
+  setIsCreditNoteModalOpen: (open: boolean) => void;
+  selectedSaleForCreditNote: Sale | null;
+  setSelectedSaleForCreditNote: (sale: Sale | null) => void;
+  lastCompletedCreditNote: CreditNote | null;
+  setLastCompletedCreditNote: (nc: CreditNote | null) => void;
+
+  // Desincorporación de Inventario (Salidas por Daño / Vencimiento / Merma / Uso Interno)
+  inventoryDischarges: InventoryDischarge[];
+  createInventoryDischarge: (data: {
+    productId: string;
+    quantity: number;
+    reason: InventoryDischargeReason;
+    notes?: string;
+    responsibleName?: string;
+  }) => Promise<InventoryDischarge>;
+  isDischargeModalOpen: boolean;
+  setIsDischargeModalOpen: (open: boolean) => void;
+  selectedProductForDischarge: Product | null;
+  setSelectedProductForDischarge: (product: Product | null) => void;
+  lastCompletedDischarge: InventoryDischarge | null;
+  setLastCompletedDischarge: (disc: InventoryDischarge | null) => void;
   
   // Expenses / Purchases (Libro de Compras)
   expenses: Expense[];
@@ -399,6 +436,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [applyIGTF, setApplyIGTF] = useState(false);
   const [lastCompletedSale, setLastCompletedSale] = useState<Sale | null>(null);
   const [selectedClientForPOS, setSelectedClientForPOS] = useState<Client | null>(null);
+
+  // Notas de Crédito & Devoluciones
+  const [creditNotes, setCreditNotes] = useState<CreditNote[]>([]);
+  const [isCreditNoteModalOpen, setIsCreditNoteModalOpen] = useState(false);
+  const [selectedSaleForCreditNote, setSelectedSaleForCreditNote] = useState<Sale | null>(null);
+  const [lastCompletedCreditNote, setLastCompletedCreditNote] = useState<CreditNote | null>(null);
+
+  // Desincorporación de Inventario (Salidas por Daño / Vencimiento / Merma / Uso Interno)
+  const [inventoryDischarges, setInventoryDischarges] = useState<InventoryDischarge[]>([]);
+  const [isDischargeModalOpen, setIsDischargeModalOpen] = useState(false);
+  const [selectedProductForDischarge, setSelectedProductForDischarge] = useState<Product | null>(null);
+  const [lastCompletedDischarge, setLastCompletedDischarge] = useState<InventoryDischarge | null>(null);
 
   // Modals & Navigation (Mutually exclusive cash drawer modals)
   const [isCuadreModalOpen, setIsCuadreModalOpenState] = useState(false);
@@ -1372,6 +1421,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           onClients: (newClients) => setClients(newClients),
           onCuentasPorPagar: (newCPP) => setCuentasPorPagar(newCPP),
           onGastosOperativos: (newGastos) => setGastosOperativos(newGastos),
+          onCreditNotes: (newNotes) => setCreditNotes(newNotes),
+          onInventoryDischarges: (newDischarges) => setInventoryDischarges(newDischarges),
           onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
           onCashRegisterStatus: (status: CashRegisterStatusDoc) => {
             console.info(`[PosVenecia Realtime] Caja sincronizada en tiempo real: ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
@@ -1503,6 +1554,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         onClients: (newClients) => setClients(newClients),
         onCuentasPorPagar: (newCPP) => setCuentasPorPagar(newCPP),
         onGastosOperativos: (newGastos) => setGastosOperativos(newGastos),
+        onCreditNotes: (newNotes) => setCreditNotes(newNotes),
+        onInventoryDischarges: (newDischarges) => setInventoryDischarges(newDischarges),
         onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
         onCashRegisterStatus: (status: CashRegisterStatusDoc) => {
           console.info(`[PosVenecia Realtime] Caja sincronizada en tiempo real: ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
@@ -2016,6 +2069,259 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Ref for double-submit protection on credit note creation
+  const isCreatingCreditNoteRef = useRef(false);
+
+  const createCreditNote = async (data: {
+    saleId: string;
+    reason: string;
+    refundMethod: PaymentMethod;
+    items: { productId: string; quantity: number }[];
+  }): Promise<CreditNote> => {
+    if (isCreatingCreditNoteRef.current) {
+      throw new Error('Ya se está procesando una nota de crédito. Espere un momento.');
+    }
+    isCreatingCreditNoteRef.current = true;
+
+    try {
+      const originalSale = sales.find(s => s.id === data.saleId);
+      if (!originalSale) {
+        throw new Error('Venta no encontrada.');
+      }
+
+      if (data.items.length === 0) {
+        throw new Error('Debe seleccionar al menos un producto para la devolución.');
+      }
+
+      // Calculate refunded totals and items
+      let refundedSubtotalUSD = 0;
+      let refundedTaxableUSD = 0;
+      let refundedExemptUSD = 0;
+
+      const ncItems: CreditNoteItem[] = [];
+      const stockRestorations: { productId: string; quantity: number }[] = [];
+
+      for (const itemReq of data.items) {
+        const originalItem = originalSale.items.find(i => i.product.id === itemReq.productId);
+        if (!originalItem) continue;
+
+        const qty = Math.min(itemReq.quantity, originalItem.quantity);
+        if (qty <= 0) continue;
+
+        const unitPriceUSD = originalItem.unitPriceUSD;
+        const totalItemUSD = Number((qty * unitPriceUSD).toFixed(2));
+        refundedSubtotalUSD += totalItemUSD;
+
+        if (originalItem.product.isExemptFromIVA) {
+          refundedExemptUSD += totalItemUSD;
+        } else {
+          refundedTaxableUSD += totalItemUSD;
+        }
+
+        ncItems.push({
+          productId: originalItem.product.id,
+          productName: originalItem.product.name,
+          quantity: qty,
+          unitPriceUSD,
+          totalUSD: totalItemUSD,
+          isExempt: Boolean(originalItem.product.isExemptFromIVA)
+        });
+
+        // Only restore physical inventory items (non-services)
+        if (!originalItem.product.isService && originalItem.product.itemType !== 'servicio') {
+          stockRestorations.push({
+            productId: originalItem.product.id,
+            quantity: qty
+          });
+        }
+      }
+
+      if (ncItems.length === 0) {
+        throw new Error('No se seleccionaron productos válidos para devolución.');
+      }
+
+      // Proportional IVA & IGTF calculation
+      const originalSubtotal = originalSale.subtotalUSD > 0 ? originalSale.subtotalUSD : 1;
+      const refundRatio = Math.min(1, refundedSubtotalUSD / originalSubtotal);
+      const refundedIvaUSD = originalSale.ivaUSD ? Number((originalSale.ivaUSD * refundRatio).toFixed(2)) : 0;
+      const refundedIgtfUSD = originalSale.igtfUSD ? Number((originalSale.igtfUSD * refundRatio).toFixed(2)) : 0;
+      const refundedTotalUSD = Number((refundedSubtotalUSD + refundedIvaUSD + refundedIgtfUSD).toFixed(2));
+
+      const bcv = originalSale.bcvRate || bcvRate;
+      const refundedTotalBs = Number((refundedTotalUSD * bcv).toFixed(2));
+
+      // Sequential numbering for credit note
+      const terminalPrefix = `NC-${terminalId}-`;
+      const terminalNCs = creditNotes.filter(n => n.creditNoteNumber.startsWith(terminalPrefix));
+      const nextSeq = terminalNCs.length + 1;
+      const creditNoteNumber = `NC-${terminalId}-${String(nextSeq).padStart(6, '0')}`;
+      const controlNumber = `NC00-${String(creditNotes.length + 1).padStart(5, '0')}`;
+
+      const newCreditNote: CreditNote = {
+        id: 'nc-' + Date.now(),
+        creditNoteNumber,
+        controlNumber,
+        originalSaleId: originalSale.id,
+        originalInvoiceNumber: originalSale.invoiceNumber,
+        originalControlNumber: originalSale.controlNumber,
+        date: new Date().toISOString(),
+        clientName: originalSale.clientName || 'Consumidor Final',
+        clientRIF: originalSale.clientRIF || 'V-00000000',
+        clientPhone: originalSale.clientPhone,
+        clientAddress: originalSale.clientAddress,
+        items: ncItems,
+        subtotalUSD: Number(refundedSubtotalUSD.toFixed(2)),
+        ivaUSD: refundedIvaUSD,
+        igtfUSD: refundedIgtfUSD,
+        totalUSD: refundedTotalUSD,
+        subtotalBs: Number((refundedSubtotalUSD * bcv).toFixed(2)),
+        ivaBs: Number((refundedIvaUSD * bcv).toFixed(2)),
+        igtfBs: Number((refundedIgtfUSD * bcv).toFixed(2)),
+        totalBs: refundedTotalBs,
+        bcvRate: bcv,
+        refundMethod: data.refundMethod,
+        reason: data.reason
+      };
+
+      // 1. Optimistically update local states:
+      // a. Restock products in local state
+      if (stockRestorations.length > 0) {
+        setProducts(prevProducts => {
+          const map = new Map(stockRestorations.map(s => [s.productId, s.quantity]));
+          const updated = prevProducts.map(p => {
+            const addQty = map.get(p.id);
+            if (addQty && addQty > 0) {
+              return { ...p, stock: p.stock + addQty };
+            }
+            return p;
+          });
+          saveOfflineProducts(updated).catch(e => console.warn('Cache updated products in IndexedDB:', e));
+          return updated;
+        });
+      }
+
+      // b. Update original sale status and refunded total
+      const updatedOriginalSale: Sale = {
+        ...originalSale,
+        status: 'devuelta',
+        creditNoteId: newCreditNote.id,
+        refundedUSD: (originalSale.refundedUSD || 0) + refundedTotalUSD
+      };
+      setSales(prev => prev.map(s => s.id === originalSale.id ? updatedOriginalSale : s));
+
+      // c. Add credit note to state
+      setCreditNotes(prev => [newCreditNote, ...prev]);
+      setLastCompletedCreditNote(newCreditNote);
+
+      // 2. Persist in Firestore atomically
+      const businessId = auth.currentUser?.uid || googleUser?.uid;
+      if (businessId) {
+        await saveCreditNoteAtomic(businessId, newCreditNote, updatedOriginalSale, stockRestorations);
+        console.info(`[PosVenecia Firestore] Nota de Crédito ${newCreditNote.creditNoteNumber} guardada atómicamente.`);
+      }
+
+      return newCreditNote;
+    } finally {
+      setTimeout(() => {
+        isCreatingCreditNoteRef.current = false;
+      }, 500);
+    }
+  };
+
+  // Ref for double-submit protection on inventory discharge
+  const isCreatingDischargeRef = useRef(false);
+
+  const createInventoryDischarge = async (data: {
+    productId: string;
+    quantity: number;
+    reason: InventoryDischargeReason;
+    notes?: string;
+    responsibleName?: string;
+  }): Promise<InventoryDischarge> => {
+    if (isCreatingDischargeRef.current) {
+      throw new Error('Ya se está procesando una salida de inventario. Espere un momento.');
+    }
+    isCreatingDischargeRef.current = true;
+
+    try {
+      const product = products.find(p => p.id === data.productId);
+      if (!product) {
+        throw new Error('Producto no encontrado en inventario.');
+      }
+
+      const qty = Math.max(1, Math.floor(data.quantity));
+      if (product.stock < qty) {
+        throw new Error(`Stock insuficiente. Solo quedan ${product.stock} unidades de ${product.name}.`);
+      }
+
+      const unitCostUSD = (product.costUSD && product.costUSD > 0) ? product.costUSD : product.priceUSD;
+      const totalCostUSD = Number((unitCostUSD * qty).toFixed(2));
+      const totalCostBs = Number((totalCostUSD * bcvRate).toFixed(2));
+
+      // Sequential discharge code
+      const seq = inventoryDischarges.length + 1;
+      const dischargeNumber = `SAL-${terminalId}-${String(seq).padStart(5, '0')}`;
+
+      const discharge: InventoryDischarge = {
+        id: 'disc-' + Date.now(),
+        dischargeNumber,
+        productId: product.id,
+        productName: product.name,
+        quantity: qty,
+        unitCostUSD,
+        totalCostUSD,
+        totalCostBs,
+        reason: data.reason,
+        notes: data.notes,
+        responsibleName: data.responsibleName || googleUser?.name || 'Encargado',
+        date: new Date().toISOString()
+      };
+
+      // Associated operational loss / expense in GastoOperativo
+      const category: GastoOperativoCategory = data.reason === 'Uso Interno' 
+        ? 'Uso Interno' 
+        : 'Pérdida por Merma / Vencimiento';
+
+      const lossExpense: GastoOperativo = {
+        id: 'gasto-merma-' + Date.now(),
+        category,
+        description: `[Salida ${discharge.dischargeNumber}] ${data.reason}: ${qty}x ${product.name} ${data.notes ? `(${data.notes})` : ''}`.trim(),
+        amountUSD: totalCostUSD,
+        bcvRate,
+        amountBs: totalCostBs,
+        dueDate: new Date().toISOString().split('T')[0],
+        status: 'pagado',
+        paidDate: new Date().toISOString(),
+        paymentMethod: 'efectivo_usd',
+        reference: discharge.dischargeNumber,
+        notes: `Generado automáticamente por desincorporación de stock (${data.reason})`
+      };
+
+      // 1. Optimistically deduct in local state
+      setProducts(prev => {
+        const updated = prev.map(p => p.id === product.id ? { ...p, stock: Math.max(0, p.stock - qty) } : p);
+        saveOfflineProducts(updated).catch(e => console.warn('Cache updated products in IndexedDB:', e));
+        return updated;
+      });
+      setInventoryDischarges(prev => [discharge, ...prev]);
+      setGastosOperativos(prev => [lossExpense, ...prev]);
+      setLastCompletedDischarge(discharge);
+
+      // 2. Persist in Firestore atomically
+      const businessId = auth.currentUser?.uid || googleUser?.uid;
+      if (businessId) {
+        await saveInventoryDischargeAtomic(businessId, discharge, lossExpense);
+        console.info(`[PosVenecia Firestore] Desincorporación ${discharge.dischargeNumber} procesada atómicamente.`);
+      }
+
+      return discharge;
+    } finally {
+      setTimeout(() => {
+        isCreatingDischargeRef.current = false;
+      }, 500);
+    }
+  };
+
   // Expenses operations
   const addExpense = (expData: Omit<Expense, 'id'>) => {
     if (!cashShift?.isOpen) {
@@ -2376,6 +2682,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateSale,
         lastCompletedSale,
         setLastCompletedSale,
+        creditNotes,
+        createCreditNote,
+        isCreditNoteModalOpen,
+        setIsCreditNoteModalOpen,
+        selectedSaleForCreditNote,
+        setSelectedSaleForCreditNote,
+        lastCompletedCreditNote,
+        setLastCompletedCreditNote,
+        inventoryDischarges,
+        createInventoryDischarge,
+        isDischargeModalOpen,
+        setIsDischargeModalOpen,
+        selectedProductForDischarge,
+        setSelectedProductForDischarge,
+        lastCompletedDischarge,
+        setLastCompletedDischarge,
         expenses,
         addExpense,
         deleteExpense,

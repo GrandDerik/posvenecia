@@ -78,6 +78,18 @@ service cloud.firestore {
         allow get, list: if isBusinessOwner(businessId);
         allow create, update, delete: if isBusinessOwner(businessId) && isValidId(docId);
       }
+
+      // 10. Notas de Crédito / Devoluciones
+      match /creditNotes/{noteId} {
+        allow get, list: if isBusinessOwner(businessId);
+        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(noteId);
+      }
+
+      // 11. Desincorporaciones de Inventario
+      match /inventoryDischarges/{dischargeId} {
+        allow get, list: if isBusinessOwner(businessId);
+        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(dischargeId);
+      }
     }
   }
 }

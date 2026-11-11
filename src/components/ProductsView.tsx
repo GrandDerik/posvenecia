@@ -32,7 +32,9 @@ export const ProductsView: React.FC = () => {
     bcvRate, 
     categories: appCategories, 
     addCategory,
-    baseCurrency
+    baseCurrency,
+    setIsDischargeModalOpen,
+    setSelectedProductForDischarge
   } = useApp();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -265,7 +267,18 @@ export const ProductsView: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => {
+              setSelectedProductForDischarge(null);
+              setIsDischargeModalOpen(true);
+            }}
+            className="px-3.5 py-2.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+            title="Dar salida a productos por daño, vencimiento, uso interno o merma"
+          >
+            <Trash2 className="w-4 h-4 text-amber-700" />
+            <span>Desincorporar Stock</span>
+          </button>
+
           <button
             onClick={handleExportExcel}
             className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
@@ -437,6 +450,19 @@ export const ProductsView: React.FC = () => {
                     {/* Actions */}
                     <td className="py-3 px-4 text-center">
                       <div className="flex items-center justify-center gap-1">
+                        {!isService && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedProductForDischarge(prod);
+                              setIsDischargeModalOpen(true);
+                            }}
+                            className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors cursor-pointer"
+                            title="Desincorporar por Daño / Vencimiento / Merma"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <button
                           onClick={() => handleOpenEdit(prod)}
                           className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
@@ -449,7 +475,7 @@ export const ProductsView: React.FC = () => {
                           className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 transition-colors cursor-pointer"
                           title="Eliminar producto"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </td>

@@ -47,9 +47,11 @@ import {
   exportCuentasPorPagarExcel,
   exportCuentasPorPagarPDF
 } from '../utils/exportUtils';
-import { CashShift } from '../types';
+import { CashShift, Sale, Expense, CreditNote, InventoryDischarge } from '../types';
 import { RegistrarGastoModal } from './RegistrarGastoModal';
 import { BackupDriveModal } from './Modals/BackupDriveModal';
+import { ComprobanteTicketModal } from './Modals/ComprobanteTicketModal';
+import { ComprobanteNotaCreditoModal } from './Modals/ComprobanteNotaCreditoModal';
 
 export const ContabilidadView: React.FC = () => {
   const { 
@@ -61,6 +63,10 @@ export const ContabilidadView: React.FC = () => {
     cashShiftHistory,
     cuentasPorPagar,
     gastosOperativos,
+    creditNotes,
+    setIsCreditNoteModalOpen,
+    inventoryDischarges,
+    setIsDischargeModalOpen,
     checkRemoteChangesForMultiDevice,
     syncToGoogleDrive,
     isDriveSyncing,
@@ -68,11 +74,14 @@ export const ContabilidadView: React.FC = () => {
     googleUser
   } = useApp();
 
-  const [subTab, setSubTab] = useState<'ventas' | 'compras' | 'cierres_caja' | 'cuentas_por_pagar' | 'igtf' | 'estado_cuenta'>('ventas');
+  const [subTab, setSubTab] = useState<'ventas' | 'compras' | 'notas_credito' | 'salidas_inventario' | 'cierres_caja' | 'cuentas_por_pagar' | 'igtf' | 'estado_cuenta'>('ventas');
   const [searchTerm, setSearchTerm] = useState('');
   const [isGastoModalOpen, setIsGastoModalOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [selectedShiftForDetail, setSelectedShiftForDetail] = useState<CashShift | null>(null);
+  const [selectedSaleForTicket, setSelectedSaleForTicket] = useState<Sale | null>(null);
+  const [selectedExpenseForTicket, setSelectedExpenseForTicket] = useState<Expense | null>(null);
+  const [selectedCreditNoteForTicket, setSelectedCreditNoteForTicket] = useState<CreditNote | null>(null);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [isSyncingNow, setIsSyncingNow] = useState(false);
 
@@ -191,6 +200,30 @@ export const ContabilidadView: React.FC = () => {
               }`}
             >
               Libro de Compras
+            </button>
+            <button
+              onClick={() => setSubTab('notas_credito')}
+              className={`px-3 py-2 rounded-lg transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                subTab === 'notas_credito' ? 'bg-white text-rose-700 shadow-xs font-bold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5 text-rose-600" />
+              <span>Notas de Crédito</span>
+              <span className="px-1.5 py-0.2 bg-rose-100 text-rose-800 rounded-full text-[10px] font-bold">
+                {creditNotes.length}
+              </span>
+            </button>
+            <button
+              onClick={() => setSubTab('salidas_inventario')}
+              className={`px-3 py-2 rounded-lg transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                subTab === 'salidas_inventario' ? 'bg-white text-amber-700 shadow-xs font-bold' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <TrendingDown className="w-3.5 h-3.5 text-amber-600" />
+              <span>Salidas / Mermas</span>
+              <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded-full text-[10px] font-bold">
+                {inventoryDischarges.length}
+              </span>
             </button>
             <button
               onClick={() => setSubTab('cierres_caja')}
@@ -351,6 +384,7 @@ export const ContabilidadView: React.FC = () => {
               <table className="w-full text-left text-xs font-mono">
                 <thead className="bg-slate-100 text-slate-600 font-semibold uppercase tracking-wider text-[11px] border-b border-slate-200">
                   <tr>
+                    <th className="py-2.5 px-2 text-center">Ticket</th>
                     <th className="py-2.5 px-3 text-center">N° Op</th>
                     <th className="py-2.5 px-3">Fecha</th>
                     <th className="py-2.5 px-3">Factura</th>
@@ -369,6 +403,16 @@ export const ContabilidadView: React.FC = () => {
                 <tbody className="divide-y divide-slate-100">
                   {filteredSales.map((sale, index) => (
                     <tr key={sale.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-2 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSaleForTicket(sale)}
+                          className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-800 transition-colors cursor-pointer inline-flex items-center justify-center shadow-2xs"
+                          title="Ver recibo / ticket de venta"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
                       <td className="py-2 px-3 text-center text-slate-400">{index + 1}</td>
                       <td className="py-2 px-3 text-slate-700 whitespace-nowrap">
                         {new Date(sale.date).toLocaleDateString('es-VE')}
@@ -389,7 +433,7 @@ export const ContabilidadView: React.FC = () => {
                 </tbody>
                 <tfoot className="bg-slate-900 text-white font-bold text-xs border-t border-slate-700">
                   <tr>
-                    <td colSpan={6} className="py-3 px-3 text-right uppercase">Totales del Período:</td>
+                    <td colSpan={7} className="py-3 px-3 text-right uppercase">Totales del Período:</td>
                     <td className="py-3 px-3 text-right">Bs. {formatBs(totalSalesBs)}</td>
                     <td className="py-3 px-3 text-right">Bs. {formatBs(totalExemptBs)}</td>
                     <td className="py-3 px-3 text-right">Bs. {formatBs(totalTaxableBs)}</td>
@@ -493,6 +537,7 @@ export const ContabilidadView: React.FC = () => {
               <table className="w-full text-left text-xs font-mono">
                 <thead className="bg-slate-100 text-slate-600 font-semibold uppercase tracking-wider text-[11px] border-b border-slate-200">
                   <tr>
+                    <th className="py-2.5 px-2 text-center">Ticket</th>
                     <th className="py-2.5 px-3 text-center">N° Op</th>
                     <th className="py-2.5 px-3">Fecha</th>
                     <th className="py-2.5 px-3">Factura</th>
@@ -511,6 +556,16 @@ export const ContabilidadView: React.FC = () => {
                 <tbody className="divide-y divide-slate-100">
                   {filteredExpenses.map((exp, index) => (
                     <tr key={exp.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-2 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedExpenseForTicket(exp)}
+                          className="p-1.5 rounded-lg bg-teal-50 text-teal-600 hover:bg-teal-100 hover:text-teal-800 transition-colors cursor-pointer inline-flex items-center justify-center shadow-2xs"
+                          title="Ver comprobante de compra / factura"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
                       <td className="py-2 px-3 text-center text-slate-400">{index + 1}</td>
                       <td className="py-2 px-3 text-slate-700 whitespace-nowrap">
                         {new Date(exp.date).toLocaleDateString('es-VE')}
@@ -531,7 +586,7 @@ export const ContabilidadView: React.FC = () => {
                 </tbody>
                 <tfoot className="bg-slate-900 text-white font-bold text-xs border-t border-slate-700">
                   <tr>
-                    <td colSpan={7} className="py-3 px-3 text-right uppercase">Totales Compras:</td>
+                    <td colSpan={8} className="py-3 px-3 text-right uppercase">Totales Compras:</td>
                     <td className="py-3 px-3 text-right">Bs. {formatBs(totalBaseExpBs)}</td>
                     <td className="py-3 px-3 text-right text-blue-300">Bs. {formatBs(totalIvaExpBs)}</td>
                     <td className="py-3 px-3 text-right text-amber-300">Bs. {formatBs(totalRetIvaBs)}</td>
@@ -543,6 +598,295 @@ export const ContabilidadView: React.FC = () => {
               </table>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* SUBTAB: NOTAS DE CRÉDITO Y DEVOLUCIONES (SENIAT) */}
+      {subTab === 'notas_credito' && (
+        <div className="space-y-4">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+              <input
+                type="text"
+                placeholder="Buscar por Nº de Nota de Crédito, Factura original o Cliente..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsCreditNoteModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Emitir Nota de Crédito</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Metrics */}
+          {(() => {
+            const filteredNCs = creditNotes.filter(nc =>
+              nc.creditNoteNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              nc.originalInvoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              nc.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              nc.clientRIF.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            const totalNCRefundUSD = filteredNCs.reduce((acc, n) => acc + n.totalUSD, 0);
+            const totalNCRefundBs = filteredNCs.reduce((acc, n) => acc + n.totalBs, 0);
+            const totalNCIvaBs = filteredNCs.reduce((acc, n) => acc + n.ivaBs, 0);
+
+            return (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Comprobantes Emitidos</span>
+                    <div className="text-lg font-black text-slate-900 font-mono-numbers">
+                      {filteredNCs.length}
+                    </div>
+                    <span className="text-[11px] text-slate-500">Notas de crédito registradas</span>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-rose-200 bg-rose-50/40">
+                    <span className="text-[10px] font-bold text-rose-600 uppercase">Total Reintegrado (Disminuye Ventas)</span>
+                    <div className="text-lg font-black text-rose-700 font-mono-numbers">
+                      Bs. {formatBs(totalNCRefundBs)}
+                    </div>
+                    <span className="text-[11px] font-bold text-rose-600 font-mono">≈ ${formatUSD(totalNCRefundUSD)} USD</span>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">IVA Crédito Fiscal (Reversado)</span>
+                    <div className="text-lg font-black text-teal-700 font-mono-numbers">
+                      Bs. {formatBs(totalNCIvaBs)}
+                    </div>
+                    <span className="text-[11px] text-slate-500">Ajuste sobre débito fiscal</span>
+                  </div>
+                </div>
+
+                {/* Table */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                  <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-700">Libro de Notas de Crédito / Devoluciones (SENIAT)</span>
+                    <span className="text-slate-500">{filteredNCs.length} registros</span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs font-mono">
+                      <thead className="bg-slate-100 text-slate-600 font-semibold uppercase tracking-wider text-[11px] border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-2 text-center">Ticket</th>
+                          <th className="py-2.5 px-3 text-center">#</th>
+                          <th className="py-2.5 px-3">Fecha</th>
+                          <th className="py-2.5 px-3">Nº Nota Crédito</th>
+                          <th className="py-2.5 px-3">Nº Control</th>
+                          <th className="py-2.5 px-3">Factura Original</th>
+                          <th className="py-2.5 px-3">RIF / C.I.</th>
+                          <th className="py-2.5 px-3">Cliente</th>
+                          <th className="py-2.5 px-3">Motivo</th>
+                          <th className="py-2.5 px-3 text-right">Subtotal Bs</th>
+                          <th className="py-2.5 px-3 text-right">IVA Bs</th>
+                          <th className="py-2.5 px-3 text-right font-bold">Total Bs</th>
+                          <th className="py-2.5 px-3 text-right font-bold">Total $</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredNCs.length === 0 ? (
+                          <tr>
+                            <td colSpan={13} className="py-8 text-center text-slate-400 font-sans">
+                              No hay notas de crédito registradas.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredNCs.map((nc, idx) => (
+                            <tr key={nc.id} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="py-2 px-2 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedCreditNoteForTicket(nc)}
+                                  className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 hover:text-rose-800 transition-colors cursor-pointer inline-flex items-center justify-center shadow-2xs"
+                                  title="Ver comprobante de Nota de Crédito"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                              <td className="py-2 px-3 text-center text-slate-400">{idx + 1}</td>
+                              <td className="py-2 px-3 text-slate-700 whitespace-nowrap">
+                                {new Date(nc.date).toLocaleDateString('es-VE')}
+                              </td>
+                              <td className="py-2 px-3 font-bold text-rose-700">{nc.creditNoteNumber}</td>
+                              <td className="py-2 px-3 text-slate-600">{nc.controlNumber}</td>
+                              <td className="py-2 px-3 font-bold text-slate-800">{nc.originalInvoiceNumber}</td>
+                              <td className="py-2 px-3 text-slate-700">{nc.clientRIF}</td>
+                              <td className="py-2 px-3 font-sans text-slate-800 max-w-xs truncate">{nc.clientName}</td>
+                              <td className="py-2 px-3 font-sans text-slate-600 text-[11px] max-w-xs truncate">{nc.reason}</td>
+                              <td className="py-2 px-3 text-right text-slate-700">{formatBs(nc.subtotalBs)}</td>
+                              <td className="py-2 px-3 text-right text-teal-700">{formatBs(nc.ivaBs)}</td>
+                              <td className="py-2 px-3 text-right font-bold text-rose-700">-{formatBs(nc.totalBs)}</td>
+                              <td className="py-2 px-3 text-right font-bold text-rose-700">-${formatUSD(nc.totalUSD)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* SUBTAB: DESINCORPORACIONES DE INVENTARIO Y MERMAS */}
+      {subTab === 'salidas_inventario' && (
+        <div className="space-y-4">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+              <input
+                type="text"
+                placeholder="Buscar por código de salida, producto o responsable..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDischargeModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Desincorporar Stock</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Metrics */}
+          {(() => {
+            const filteredDischarges = inventoryDischarges.filter(d =>
+              d.dischargeNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              d.productName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              (d.responsibleName && d.responsibleName.toLowerCase().includes(searchTerm.toLowerCase()))
+            );
+
+            const totalUnits = filteredDischarges.reduce((acc, d) => acc + d.quantity, 0);
+            const totalLossUSD = filteredDischarges.reduce((acc, d) => acc + d.totalCostUSD, 0);
+            const totalLossBs = filteredDischarges.reduce((acc, d) => acc + d.totalCostBs, 0);
+
+            const danoUSD = filteredDischarges.filter(d => d.reason === 'Daño / Vencimiento').reduce((acc, d) => acc + d.totalCostUSD, 0);
+            const usoInternoUSD = filteredDischarges.filter(d => d.reason === 'Uso Interno').reduce((acc, d) => acc + d.totalCostUSD, 0);
+            const mermaUSD = filteredDischarges.filter(d => d.reason === 'Merma').reduce((acc, d) => acc + d.totalCostUSD, 0);
+
+            return (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Unidades Salientes</span>
+                    <div className="text-lg font-black text-slate-900 font-mono-numbers">
+                      {totalUnits}
+                    </div>
+                    <span className="text-[11px] text-slate-500">En {filteredDischarges.length} registros</span>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-amber-200 bg-amber-50/40">
+                    <span className="text-[10px] font-bold text-amber-700 uppercase">Pérdida Total (Gasto Op.)</span>
+                    <div className="text-lg font-black text-amber-900 font-mono-numbers">
+                      ${formatUSD(totalLossUSD)}
+                    </div>
+                    <span className="text-[11px] font-bold text-amber-700 font-mono">≈ Bs. {formatBs(totalLossBs)}</span>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Daño / Vencimiento</span>
+                    <div className="text-lg font-black text-rose-700 font-mono-numbers">
+                      ${formatUSD(danoUSD)}
+                    </div>
+                    <span className="text-[11px] text-slate-500">Mercancía no comercializable</span>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Uso Interno & Mermas</span>
+                    <div className="text-lg font-black text-blue-700 font-mono-numbers">
+                      ${formatUSD(usoInternoUSD + mermaUSD)}
+                    </div>
+                    <span className="text-[11px] text-slate-500">Insumos y mermas operativas</span>
+                  </div>
+                </div>
+
+                {/* Discharges Table */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                  <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-700">Libro de Desincorporaciones de Inventario</span>
+                    <span className="text-slate-500">{filteredDischarges.length} comprobantes</span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs font-mono">
+                      <thead className="bg-slate-100 text-slate-600 font-semibold uppercase tracking-wider text-[11px] border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-3 text-center">#</th>
+                          <th className="py-2.5 px-3">Comprobante</th>
+                          <th className="py-2.5 px-3">Fecha</th>
+                          <th className="py-2.5 px-3">Producto</th>
+                          <th className="py-2.5 px-3 text-center">Cantidad</th>
+                          <th className="py-2.5 px-3">Motivo</th>
+                          <th className="py-2.5 px-3 text-right">Costo Unit. $</th>
+                          <th className="py-2.5 px-3 text-right font-bold">Pérdida Total $</th>
+                          <th className="py-2.5 px-3 text-right">Pérdida Bs</th>
+                          <th className="py-2.5 px-3">Responsable</th>
+                          <th className="py-2.5 px-3">Observación</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredDischarges.length === 0 ? (
+                          <tr>
+                            <td colSpan={11} className="py-8 text-center text-slate-400 font-sans">
+                              No hay registros de salidas o desincorporación de inventario.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredDischarges.map((disc, idx) => (
+                            <tr key={disc.id} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="py-2 px-3 text-center text-slate-400">{idx + 1}</td>
+                              <td className="py-2 px-3 font-bold text-amber-700">{disc.dischargeNumber}</td>
+                              <td className="py-2 px-3 text-slate-700 whitespace-nowrap">
+                                {new Date(disc.date).toLocaleDateString('es-VE')}
+                              </td>
+                              <td className="py-2 px-3 font-sans font-bold text-slate-800">{disc.productName}</td>
+                              <td className="py-2 px-3 text-center font-bold text-slate-900 bg-slate-50">{disc.quantity}</td>
+                              <td className="py-2 px-3">
+                                <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                  disc.reason === 'Daño / Vencimiento' 
+                                    ? 'bg-rose-100 text-rose-800' 
+                                    : disc.reason === 'Uso Interno'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                  {disc.reason}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-right text-slate-600">${formatUSD(disc.unitCostUSD)}</td>
+                              <td className="py-2 px-3 text-right font-bold text-rose-700">${formatUSD(disc.totalCostUSD)}</td>
+                              <td className="py-2 px-3 text-right text-slate-700">{formatBs(disc.totalCostBs)}</td>
+                              <td className="py-2 px-3 font-sans text-slate-700">{disc.responsibleName}</td>
+                              <td className="py-2 px-3 font-sans text-slate-500 text-[11px] max-w-xs truncate">{disc.notes || '-'}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -1352,6 +1696,129 @@ export const ContabilidadView: React.FC = () => {
                 type="button"
                 onClick={() => setSelectedShiftForDetail(null)}
                 className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Comprobante Ticket de Venta */}
+      {selectedSaleForTicket && (
+        <ComprobanteTicketModal
+          sale={selectedSaleForTicket}
+          onClose={() => setSelectedSaleForTicket(null)}
+          businessInfo={businessInfo}
+        />
+      )}
+
+      {/* Modal: Comprobante Nota de Crédito */}
+      {selectedCreditNoteForTicket && (
+        <ComprobanteNotaCreditoModal
+          creditNote={selectedCreditNoteForTicket}
+          onClose={() => setSelectedCreditNoteForTicket(null)}
+          businessInfo={businessInfo}
+        />
+      )}
+
+      {/* Modal: Comprobante de Factura de Compra / Gasto */}
+      {selectedExpenseForTicket && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 flex flex-col max-h-[90vh]">
+            <div className="p-3 bg-slate-900 text-white flex items-center justify-between text-xs">
+              <span className="font-bold flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-teal-400" />
+                Comprobante de Compra / Gasto
+              </span>
+              <button 
+                onClick={() => setSelectedExpenseForTicket(null)} 
+                className="p-1 rounded-full hover:bg-slate-800 text-slate-300"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-4">
+              <div className="text-center border-b border-dashed border-slate-200 pb-3">
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800 uppercase">
+                  {selectedExpenseForTicket.category}
+                </span>
+                <h3 className="text-lg font-bold text-slate-900 mt-1">
+                  {selectedExpenseForTicket.supplierName}
+                </h3>
+                <p className="text-xs text-slate-500 font-mono">RIF: {selectedExpenseForTicket.supplierRIF}</p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Fecha: {new Date(selectedExpenseForTicket.date).toLocaleString('es-VE')}
+                </p>
+              </div>
+
+              <div className="bg-slate-50 rounded-xl p-3.5 space-y-2 border border-slate-200 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Nº Factura:</span>
+                  <span className="font-bold text-slate-900 font-mono">{selectedExpenseForTicket.invoiceNumber}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Nº Control:</span>
+                  <span className="font-bold text-slate-700 font-mono">{selectedExpenseForTicket.controlNumber}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Método de Pago:</span>
+                  <span className="font-bold text-slate-800 uppercase text-[11px]">
+                    {selectedExpenseForTicket.paymentMethod.replace('_', ' ')}
+                  </span>
+                </div>
+                {selectedExpenseForTicket.reference && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Referencia:</span>
+                    <span className="font-bold text-slate-700 font-mono">{selectedExpenseForTicket.reference}</span>
+                  </div>
+                )}
+                {selectedExpenseForTicket.description && (
+                  <div className="pt-2 border-t border-slate-200/80 text-slate-600">
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Concepto:</span>
+                    <span>{selectedExpenseForTicket.description}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Financial SENIAT Breakdown */}
+              <div className="space-y-1.5 text-xs font-mono">
+                <div className="flex justify-between text-slate-600">
+                  <span>Base Imponible (16%):</span>
+                  <span>Bs. {formatBs(selectedExpenseForTicket.baseImponibleBs)}</span>
+                </div>
+                <div className="flex justify-between text-blue-700 font-semibold">
+                  <span>IVA Crédito Fiscal (16%):</span>
+                  <span>+ Bs. {formatBs(selectedExpenseForTicket.ivaBs)}</span>
+                </div>
+                {selectedExpenseForTicket.retencionIVABs > 0 && (
+                  <div className="flex justify-between text-amber-700">
+                    <span>Retención IVA 75%:</span>
+                    <span>- Bs. {formatBs(selectedExpenseForTicket.retencionIVABs)}</span>
+                  </div>
+                )}
+                {selectedExpenseForTicket.retencionISLRBs > 0 && (
+                  <div className="flex justify-between text-slate-600">
+                    <span>Retención ISLR:</span>
+                    <span>- Bs. {formatBs(selectedExpenseForTicket.retencionISLRBs)}</span>
+                  </div>
+                )}
+                <div className="pt-2 border-t-2 border-slate-900 flex justify-between font-bold text-sm text-slate-900">
+                  <span>TOTAL PAGADO:</span>
+                  <span>Bs. {formatBs(selectedExpenseForTicket.amountBs)}</span>
+                </div>
+                <div className="text-right text-xs text-teal-700 font-bold">
+                  ≈ ${formatUSD(selectedExpenseForTicket.amountUSD)} USD (Tasa: Bs. {formatBs(selectedExpenseForTicket.bcvRate || bcvRate)})
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-100 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedExpenseForTicket(null)}
+                className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 Cerrar
               </button>

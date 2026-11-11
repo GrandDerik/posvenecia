@@ -114,8 +114,71 @@ export interface Sale {
   totalBs: number;
   paymentMethod: PaymentMethod;
   paymentDetails: PaymentDetails;
-  status: 'completada' | 'anulada';
+  status: 'completada' | 'anulada' | 'devuelta';
+  creditNoteId?: string;
+  refundedUSD?: number;
   cashierName: string;
+  syncStatus?: 'synced' | 'pending_sync';
+}
+
+export interface CreditNoteItem {
+  productId: string;
+  productName: string;
+  quantity: number;
+  unitPriceUSD: number;
+  totalUSD: number;
+  isExemptFromIVA: boolean;
+}
+
+export interface CreditNote {
+  id: string; // Ej: "nc-1731301234567"
+  creditNoteNumber: string; // Ej: "NC-000001"
+  controlNumber: string; // Ej: "00-00001" (SENIAT)
+  saleId: string;
+  originalInvoiceNumber: string;
+  date: string; // ISO string
+  clientName: string;
+  clientRIF: string;
+  clientPhone?: string;
+  clientAddress?: string;
+  items: CreditNoteItem[];
+  subtotalUSD: number;
+  exemptUSD: number;
+  taxableUSD: number;
+  ivaUSD: number;
+  igtfUSD: number;
+  totalUSD: number;
+  subtotalBs: number;
+  exemptBs: number;
+  taxableBs: number;
+  ivaBs: number;
+  igtfBs: number;
+  totalBs: number;
+  bcvRate: number;
+  reason: string; // Motivo de la devolución / nota de crédito
+  refundMethod: PaymentMethod;
+  cashierName: string;
+  syncStatus?: 'synced' | 'pending_sync';
+}
+
+export type InventoryDischargeReason = 'Daño / Vencimiento' | 'Uso Interno' | 'Merma';
+
+export interface InventoryDischarge {
+  id: string; // Ej: "disc-1731301234567"
+  dischargeNumber: string; // Ej: "SAL-000001"
+  date: string; // ISO string
+  productId: string;
+  productName: string;
+  productCode: string;
+  category: string;
+  quantity: number;
+  unitCostUSD: number;
+  totalLossUSD: number;
+  totalLossBs: number;
+  bcvRate: number;
+  reason: InventoryDischargeReason;
+  notes?: string;
+  responsibleName: string;
   syncStatus?: 'synced' | 'pending_sync';
 }
 
@@ -278,6 +341,8 @@ export type GastoOperativoCategory =
   | 'Transporte' 
   | 'Eventual' 
   | 'Papelería' 
+  | 'Pérdida por Merma / Vencimiento'
+  | 'Uso Interno'
   | 'Otros';
 
 export interface GastoOperativo {

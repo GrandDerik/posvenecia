@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Sale, Expense, BusinessInfo, CashShift } from '../types';
+import { Sale, Expense, BusinessInfo, CashShift, CreditNote } from '../types';
 import { formatBs, formatUSD } from './exportUtils';
 
 // 1. Reporte Z / Cierre Diario SENIAT
@@ -539,6 +539,175 @@ export const generateComprobanteCierrePDF = (
   doc.text('FIRMA DEL ADMINISTRADOR / SUPERVISOR', pageWidth - 57, y + 4, { align: 'center' });
 
   const fileName = `Reporte_Cierre_Caja_${new Date().toISOString().split('T')[0]}_Turno_${shift.id.slice(-6)}.pdf`;
+
+  if (action === 'print') {
+    doc.autoPrint();
+    const blobUrl = doc.output('bloburl');
+    const printFrame = document.createElement('iframe');
+    printFrame.style.position = 'fixed';
+    printFrame.style.right = '0';
+    printFrame.style.bottom = '0';
+    printFrame.style.width = '0';
+    printFrame.style.height = '0';
+    printFrame.style.border = '0';
+    printFrame.src = blobUrl as any;
+    document.body.appendChild(printFrame);
+
+    const cleanup = () => {
+      setTimeout(() => {
+        if (document.body.contains(printFrame)) {
+          document.body.removeChild(printFrame);
+        }
+      }, 2000);
+    };
+
+    printFrame.onload = () => {
+      try {
+        printFrame.contentWindow?.focus();
+        printFrame.contentWindow?.print();
+      } catch (e) {
+        console.warn('Error invoking print dialog on iframe:', e);
+      } finally {
+        cleanup();
+      }
+    };
+  } else {
+    doc.save(fileName);
+  }
+};
+
+// 5. Comprobante Fiscal de Nota de Crédito / Devolución (Formato Térmico 80mm)
+export const generateTicketNotaCreditoPDF = (
+  creditNote: CreditNote,
+  businessInfo: BusinessInfo,
+  action: 'download' | 'print' = 'download'
+) => {
+  const doc = new jsPDF({
+    unit: 'mm',
+    format: [80, 200 + creditNote.items.length * 10],
+    orientation: 'portrait'
+  });
+
+  const pageWidth = 80;
+  let y = 8;
+
+  // Header
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text(businessInfo.name.toUpperCase(), pageWidth / 2, y, { align: 'center' });
+  y += 5;
+
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`RIF: ${businessInfo.rif}`, pageWidth / 2, y, { align: 'center' });
+  y += 4;
+  doc.text(businessInfo.address.substring(0, 42), pageWidth / 2, y, { align: 'center' });
+  y += 4;
+  doc.text(`TELF: ${businessInfo.phone}`, pageWidth / 2, y, { align: 'center' });
+  y += 5;
+
+  // Title Box
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('NOTA DE CRÉDITO', pageWidth / 2, y, { align: 'center' });
+  y += 4;
+  doc.setFontSize(8);
+  doc.text(creditNote.creditNoteNumber, pageWidth / 2, y, { align: 'center' });
+  y += 4;
+  doc.setFontSize(7.5);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`CONTROL SENIAT: ${creditNote.controlNumber}`, pageWidth / 2, y, { align: 'center' });
+  y += 4;
+  doc.text(`AFECTA A FACTURA: ${creditNote.originalInvoiceNumber}`, pageWidth / 2, y, { align: 'center' });
+  y += 4;
+  doc.text(`FECHA: ${new Date(creditNote.date).toLocaleString('es-VE')}`, pageWidth / 2, y, { align: 'center' });
+  y += 4;
+  doc.text(`TASA BCV: Bs. ${creditNote.bcvRate.toFixed(2)}`, pageWidth / 2, y, { align: 'center' });
+  y += 4;
+
+  doc.setLineWidth(0.3);
+  doc.line(6, y, pageWidth - 6, y);
+  y += 4;
+
+  // Client Info
+  doc.setFontSize(7);
+  doc.text(`CLIENTE: ${creditNote.clientName.substring(0, 36)}`, 6, y);
+  y += 3.5;
+  doc.text(`RIF/CI: ${creditNote.clientRIF}`, 6, y);
+  y += 3.5;
+  doc.text(`MOTIVO: ${creditNote.reason.substring(0, 40)}`, 6, y);
+  y += 4;
+
+  doc.line(6, y, pageWidth - 6, y);
+  y += 4;
+
+  // Table header
+  doc.setFont('helvetica', 'bold');
+  doc.text('CANT / ARTÍCULO DEVUELTO', 6, y);
+  doc.text('TOTAL Bs', pageWidth - 6, y, { align: 'right' });
+  y += 4;
+  doc.setFont('helvetica', 'normal');
+
+  creditNote.items.forEach(item => {
+    const itemTotalBs = item.totalUSD * creditNote.bcvRate;
+    const nameStr = `${item.quantity}x ${item.productName}${item.isExemptFromIVA ? ' (E)' : ''}`;
+    doc.text(nameStr.substring(0, 26), 6, y);
+    doc.text(`Bs. ${formatBs(itemTotalBs)}`, pageWidth - 6, y, { align: 'right' });
+    y += 3.5;
+    doc.setFontSize(6);
+    doc.setTextColor(110);
+    doc.text(`   $ ${formatUSD(item.unitPriceUSD)} c/u = $ ${formatUSD(item.totalUSD)}`, 6, y);
+    doc.setTextColor(0);
+    doc.setFontSize(7);
+    y += 4;
+  });
+
+  doc.line(6, y, pageWidth - 6, y);
+  y += 4;
+
+  // Totals
+  doc.text('SUBTOTAL:', 6, y);
+  doc.text(`Bs. ${formatBs(creditNote.subtotalBs)}`, pageWidth - 6, y, { align: 'right' });
+  y += 3.5;
+
+  if (creditNote.exemptBs > 0) {
+    doc.text('EXENTO (E):', 6, y);
+    doc.text(`Bs. ${formatBs(creditNote.exemptBs)}`, pageWidth - 6, y, { align: 'right' });
+    y += 3.5;
+  }
+
+  if (creditNote.taxableBs > 0) {
+    doc.text('BASE IMPONIBLE (16%):', 6, y);
+    doc.text(`Bs. ${formatBs(creditNote.taxableBs)}`, pageWidth - 6, y, { align: 'right' });
+    y += 3.5;
+    doc.text('IVA (16%):', 6, y);
+    doc.text(`Bs. ${formatBs(creditNote.ivaBs)}`, pageWidth - 6, y, { align: 'right' });
+    y += 3.5;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  y += 1;
+  doc.text('TOTAL DEVUELTO:', 6, y);
+  doc.text(`Bs. ${formatBs(creditNote.totalBs)}`, pageWidth - 6, y, { align: 'right' });
+  y += 4;
+  doc.text('TOTAL EQUIV. USD:', 6, y);
+  doc.text(`$ ${formatUSD(creditNote.totalUSD)}`, pageWidth - 6, y, { align: 'right' });
+  y += 4.5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text(`FORMA DE REINTEGRO: ${creditNote.refundMethod.replace('_', ' ').toUpperCase()}`, 6, y);
+  y += 4;
+  doc.text(`CAJERO: ${creditNote.cashierName}`, 6, y);
+  y += 5;
+
+  doc.setFontSize(6.5);
+  doc.setTextColor(100);
+  doc.text('Mercancía reincorporada formalmente al inventario.', pageWidth / 2, y, { align: 'center' });
+  doc.setTextColor(0);
+
+  const fileName = `Nota_Credito_${creditNote.creditNoteNumber}.pdf`;
 
   if (action === 'print') {
     doc.autoPrint();
