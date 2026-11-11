@@ -68,8 +68,8 @@ export const saveOfflineSale = async (sale: Sale): Promise<void> => {
   try {
     const store = await getStore('sales', 'readwrite');
     store.put(sale);
-    // Also record in sync queue if not yet synced
-    if (sale.syncStatus === 'pending_sync') {
+    // Also record in sync queue if not explicitly confirmed as synced
+    if (sale.syncStatus !== 'synced') {
       await enqueueSyncItem({
         action: 'create_sale',
         payload: sale,
@@ -260,6 +260,28 @@ export const batchClearSyncQueue = async (ids: string[]): Promise<void> => {
     });
   } catch (err) {
     console.error('Error en batch delete de cola offline:', err);
+  }
+};
+
+/**
+ * Elimina un elemento de la cola de sincronización buscando por el ID de la venta
+ */
+export const removeSyncItemBySaleId = async (saleId: string): Promise<void> => {
+  try {
+    const db = await initIndexedDB();
+    const tx = db.transaction('sync_queue', 'readwrite');
+    const store = tx.objectStore('sync_queue');
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const items: OfflineSyncItem[] = req.result || [];
+      for (const item of items) {
+        if (item.action === 'create_sale' && item.payload?.id === saleId) {
+          store.delete(item.id);
+        }
+      }
+    };
+  } catch (err) {
+    console.error('Error removing sync item by saleId:', err);
   }
 };
 

@@ -46,7 +46,8 @@ import {
   saveOfflineProducts,
   saveAppStateToIndexedDB,
   loadAppStateFromIndexedDB,
-  syncPendingOfflineData
+  syncPendingOfflineData,
+  removeSyncItemBySaleId
 } from '../services/indexedDBService';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { testConnection, auth } from '../config/firebaseConfig';
@@ -69,7 +70,11 @@ import {
   saveCashShiftToFirestore,
   saveStoreMetadataToFirestore,
   checkAndMigrateLocalDataToFirestore,
-  getCanonicalBusinessId
+  getCanonicalBusinessId,
+  saveCashRegisterStatusToFirestore,
+  waitForAllPendingWrites,
+  flushPendingQueueToFirestore,
+  CashRegisterStatusDoc
 } from '../services/firestoreSyncService';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
@@ -575,7 +580,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsAperturaModalOpen(false);
     const businessId = auth.currentUser?.uid || googleUser?.uid;
     if (businessId) {
-      saveStoreMetadataToFirestore(businessId, { activeCashShift: newShift }).catch(e => console.warn('Sync open shift error:', e));
+      saveCashRegisterStatusToFirestore(businessId, {
+        isOpen: true,
+        activeShift: newShift,
+        updatedAt: now.toISOString(),
+        updatedBy: googleUser?.name || 'Administrador'
+      }).catch(e => console.warn('Sync open shift error:', e));
     }
   }, [googleUser?.uid, googleUser?.name]);
 
@@ -676,7 +686,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const businessId = auth.currentUser?.uid || googleUser?.uid;
     if (businessId) {
       saveCashShiftToFirestore(businessId, closedShift).catch(e => console.error('Sync close shift error:', e));
-      saveStoreMetadataToFirestore(businessId, { activeCashShift: null }).catch(e => console.error('Sync close shift meta error:', e));
+      saveCashRegisterStatusToFirestore(businessId, {
+        isOpen: false,
+        activeShift: null,
+        updatedAt: now.toISOString(),
+        updatedBy: googleUser?.name || 'Administrador'
+      }).catch(e => console.error('Sync close shift status error:', e));
       syncToGoogleDriveRef.current().then(() => {
         console.info('[PosVenecia] Respaldo de cierre guardado en Google Drive automáticamente.');
       }).catch(e => console.warn('Drive closing backup notice:', e));
@@ -1358,6 +1373,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           onCuentasPorPagar: (newCPP) => setCuentasPorPagar(newCPP),
           onGastosOperativos: (newGastos) => setGastosOperativos(newGastos),
           onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
+          onCashRegisterStatus: (status: CashRegisterStatusDoc) => {
+            console.info(`[PosVenecia Realtime] Caja sincronizada en tiempo real: ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
+            setCashShift(status.activeShift || null);
+          },
           onMetadata: (metadata) => {
             if (metadata.businessInfo) setBusinessInfo(metadata.businessInfo);
             if (metadata.bcvRate) setBcvRateState(metadata.bcvRate);
@@ -1398,8 +1417,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setGoogleUser(null);
         setFirestoreSyncStatus('unauthenticated');
         setDriveSyncStatus('unauthenticated');
-        loadScopedLocalStorageRef.current(undefined);
-        isDataLoadedRef.current = true;
+        if (!isDataLoadedRef.current) {
+          loadScopedLocalStorageRef.current(undefined);
+          isDataLoadedRef.current = true;
+        }
       }
     });
 
@@ -1483,6 +1504,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         onCuentasPorPagar: (newCPP) => setCuentasPorPagar(newCPP),
         onGastosOperativos: (newGastos) => setGastosOperativos(newGastos),
         onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
+        onCashRegisterStatus: (status: CashRegisterStatusDoc) => {
+          console.info(`[PosVenecia Realtime] Caja sincronizada en tiempo real: ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
+          setCashShift(status.activeShift || null);
+        },
         onMetadata: (metadata) => {
           if (metadata.businessInfo) setBusinessInfo(metadata.businessInfo);
           if (metadata.bcvRate) setBcvRateState(metadata.bcvRate);
@@ -1526,11 +1551,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   /**
-   * Google Log-out flow handler
-   * Does NOT wipe products or sales; preserves store data on the terminal while disconnecting cloud session.
+   * Google Log-out flow handler:
+   * Guarantees that all in-flight and pending queued Firestore transactions (sales, stock deductions, shifts)
+   * are confirmed in Cloud Firestore BEFORE disconnecting auth credentials, preventing sale loss and resetting stats to zero.
+   * Preserves catalog and sales in local storage without wiping to empty arrays.
    */
   const logoutGoogle = async () => {
     try {
+      const businessId = auth.currentUser?.uid || googleUser?.uid;
+      if (businessId) {
+        setFirestoreSyncStatus('syncing');
+        // 1. Wait for all in-flight Cloud Firestore promises to complete
+        await waitForAllPendingWrites();
+        // 2. Flush any pending offline queue items directly to Cloud Firestore
+        await flushPendingQueueToFirestore(businessId);
+        // 3. Confirm all flush writes have completed
+        await waitForAllPendingWrites();
+      }
+
+      // 4. Detach real-time listeners BEFORE terminating credentials
       if (firestoreUnsubRef.current) {
         firestoreUnsubRef.current();
         firestoreUnsubRef.current = null;
@@ -1813,7 +1852,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       paymentMethod: paymentDetails.method,
       paymentDetails,
       status: 'completada',
-      cashierName: googleUser?.name || `Caja ${terminalId}`
+      cashierName: googleUser?.name || `Caja ${terminalId}`,
+      syncStatus: 'pending_sync'
     };
 
     // Deduct physical inventory
@@ -1857,11 +1897,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Save atomically in Firebase Firestore in real time for instant multi-device reflection!
     const businessId = auth.currentUser?.uid || googleUser?.uid;
     if (businessId) {
-      const stockDeductions = cart
+      const stockDeductions = snapshotItems
         .filter(item => !item.product.isService && item.product.itemType !== 'servicio')
         .map(item => ({ productId: item.product.id, quantity: item.quantity }));
       saveSaleAtomic(businessId, newSale, stockDeductions, createdFiado).then(() => {
-        console.info(`[PosVenecia Firestore] Venta ${newSale.invoiceNumber} sincronizada en Firestore.`);
+        console.info(`[PosVenecia Firestore] Venta ${newSale.invoiceNumber} sincronizada y confirmada en Firestore.`);
+        // Mark sale as synced and purge from sync queue
+        removeSyncItemBySaleId(newSale.id).catch(err => console.warn('Remove sync item error:', err));
+        setSales(prev => prev.map(s => s.id === newSale.id ? { ...s, syncStatus: 'synced' } : s));
       }).catch(e => {
         console.error('Firestore atomic sale error:', e);
       });
