@@ -28,6 +28,19 @@ export interface Product {
   itemType?: ItemType; // 'producto' o 'servicio'
   isService?: boolean; // True si es copiado, impresión, redacción u otro servicio sin inventario rígido
   purchaseNote?: string; // Nota de compra opcional (fecha, factura, proveedor o nro de control)
+  profitMarginPercent?: number; // Margen de ganancia porcentual guardado (ej. 30%)
+  batches?: ProductBatch[]; // Lotes separados para trazabilidad FIFO (precios justos)
+}
+
+export interface ProductBatch {
+  id: string;
+  invoiceNumber: string;
+  supplierName?: string;
+  date: string;
+  quantity: number;
+  initialQuantity: number;
+  costUSD: number;
+  targetPriceUSD?: number;
 }
 
 export interface Client {
@@ -182,6 +195,20 @@ export interface InventoryDischarge {
   syncStatus?: 'synced' | 'pending_sync';
 }
 
+export type PurchaseCostStrategy = 'fifo' | 'average_cost';
+
+export interface ExpenseItem {
+  productId: string;
+  productName: string;
+  quantity: number;
+  unitCostUSD: number;
+  totalCostUSD: number;
+  strategy: PurchaseCostStrategy;
+  previousCostUSD?: number;
+  previousPriceUSD?: number;
+  newPriceUSD?: number;
+}
+
 export interface Expense {
   id: string;
   date: string;
@@ -200,6 +227,8 @@ export interface Expense {
   bcvRate: number;
   paymentMethod: 'efectivo_usd' | 'efectivo_bs' | 'pago_movil' | 'debito' | 'transferencia';
   reference?: string;
+  items?: ExpenseItem[];
+  costStrategy?: PurchaseCostStrategy;
   syncStatus?: 'synced' | 'pending_sync';
 }
 

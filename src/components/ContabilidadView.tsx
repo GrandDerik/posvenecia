@@ -1780,6 +1780,37 @@ export const ContabilidadView: React.FC = () => {
                     <span>{selectedExpenseForTicket.description}</span>
                   </div>
                 )}
+
+                {selectedExpenseForTicket.items && selectedExpenseForTicket.items.length > 0 && (
+                  <div className="pt-2 border-t border-slate-200/80">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase mb-1.5">
+                      <span>Artículos Comprados ({selectedExpenseForTicket.items.length}):</span>
+                      {selectedExpenseForTicket.costStrategy && (
+                        <span className="text-teal-700 normal-case font-semibold">
+                          {selectedExpenseForTicket.costStrategy === 'fifo' ? 'Estrategia FIFO' : 'Precio Actualizado'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1.5 bg-white rounded-lg p-2 border border-slate-200 text-[11px]">
+                      {selectedExpenseForTicket.items.map((it, idx) => (
+                        <div key={idx} className="flex justify-between items-center py-1 border-b border-slate-100 last:border-0">
+                          <div>
+                            <span className="font-semibold text-slate-800">{it.productName}</span>
+                            <span className="text-slate-500 text-[10px] block font-mono">
+                              +{it.quantity} unids × ${it.unitCostUSD.toFixed(2)} (≈ Bs. {formatBs(it.unitCostUSD * (selectedExpenseForTicket.bcvRate || bcvRate))})
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="font-mono font-bold text-slate-900">${it.totalCostUSD.toFixed(2)}</span>
+                            <span className={`block text-[9px] font-bold ${it.strategy === 'fifo' ? 'text-teal-700' : 'text-blue-700'}`}>
+                              {it.strategy === 'fifo' ? 'Lote FIFO' : `Venta: $${it.newPriceUSD?.toFixed(2) || '0'}`}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Financial SENIAT Breakdown */}

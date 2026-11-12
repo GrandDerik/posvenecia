@@ -680,6 +680,40 @@ export const saveExpenseToFirestore = async (businessId: string, expense: Expens
 };
 
 /**
+ * Atomic write for recording a purchase invoice and updating products inventory/costs in Firestore
+ */
+export const saveExpenseWithInventoryAtomic = async (
+  businessId: string,
+  expense: Expense,
+  updatedProducts: Product[]
+): Promise<void> => {
+  const path = `businesses/${businessId}/expenses/${expense.id}`;
+  const op = (async () => {
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Save expense document in Libro de Compras
+      const cleanedExpense = cleanForFirestore(expense);
+      const expRef = doc(db, 'businesses', businessId, 'expenses', expense.id);
+      batch.set(expRef, cleanedExpense, { merge: true });
+
+      // 2. Atomically update each modified product in the catalog
+      for (const prod of updatedProducts) {
+        const prodRef = doc(db, 'businesses', businessId, 'products', prod.id);
+        const cleanedProduct = cleanForFirestore(prod);
+        batch.set(prodRef, cleanedProduct, { merge: true });
+      }
+
+      await batch.commit();
+      console.info(`[PosVenecia Firestore] Factura ${expense.invoiceNumber} y ${updatedProducts.length} productos actualizados atómicamente.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
  * Delete expense from Firestore
  */
 export const deleteExpenseFromFirestore = async (businessId: string, expenseId: string): Promise<void> => {

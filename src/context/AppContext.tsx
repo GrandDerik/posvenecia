@@ -23,7 +23,8 @@ import {
   CreditNote,
   CreditNoteItem,
   InventoryDischarge,
-  InventoryDischargeReason
+  InventoryDischargeReason,
+  ProductBatch
 } from '../types';
 import { fetchLiveBCVRate, fetchLiveBCVEuroRate } from '../utils/bcvFetcher';
 import { 
@@ -81,7 +82,8 @@ import {
   flushPendingQueueToFirestore,
   CashRegisterStatusDoc,
   saveCreditNoteAtomic,
-  saveInventoryDischargeAtomic
+  saveInventoryDischargeAtomic,
+  saveExpenseWithInventoryAtomic
 } from '../services/firestoreSyncService';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
@@ -1947,9 +1949,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const updated = prevProducts.map(prod => {
             const qtyToDeduct = deductionMap.get(prod.id);
             if (qtyToDeduct !== undefined && qtyToDeduct > 0) {
+              let updatedBatches = prod.batches ? [...prod.batches] : undefined;
+              if (updatedBatches && updatedBatches.length > 0) {
+                let remainingToDeduct = qtyToDeduct;
+                const nextBatches: ProductBatch[] = [];
+                for (const b of updatedBatches) {
+                  if (remainingToDeduct <= 0) {
+                    nextBatches.push(b);
+                  } else if (b.quantity > remainingToDeduct) {
+                    nextBatches.push({ ...b, quantity: Number((b.quantity - remainingToDeduct).toFixed(2)) });
+                    remainingToDeduct = 0;
+                  } else {
+                    remainingToDeduct -= b.quantity;
+                  }
+                }
+                updatedBatches = nextBatches;
+              }
+
               return {
                 ...prod,
-                stock: Math.max(0, prod.stock - qtyToDeduct)
+                stock: Math.max(0, prod.stock - qtyToDeduct),
+                batches: updatedBatches
               };
             }
             return prod;
@@ -2333,7 +2353,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Expenses operations
+  // Expenses & Purchases operations (Libro de Compras e Integración con Inventario)
   const addExpense = (expData: Omit<Expense, 'id'>) => {
     if (!cashShift?.isOpen) {
       setIsAperturaModalOpen(true);
@@ -2344,6 +2364,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...expData,
       id: 'exp-' + Date.now()
     };
+
+    let updatedProductsList: Product[] = [];
+
+    // If purchase has purchased items, process inventory stock and cost/price strategy
+    if (newExp.items && newExp.items.length > 0) {
+      setProducts(prevProducts => {
+        const productMap = new Map(prevProducts.map(p => [p.id, { ...p }]));
+        const impacted: Product[] = [];
+
+        for (const item of newExp.items!) {
+          const prod = productMap.get(item.productId);
+          if (!prod) continue;
+
+          const incomingQty = Math.max(0, item.quantity);
+          const incomingCostUSD = Math.max(0, item.unitCostUSD);
+
+          // 1. Physical stock always increases
+          const previousStock = prod.stock || 0;
+          const newStock = previousStock + incomingQty;
+          prod.stock = newStock;
+
+          // 2. Evaluate Strategy
+          if (item.strategy === 'fifo') {
+            // Opción 1: Mantener Lotes Separados (FIFO)
+            // Suma stock físico al inventario pero respeta el precio de venta actual del producto
+            // hasta que se agoten las unidades previas (normativa de precios justos).
+            const newBatch: ProductBatch = {
+              id: 'batch-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+              invoiceNumber: newExp.invoiceNumber,
+              supplierName: newExp.supplierName,
+              date: newExp.date,
+              quantity: incomingQty,
+              initialQuantity: incomingQty,
+              costUSD: incomingCostUSD,
+              targetPriceUSD: item.newPriceUSD || prod.priceUSD
+            };
+
+            prod.batches = [...(prod.batches || []), newBatch];
+            prod.purchaseNote = `Lote Factura ${newExp.invoiceNumber} (${incomingQty} unids a $${incomingCostUSD.toFixed(2)})`;
+          } else {
+            // Opción 2: Actualizar Costo y Precio (Costo Promedio / Nuevo Lote)
+            // Suma el stock y recalcula automáticamente el precio de venta usando el nuevo costo unitario
+            // y aplicando el margen de ganancia guardado en el producto.
+            prod.costUSD = incomingCostUSD;
+            if (item.newPriceUSD && item.newPriceUSD > 0) {
+              prod.priceUSD = item.newPriceUSD;
+            } else {
+              const previousCost = (item.previousCostUSD !== undefined && item.previousCostUSD > 0) 
+                ? item.previousCostUSD 
+                : (prod.costUSD > 0 ? prod.costUSD : incomingCostUSD);
+              const previousPrice = (item.previousPriceUSD !== undefined && item.previousPriceUSD > 0) 
+                ? item.previousPriceUSD 
+                : prod.priceUSD;
+              const margin = previousCost > 0 ? (previousPrice - previousCost) / previousCost : 0.30;
+              prod.priceUSD = Number((incomingCostUSD * (1 + Math.max(0, margin))).toFixed(2));
+            }
+
+            if (baseCurrency === 'VED') {
+              prod.priceBsFixed = Number((prod.priceUSD * bcvRate).toFixed(2));
+            }
+
+            prod.purchaseNote = `Actualizado Factura ${newExp.invoiceNumber} - Costo $${incomingCostUSD.toFixed(2)} / Venta $${prod.priceUSD.toFixed(2)}`;
+          }
+
+          impacted.push(prod);
+        }
+
+        updatedProductsList = impacted;
+        const nextProducts = Array.from(productMap.values());
+        saveOfflineProducts(nextProducts).catch(e => console.warn('Cache updated products in IndexedDB:', e));
+        return nextProducts;
+      });
+    }
+
     setExpenses(prev => [newExp, ...prev]);
 
     // Persist immediately in IndexedDB for Offline-First architecture
@@ -2351,7 +2445,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const businessId = auth.currentUser?.uid || googleUser?.uid;
     if (businessId) {
-      saveExpenseToFirestore(businessId, newExp).catch(e => console.error('Firestore addExpense error:', e));
+      if (updatedProductsList.length > 0) {
+        saveExpenseWithInventoryAtomic(businessId, newExp, updatedProductsList).catch(e =>
+          console.error('Firestore atomic saveExpenseWithInventoryAtomic error:', e)
+        );
+      } else {
+        saveExpenseToFirestore(businessId, newExp).catch(e =>
+          console.error('Firestore addExpense error:', e)
+        );
+      }
     }
   };
 

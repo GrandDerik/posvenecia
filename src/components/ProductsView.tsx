@@ -16,7 +16,8 @@ import {
   Upload,
   FileText,
   DollarSign,
-  Coins
+  Coins,
+  Layers
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Product } from '../types';
@@ -385,6 +386,12 @@ export const ProductsView: React.FC = () => {
                         <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
                           <FileText className="w-3 h-3 text-blue-500 shrink-0" />
                           <span className="truncate max-w-xs">{prod.purchaseNote}</span>
+                        </div>
+                      )}
+                      {prod.batches && prod.batches.length > 0 && (
+                        <div className="text-[10px] text-teal-700 flex items-center gap-1 mt-0.5 font-medium">
+                          <Layers className="w-3 h-3 text-teal-600 shrink-0" />
+                          <span>{prod.batches.length} lote(s) FIFO (trazabilidad activa)</span>
                         </div>
                       )}
                     </td>
