@@ -540,7 +540,7 @@ export const saveInventoryDischargeAtomic = async (
   businessId: string,
   discharge: InventoryDischarge,
   associatedGastoOperativo: GastoOperativo,
-  associatedExpense: Expense
+  associatedExpense?: Expense
 ): Promise<void> => {
   const path = `businesses/${businessId}/inventoryDischarges/${discharge.id}`;
   const op = (async () => {
@@ -565,10 +565,12 @@ export const saveInventoryDischargeAtomic = async (
       const gastoRef = doc(db, 'businesses', businessId, 'gastosOperativos', associatedGastoOperativo.id);
       batch.set(gastoRef, cleanedGasto);
 
-      // 4. Create associated Expense for Libro de Gastos y Cuadre de Caja
-      const cleanedExpense = cleanForFirestore(associatedExpense);
-      const expRef = doc(db, 'businesses', businessId, 'expenses', associatedExpense.id);
-      batch.set(expRef, cleanedExpense);
+      // 4. Create associated Expense for Libro de Gastos y Cuadre de Caja if provided
+      if (associatedExpense) {
+        const cleanedExpense = cleanForFirestore(associatedExpense);
+        const expRef = doc(db, 'businesses', businessId, 'expenses', associatedExpense.id);
+        batch.set(expRef, cleanedExpense);
+      }
 
       await batch.commit();
       console.info(`[PosVenecia Firestore] Desincorporación ${discharge.dischargeNumber} (${discharge.reason}) guardada atómicamente en Firestore.`);

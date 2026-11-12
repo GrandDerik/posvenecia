@@ -15,6 +15,7 @@ import {
   BankAccount,
   CuentaPorPagar,
   GastoOperativo,
+  GastoOperativoCategory,
   GoogleAccount,
   CashShift,
   AppTheme,
@@ -2124,7 +2125,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           quantity: qty,
           unitPriceUSD,
           totalUSD: totalItemUSD,
-          isExempt: Boolean(originalItem.product.isExemptFromIVA)
+          isExemptFromIVA: Boolean(originalItem.product.isExemptFromIVA)
         });
 
         // Only restore physical inventory items (non-services)
@@ -2161,9 +2162,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: 'nc-' + Date.now(),
         creditNoteNumber,
         controlNumber,
-        originalSaleId: originalSale.id,
+        saleId: originalSale.id,
         originalInvoiceNumber: originalSale.invoiceNumber,
-        originalControlNumber: originalSale.controlNumber,
         date: new Date().toISOString(),
         clientName: originalSale.clientName || 'Consumidor Final',
         clientRIF: originalSale.clientRIF || 'V-00000000',
@@ -2171,16 +2171,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         clientAddress: originalSale.clientAddress,
         items: ncItems,
         subtotalUSD: Number(refundedSubtotalUSD.toFixed(2)),
+        exemptUSD: Number(refundedExemptUSD.toFixed(2)),
+        taxableUSD: Number(refundedTaxableUSD.toFixed(2)),
         ivaUSD: refundedIvaUSD,
         igtfUSD: refundedIgtfUSD,
         totalUSD: refundedTotalUSD,
         subtotalBs: Number((refundedSubtotalUSD * bcv).toFixed(2)),
+        exemptBs: Number((refundedExemptUSD * bcv).toFixed(2)),
+        taxableBs: Number((refundedTaxableUSD * bcv).toFixed(2)),
         ivaBs: Number((refundedIvaUSD * bcv).toFixed(2)),
         igtfBs: Number((refundedIgtfUSD * bcv).toFixed(2)),
         totalBs: refundedTotalBs,
         bcvRate: bcv,
         refundMethod: data.refundMethod,
-        reason: data.reason
+        reason: data.reason,
+        cashierName: googleUser?.name || 'Cajero'
       };
 
       // 1. Optimistically update local states:
@@ -2216,7 +2221,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 2. Persist in Firestore atomically
       const businessId = auth.currentUser?.uid || googleUser?.uid;
       if (businessId) {
-        await saveCreditNoteAtomic(businessId, newCreditNote, updatedOriginalSale, stockRestorations);
+        await saveCreditNoteAtomic(businessId, newCreditNote, stockRestorations, updatedOriginalSale);
         console.info(`[PosVenecia Firestore] Nota de Crédito ${newCreditNote.creditNoteNumber} guardada atómicamente.`);
       }
 
@@ -2267,10 +2272,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         dischargeNumber,
         productId: product.id,
         productName: product.name,
+        productCode: product.code,
+        category: product.category,
         quantity: qty,
         unitCostUSD,
-        totalCostUSD,
-        totalCostBs,
+        totalLossUSD: totalCostUSD,
+        totalLossBs: totalCostBs,
+        bcvRate,
         reason: data.reason,
         notes: data.notes,
         responsibleName: data.responsibleName || googleUser?.name || 'Encargado',
@@ -2284,14 +2292,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const lossExpense: GastoOperativo = {
         id: 'gasto-merma-' + Date.now(),
+        concept: `[Salida ${discharge.dischargeNumber}] ${data.reason}: ${qty}x ${product.name} ${data.notes ? `(${data.notes})` : ''}`.trim(),
         category,
-        description: `[Salida ${discharge.dischargeNumber}] ${data.reason}: ${qty}x ${product.name} ${data.notes ? `(${data.notes})` : ''}`.trim(),
+        type: 'eventual',
+        month: new Date().toLocaleDateString('es-VE', { month: 'long', year: 'numeric' }),
+        date: new Date().toISOString(),
+        dueDate: new Date().toISOString().split('T')[0],
         amountUSD: totalCostUSD,
         bcvRate,
         amountBs: totalCostBs,
-        dueDate: new Date().toISOString().split('T')[0],
         status: 'pagado',
-        paidDate: new Date().toISOString(),
+        paymentDate: new Date().toISOString(),
         paymentMethod: 'efectivo_usd',
         reference: discharge.dischargeNumber,
         notes: `Generado automáticamente por desincorporación de stock (${data.reason})`

@@ -777,12 +777,12 @@ export const ContabilidadView: React.FC = () => {
             );
 
             const totalUnits = filteredDischarges.reduce((acc, d) => acc + d.quantity, 0);
-            const totalLossUSD = filteredDischarges.reduce((acc, d) => acc + d.totalCostUSD, 0);
-            const totalLossBs = filteredDischarges.reduce((acc, d) => acc + d.totalCostBs, 0);
+            const totalLossUSD = filteredDischarges.reduce((acc, d) => acc + d.totalLossUSD, 0);
+            const totalLossBs = filteredDischarges.reduce((acc, d) => acc + d.totalLossBs, 0);
 
-            const danoUSD = filteredDischarges.filter(d => d.reason === 'Daño / Vencimiento').reduce((acc, d) => acc + d.totalCostUSD, 0);
-            const usoInternoUSD = filteredDischarges.filter(d => d.reason === 'Uso Interno').reduce((acc, d) => acc + d.totalCostUSD, 0);
-            const mermaUSD = filteredDischarges.filter(d => d.reason === 'Merma').reduce((acc, d) => acc + d.totalCostUSD, 0);
+            const danoUSD = filteredDischarges.filter(d => d.reason === 'Daño / Vencimiento').reduce((acc, d) => acc + d.totalLossUSD, 0);
+            const usoInternoUSD = filteredDischarges.filter(d => d.reason === 'Uso Interno').reduce((acc, d) => acc + d.totalLossUSD, 0);
+            const mermaUSD = filteredDischarges.filter(d => d.reason === 'Merma').reduce((acc, d) => acc + d.totalLossUSD, 0);
 
             return (
               <>
@@ -873,8 +873,8 @@ export const ContabilidadView: React.FC = () => {
                                 </span>
                               </td>
                               <td className="py-2 px-3 text-right text-slate-600">${formatUSD(disc.unitCostUSD)}</td>
-                              <td className="py-2 px-3 text-right font-bold text-rose-700">${formatUSD(disc.totalCostUSD)}</td>
-                              <td className="py-2 px-3 text-right text-slate-700">{formatBs(disc.totalCostBs)}</td>
+                              <td className="py-2 px-3 text-right font-bold text-rose-700">${formatUSD(disc.totalLossUSD)}</td>
+                              <td className="py-2 px-3 text-right text-slate-700">{formatBs(disc.totalLossBs)}</td>
                               <td className="py-2 px-3 font-sans text-slate-700">{disc.responsibleName}</td>
                               <td className="py-2 px-3 font-sans text-slate-500 text-[11px] max-w-xs truncate">{disc.notes || '-'}</td>
                             </tr>

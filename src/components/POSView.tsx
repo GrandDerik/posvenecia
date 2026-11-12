@@ -27,7 +27,8 @@ import {
   KeyRound,
   LayoutGrid,
   List,
-  ShieldCheck
+  ShieldCheck,
+  FileText
 } from 'lucide-react';
 import { Product, PaymentMethod, PaymentDetails, Sale, Client } from '../types';
 import { formatBs, formatUSD } from '../utils/exportUtils';

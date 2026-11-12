@@ -36,7 +36,13 @@ const AppContent: React.FC = () => {
     dismissOfflineNotification,
     driveSyncStatus,
     renewGoogleSession,
-    isDriveSyncing
+    isDriveSyncing,
+    isCreditNoteModalOpen,
+    setIsCreditNoteModalOpen,
+    selectedSaleForCreditNote,
+    setSelectedSaleForCreditNote,
+    lastCompletedCreditNote,
+    setLastCompletedCreditNote
   } = useApp();
 
   // Show modern LoginView if user has not logged in with Google or entered local session
@@ -98,6 +104,28 @@ const AppContent: React.FC = () => {
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
       />
+
+      {/* Nota de Crédito / Devolución Modal */}
+      <NotaCreditoModal
+        isOpen={isCreditNoteModalOpen}
+        onClose={() => {
+          setIsCreditNoteModalOpen(false);
+          setSelectedSaleForCreditNote(null);
+        }}
+        initialSale={selectedSaleForCreditNote}
+      />
+
+      {/* Comprobante de Nota de Crédito Modal (después de emitir) */}
+      {lastCompletedCreditNote && (
+        <ComprobanteNotaCreditoModal
+          creditNote={lastCompletedCreditNote}
+          onClose={() => setLastCompletedCreditNote(null)}
+          businessInfo={businessInfo}
+        />
+      )}
+
+      {/* Desincorporación de Inventario Modal */}
+      <DesincorporarStockModal />
 
       {/* Footer */}
       <footer className="border-t py-4 px-4 sm:px-8 text-xs bg-white border-slate-200 text-slate-500">
