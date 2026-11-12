@@ -200,6 +200,49 @@
         "lastUpdatedBy": { "type": "string", "maxLength": 128 }
       },
       "required": ["updatedAt"]
+    },
+    "CreditNote": {
+      "title": "CreditNote",
+      "description": "Credit Note and sales return record compliant with SENIAT",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "creditNoteNumber": { "type": "string", "maxLength": 100 },
+        "controlNumber": { "type": "string", "maxLength": 100 },
+        "saleId": { "type": "string", "maxLength": 128 },
+        "originalInvoiceNumber": { "type": "string", "maxLength": 100 },
+        "date": { "type": "string", "maxLength": 100 },
+        "clientName": { "type": "string", "maxLength": 200 },
+        "clientRIF": { "type": "string", "maxLength": 50 },
+        "subtotalUSD": { "type": "number" },
+        "totalUSD": { "type": "number" },
+        "totalBs": { "type": "number" },
+        "bcvRate": { "type": "number" },
+        "reason": { "type": "string", "maxLength": 500 },
+        "refundMethod": { "type": "string", "maxLength": 50 },
+        "cashierName": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "creditNoteNumber", "saleId", "totalUSD", "reason", "refundMethod"]
+    },
+    "InventoryDischarge": {
+      "title": "InventoryDischarge",
+      "description": "Inventory discharge record for damaged, expired, or shrinkage stock",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "dischargeNumber": { "type": "string", "maxLength": 100 },
+        "date": { "type": "string", "maxLength": 100 },
+        "productId": { "type": "string", "maxLength": 128 },
+        "productName": { "type": "string", "maxLength": 200 },
+        "quantity": { "type": "number" },
+        "unitCostUSD": { "type": "number" },
+        "totalLossUSD": { "type": "number" },
+        "totalLossBs": { "type": "number" },
+        "reason": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "responsibleName": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "dischargeNumber", "productId", "quantity", "reason", "totalLossUSD"]
     }
   },
   "firestore": {
@@ -238,6 +281,14 @@
     "/businesses/{businessId}/metadata/{docId}": {
       "schema": { "$ref": "StoreMetadata" },
       "description": "Business profile, BCV exchange rates, and active shift state"
+    },
+    "/businesses/{businessId}/creditNotes/{noteId}": {
+      "schema": { "$ref": "CreditNote" },
+      "description": "Sales returns and credit notes records"
+    },
+    "/businesses/{businessId}/inventoryDischarges/{dischargeId}": {
+      "schema": { "$ref": "InventoryDischarge" },
+      "description": "Damaged, expired, and shrinkage inventory discharges"
     }
   }
 }
