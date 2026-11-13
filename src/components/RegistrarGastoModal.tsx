@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   X, 
@@ -19,19 +19,21 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { formatBs, formatUSD } from '../utils/exportUtils';
-import { ExpenseItem, PurchaseCostStrategy } from '../types';
+import { Expense, ExpenseItem, PurchaseCostStrategy } from '../types';
 
 interface RegistrarGastoModalProps {
   isOpen: boolean;
   onClose: () => void;
+  editingExpense?: Expense | null;
 }
 
-export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen, onClose }) => {
-  const { addExpense, products, bcvRate, isCashRegisterOpen, setIsAperturaModalOpen } = useApp();
+export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen, onClose, editingExpense }) => {
+  const { addExpense, updateExpense, products, bcvRate, isCashRegisterOpen, setIsAperturaModalOpen } = useApp();
 
   // Invoice & Supplier details
   const [supplierName, setSupplierName] = useState('');
   const [supplierRIF, setSupplierRIF] = useState('J-');
+  const [supplierPhone, setSupplierPhone] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [controlNumber, setControlNumber] = useState('');
   const [description, setDescription] = useState('');
@@ -182,6 +184,40 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const retencionIVABs = applyRetencionIVA ? (ivaBs * 0.75) : 0; // 75% retention standard SENIAT
   const retencionISLRBs = baseImponibleBs * 0.02; // 2% ISLR retention
 
+  useEffect(() => {
+    if (isOpen && editingExpense) {
+      setSupplierName(editingExpense.supplierName || '');
+      setSupplierRIF(editingExpense.supplierRIF || 'J-');
+      setSupplierPhone(editingExpense.supplierPhone || '');
+      setInvoiceNumber(editingExpense.invoiceNumber || '');
+      setControlNumber(editingExpense.controlNumber || '');
+      setDescription(editingExpense.description || '');
+      setCategory(editingExpense.category || 'Mercancía');
+      setCurrency('USD');
+      setAmountInput(editingExpense.amountUSD ? editingExpense.amountUSD.toFixed(2) : '');
+      setHasIVA((editingExpense.ivaBs || 0) > 0);
+      setApplyRetencionIVA((editingExpense.retencionIVABs || 0) > 0);
+      setPaymentMethod(editingExpense.paymentMethod || 'pago_movil');
+      setReference(editingExpense.reference || '');
+      setPurchasedItems(editingExpense.items || []);
+    } else if (isOpen && !editingExpense) {
+      setSupplierName('');
+      setSupplierRIF('J-');
+      setSupplierPhone('');
+      setInvoiceNumber('');
+      setControlNumber('');
+      setDescription('');
+      setCategory('Mercancía');
+      setCurrency('USD');
+      setAmountInput('');
+      setHasIVA(true);
+      setApplyRetencionIVA(true);
+      setPaymentMethod('pago_movil');
+      setReference('');
+      setPurchasedItems([]);
+    }
+  }, [isOpen, editingExpense]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!supplierName.trim() || rawAmount <= 0) return;
@@ -191,26 +227,49 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       ? (purchasedItems.some(i => i.strategy === 'fifo') ? 'fifo' : 'average_cost') 
       : undefined;
 
-    addExpense({
-      date: new Date().toISOString(),
-      invoiceNumber: invoiceNumber.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`,
-      controlNumber: controlNumber.trim() || `00-${Math.floor(1000 + Math.random() * 9000)}`,
-      supplierName: supplierName.trim(),
-      supplierRIF: supplierRIF.trim(),
-      description: description.trim() || (purchasedItems.length > 0 ? `Compra de ${purchasedItems.length} artículo(s) con entrada a inventario` : `Gasto en ${category}`),
-      category,
-      amountUSD,
-      amountBs,
-      baseImponibleBs,
-      ivaBs,
-      retencionIVABs,
-      retencionISLRBs,
-      bcvRate,
-      paymentMethod,
-      reference,
-      items: purchasedItems.length > 0 ? purchasedItems : undefined,
-      costStrategy: defaultStrategy
-    });
+    if (editingExpense) {
+      updateExpense({
+        ...editingExpense,
+        invoiceNumber: invoiceNumber.trim() || editingExpense.invoiceNumber,
+        controlNumber: controlNumber.trim() || editingExpense.controlNumber,
+        supplierName: supplierName.trim(),
+        supplierRIF: supplierRIF.trim(),
+        supplierPhone: supplierPhone.trim() || undefined,
+        description: description.trim() || editingExpense.description,
+        category,
+        amountUSD,
+        amountBs,
+        baseImponibleBs,
+        ivaBs,
+        retencionIVABs,
+        retencionISLRBs,
+        bcvRate: editingExpense.bcvRate || bcvRate,
+        paymentMethod,
+        reference
+      });
+    } else {
+      addExpense({
+        date: new Date().toISOString(),
+        invoiceNumber: invoiceNumber.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`,
+        controlNumber: controlNumber.trim() || `00-${Math.floor(1000 + Math.random() * 9000)}`,
+        supplierName: supplierName.trim(),
+        supplierRIF: supplierRIF.trim(),
+        supplierPhone: supplierPhone.trim() || undefined,
+        description: description.trim() || (purchasedItems.length > 0 ? `Compra de ${purchasedItems.length} artículo(s) con entrada a inventario` : `Gasto en ${category}`),
+        category,
+        amountUSD,
+        amountBs,
+        baseImponibleBs,
+        ivaBs,
+        retencionIVABs,
+        retencionISLRBs,
+        bcvRate,
+        paymentMethod,
+        reference,
+        items: purchasedItems.length > 0 ? purchasedItems : undefined,
+        costStrategy: defaultStrategy
+      });
+    }
 
     onClose();
   };
@@ -226,7 +285,9 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
               <FileSpreadsheet className="w-5 h-5" />
             </span>
             <div>
-              <h3 className="font-bold text-base">Registrar Compra / Factura Proveedor</h3>
+              <h3 className="font-bold text-base">
+                {editingExpense ? `Editar Compra / Factura ${editingExpense.invoiceNumber}` : 'Registrar Compra / Factura Proveedor'}
+              </h3>
               <p className="text-xs text-teal-200">Impacta el Libro de Compras, Inventario en Firestore y Cuadre de Caja</p>
             </div>
           </div>
@@ -262,7 +323,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
               Datos del Proveedor y Factura
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                   Proveedor / Empresa <span className="text-rose-500">*</span>
@@ -278,7 +339,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  RIF Proveedor (J-, G-, V-) <span className="text-rose-500">*</span>
+                  RIF / Cédula <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -286,6 +347,18 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                   placeholder="J-30192847-1"
                   value={supplierRIF}
                   onChange={(e) => setSupplierRIF(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono focus:ring-1 focus:ring-teal-600 focus:outline-hidden"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  Teléfono de Contacto
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ej: 0414-1234567"
+                  value={supplierPhone}
+                  onChange={(e) => setSupplierPhone(e.target.value)}
                   className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono focus:ring-1 focus:ring-teal-600 focus:outline-hidden"
                 />
               </div>
@@ -768,14 +841,18 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
             >
               Cancelar
             </button>
-            {isCashRegisterOpen ? (
+            {isCashRegisterOpen || editingExpense ? (
               <button
                 type="submit"
                 disabled={!supplierName.trim() || rawAmount <= 0}
                 className="flex items-center gap-1.5 px-5 py-2.5 bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer transition-colors"
               >
                 <Check className="w-4 h-4" />
-                <span>Guardar Factura {purchasedItems.length > 0 ? `e Ingresar ${purchasedItems.length} Artículos` : 'en Compras'}</span>
+                <span>
+                  {editingExpense
+                    ? 'Guardar Cambios de Factura'
+                    : `Guardar Factura ${purchasedItems.length > 0 ? `e Ingresar ${purchasedItems.length} Artículos` : 'en Compras'}`}
+                </span>
               </button>
             ) : (
               <button

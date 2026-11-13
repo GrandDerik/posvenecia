@@ -5,7 +5,7 @@ import {
   onAuthStateChanged, 
   User 
 } from 'firebase/auth';
-import { firebaseConfig, isFirebaseConfigured, auth } from '../config/firebaseConfig';
+import { isFirebaseConfigured, auth } from '../config/firebaseConfig';
 import { 
   Product, 
   Sale, 
@@ -42,25 +42,32 @@ export const persistAccessTokenForUser = (uid: string, token: string | null) => 
   tokenAcquiredTimestamp = token ? Date.now() : 0;
   try {
     if (token) {
-      localStorage.setItem(`${TOKEN_KEY_PREFIX}${uid}`, token);
-      localStorage.setItem(`${TOKEN_TIME_PREFIX}${uid}`, tokenAcquiredTimestamp.toString());
-      localStorage.setItem('posvenecia_active_google_token', token);
-      localStorage.setItem('posvenecia_active_google_token_time', tokenAcquiredTimestamp.toString());
+      sessionStorage.setItem(`${TOKEN_KEY_PREFIX}${uid}`, token);
+      sessionStorage.setItem(`${TOKEN_TIME_PREFIX}${uid}`, tokenAcquiredTimestamp.toString());
+      sessionStorage.setItem('posvenecia_active_google_token', token);
+      sessionStorage.setItem('posvenecia_active_google_token_time', tokenAcquiredTimestamp.toString());
     } else {
-      localStorage.removeItem(`${TOKEN_KEY_PREFIX}${uid}`);
-      localStorage.removeItem(`${TOKEN_TIME_PREFIX}${uid}`);
-      localStorage.removeItem('posvenecia_active_google_token');
-      localStorage.removeItem('posvenecia_active_google_token_time');
+      sessionStorage.removeItem(`${TOKEN_KEY_PREFIX}${uid}`);
+      sessionStorage.removeItem(`${TOKEN_TIME_PREFIX}${uid}`);
+      sessionStorage.removeItem('posvenecia_active_google_token');
+      sessionStorage.removeItem('posvenecia_active_google_token_time');
     }
+    // Always purge any legacy localStorage token entries to minimize XSS persistence
+    localStorage.removeItem(`${TOKEN_KEY_PREFIX}${uid}`);
+    localStorage.removeItem(`${TOKEN_TIME_PREFIX}${uid}`);
+    localStorage.removeItem('posvenecia_active_google_token');
+    localStorage.removeItem('posvenecia_active_google_token_time');
   } catch (e) {
-    console.warn('Could not persist OAuth token to localStorage:', e);
+    if (import.meta.env.DEV) {
+      console.warn('Could not persist OAuth token to sessionStorage:', e);
+    }
   }
 };
 
 export const getPersistedAccessTokenForUser = (uid: string): { token: string | null; isExpired: boolean } => {
   try {
-    const token = localStorage.getItem(`${TOKEN_KEY_PREFIX}${uid}`) || localStorage.getItem('posvenecia_active_google_token');
-    const timeStr = localStorage.getItem(`${TOKEN_TIME_PREFIX}${uid}`) || localStorage.getItem('posvenecia_active_google_token_time');
+    const token = sessionStorage.getItem(`${TOKEN_KEY_PREFIX}${uid}`) || sessionStorage.getItem('posvenecia_active_google_token');
+    const timeStr = sessionStorage.getItem(`${TOKEN_TIME_PREFIX}${uid}`) || sessionStorage.getItem('posvenecia_active_google_token_time');
     const time = Number(timeStr || 0);
 
     if (!token || !time) {
@@ -69,7 +76,7 @@ export const getPersistedAccessTokenForUser = (uid: string): { token: string | n
 
     const isExpired = Date.now() - time >= TOKEN_TTL_MS;
     return { token: isExpired ? null : token, isExpired };
-  } catch (e) {
+  } catch {
     return { token: null, isExpired: true };
   }
 };
@@ -169,7 +176,7 @@ export const initAuth = (
       const { token, isExpired } = getPersistedAccessTokenForUser(user.uid);
       if (token && !isExpired) {
         cachedAccessToken = token;
-        const timeStr = localStorage.getItem(`${TOKEN_TIME_PREFIX}${user.uid}`) || localStorage.getItem('posvenecia_active_google_token_time');
+        const timeStr = sessionStorage.getItem(`${TOKEN_TIME_PREFIX}${user.uid}`) || sessionStorage.getItem('posvenecia_active_google_token_time');
         tokenAcquiredTimestamp = Number(timeStr || Date.now());
         onUserChanged(user, token);
       } else {
@@ -195,6 +202,9 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
       'Para sincronizar con Google Drive, configura las variables VITE_FIREBASE_* en tu panel de Vercel o archivo .env. Mientras tanto, tu punto de venta funciona al 100% de forma local con IndexedDB y puedes exportar copias en JSON y Excel.'
     );
   }
+  if (isSigningIn) {
+    throw new Error('Ya hay una ventana de inicio de sesión con Google en progreso.');
+  }
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
@@ -208,7 +218,9 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
     persistAccessTokenForUser(result.user.uid, token);
     return { user: result.user, accessToken: token };
   } catch (err: any) {
-    console.error('Google Sign-In Error:', err);
+    if (import.meta.env.DEV) {
+      console.error('Google Sign-In Error:', err);
+    }
     throw err;
   } finally {
     isSigningIn = false;

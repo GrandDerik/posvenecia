@@ -12,83 +12,108 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isBusinessOwner(businessId) {
-      return isSignedIn() && request.auth.uid == businessId;
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-:.@]+$');
     }
 
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
+    function isBusinessOwner(businessId) {
+      return isSignedIn()
+        && isValidId(businessId)
+        && request.auth.uid == businessId
+        && request.auth.token.email_verified == true;
+    }
+
+    function isReasonablePayload() {
+      return request.resource.data is map
+        && request.resource.data.keys().size() > 0
+        && request.resource.data.keys().size() <= 60;
+    }
+
+    function hasMatchingIdOrOmitted(docId) {
+      return !('id' in request.resource.data) || request.resource.data.id == docId;
     }
 
     // Tenant / Business root match
     match /businesses/{businessId} {
       allow get, list: if isBusinessOwner(businessId);
-      allow create, update, delete: if isBusinessOwner(businessId);
+      allow create, update: if isBusinessOwner(businessId) && isReasonablePayload();
+      allow delete: if isBusinessOwner(businessId);
 
       // 1. Products & Inventory
       match /products/{productId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(productId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(productId) && isReasonablePayload() && hasMatchingIdOrOmitted(productId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(productId);
       }
 
       // 2. Sales Transactions
       match /sales/{saleId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(saleId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(saleId) && isReasonablePayload() && hasMatchingIdOrOmitted(saleId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(saleId);
       }
 
       // 3. Purchases & Expenses (Libro de Compras)
       match /expenses/{expenseId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(expenseId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(expenseId) && isReasonablePayload() && hasMatchingIdOrOmitted(expenseId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(expenseId);
       }
 
       // 4. Fiados (Cuentas por Cobrar)
       match /fiados/{fiadoId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(fiadoId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(fiadoId) && isReasonablePayload() && hasMatchingIdOrOmitted(fiadoId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(fiadoId);
       }
 
       // 5. Clientes
       match /clients/{clientId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(clientId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(clientId) && isReasonablePayload() && hasMatchingIdOrOmitted(clientId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(clientId);
       }
 
       // 6. Cuentas por Pagar (Proveedores)
       match /cuentasPorPagar/{cuentaId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(cuentaId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(cuentaId) && isReasonablePayload() && hasMatchingIdOrOmitted(cuentaId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(cuentaId);
       }
 
       // 7. Gastos Operativos (Fijos y Eventuales)
       match /gastosOperativos/{gastoId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(gastoId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(gastoId) && isReasonablePayload() && hasMatchingIdOrOmitted(gastoId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(gastoId);
       }
 
       // 8. Historial de Cierres de Caja
       match /cashShiftHistory/{shiftId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(shiftId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(shiftId) && isReasonablePayload() && hasMatchingIdOrOmitted(shiftId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(shiftId);
       }
 
       // 9. Store Metadata (Perfil, Tasas BCV, Turno Activo)
       match /metadata/{docId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(docId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(docId) && isReasonablePayload();
+        allow delete: if isBusinessOwner(businessId) && isValidId(docId);
       }
 
       // 10. Notas de Crédito / Devoluciones
       match /creditNotes/{noteId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(noteId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(noteId) && isReasonablePayload() && hasMatchingIdOrOmitted(noteId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(noteId);
       }
 
       // 11. Desincorporaciones de Inventario
       match /inventoryDischarges/{dischargeId} {
         allow get, list: if isBusinessOwner(businessId);
-        allow create, update, delete: if isBusinessOwner(businessId) && isValidId(dischargeId);
+        allow create, update: if isBusinessOwner(businessId) && isValidId(dischargeId) && isReasonablePayload() && hasMatchingIdOrOmitted(dischargeId);
+        allow delete: if isBusinessOwner(businessId) && isValidId(dischargeId);
       }
     }
   }

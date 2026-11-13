@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { 
@@ -52,6 +52,19 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
   const [copiedLink, setCopiedLink] = useState(false);
   const [installedSuccess, setInstalledSuccess] = useState(false);
 
+  const timersRef = useRef<number[]>([]);
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach(t => window.clearTimeout(t));
+      timersRef.current = [];
+    };
+  }, []);
+
+  const scheduleTimer = (fn: () => void, ms: number) => {
+    const id = window.setTimeout(fn, ms);
+    timersRef.current.push(id);
+  };
+
   if (!isOpen) return null;
 
   const handleLogin = async () => {
@@ -59,10 +72,10 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
       setLocalFeedback('Abriendo autenticación con Google...');
       await loginWithGoogle();
       setLocalFeedback('¡Inicio de sesión exitoso! Tus datos en Google Drive están vinculados.');
-      setTimeout(() => setLocalFeedback(null), 4500);
+      scheduleTimer(() => setLocalFeedback(null), 4500);
     } catch (err: any) {
       setLocalFeedback(`Error de inicio de sesión: ${err?.message || 'No se pudo conectar con Google'}`);
-      setTimeout(() => setLocalFeedback(null), 5000);
+      scheduleTimer(() => setLocalFeedback(null), 5000);
     }
   };
 
@@ -85,17 +98,17 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
       } else {
         setLocalFeedback('No se pudo guardar en Google Drive. Verifica tu conexión.');
       }
-      setTimeout(() => setLocalFeedback(null), 4500);
+      scheduleTimer(() => setLocalFeedback(null), 4500);
     } catch (err: any) {
       setLocalFeedback(`Error al sincronizar: ${err?.message || 'Error en Google Drive'}`);
-      setTimeout(() => setLocalFeedback(null), 4500);
+      scheduleTimer(() => setLocalFeedback(null), 4500);
     }
   };
 
   const handleManualReload = async () => {
     if (!googleUser?.isConnected) {
       setLocalFeedback('Debes iniciar sesión con tu cuenta Google primero.');
-      setTimeout(() => setLocalFeedback(null), 4000);
+      scheduleTimer(() => setLocalFeedback(null), 4000);
       return;
     }
     try {
@@ -106,17 +119,17 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
       } else {
         setLocalFeedback('Tu equipo ya tiene la versión más reciente o no hay datos previos.');
       }
-      setTimeout(() => setLocalFeedback(null), 4500);
+      scheduleTimer(() => setLocalFeedback(null), 4500);
     } catch (err: any) {
       setLocalFeedback(`Error al recargar: ${err?.message || 'Error en Google Drive'}`);
-      setTimeout(() => setLocalFeedback(null), 4500);
+      scheduleTimer(() => setLocalFeedback(null), 4500);
     }
   };
 
   const handleMultiDeviceSync = async () => {
     if (!googleUser?.isConnected) {
       setLocalFeedback('Inicia sesión con Google para sincronizar entre dispositivos.');
-      setTimeout(() => setLocalFeedback(null), 4000);
+      scheduleTimer(() => setLocalFeedback(null), 4000);
       return;
     }
     try {
@@ -124,10 +137,10 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
       await checkRemoteChangesForMultiDevice();
       await syncToGoogleDrive();
       setLocalFeedback('¡Sincronizado! Tu dispositivo tiene la información más reciente de todos los equipos.');
-      setTimeout(() => setLocalFeedback(null), 4500);
+      scheduleTimer(() => setLocalFeedback(null), 4500);
     } catch (e: any) {
       setLocalFeedback(`Error de sincronización: ${e?.message || 'Error en Google Drive'}`);
-      setTimeout(() => setLocalFeedback(null), 4500);
+      scheduleTimer(() => setLocalFeedback(null), 4500);
     }
   };
 
@@ -136,7 +149,7 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
       const outcome = await install();
       if (outcome) {
         setInstalledSuccess(true);
-        setTimeout(() => setInstalledSuccess(false), 4000);
+        scheduleTimer(() => setInstalledSuccess(false), 4000);
       }
     }
   };
@@ -144,7 +157,7 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
   const handleCopyAppUrl = () => {
     navigator.clipboard.writeText(window.location.origin);
     setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2500);
+    scheduleTimer(() => setCopiedLink(false), 2500);
   };
 
   return (
@@ -251,7 +264,7 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
                       } else {
                         setLocalFeedback('No se pudo renovar. Por favor intenta de nuevo.');
                       }
-                      setTimeout(() => setLocalFeedback(null), 4000);
+                      scheduleTimer(() => setLocalFeedback(null), 4000);
                     }}
                     className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs cursor-pointer transition-colors"
                   >

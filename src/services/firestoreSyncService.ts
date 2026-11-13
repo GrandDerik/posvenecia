@@ -72,9 +72,15 @@ export const trackFirestoreWrite = <T>(promise: Promise<T>): Promise<T> => {
   return promise;
 };
 
+const devLog = (...args: unknown[]) => {
+  if (import.meta.env.DEV) {
+    console.info(...args);
+  }
+};
+
 export const waitForAllPendingWrites = async (): Promise<void> => {
   if (activeFirestoreWrites.size > 0) {
-    console.info(`[PosVenecia] Esperando confirmación de ${activeFirestoreWrites.size} operaciones en Firestore...`);
+    devLog(`[PosVenecia] Esperando confirmación de ${activeFirestoreWrites.size} operaciones en Firestore...`);
     await Promise.allSettled(Array.from(activeFirestoreWrites));
   }
 };
@@ -133,7 +139,7 @@ export const subscribeToStoreRealtime = (
     }
   };
 
-  console.info(`[PosVenecia Firestore] Iniciando suscripción en tiempo real para businessId: ${businessId}`);
+  devLog(`[PosVenecia Firestore] Iniciando suscripción en tiempo real para businessId: ${businessId}`);
 
   // 1. Products
   const productsPath = `businesses/${businessId}/products`;
@@ -145,7 +151,7 @@ export const subscribeToStoreRealtime = (
         snapshot.forEach((d) => {
           products.push(d.data() as Product);
         });
-        console.info(`[PosVenecia Firestore] onSnapshot: ${products.length} productos recibidos (fromCache: ${snapshot.metadata.fromCache})`);
+        devLog(`[PosVenecia Firestore] onSnapshot: ${products.length} productos recibidos (fromCache: ${snapshot.metadata.fromCache})`);
         callbacks.onProducts(products);
       },
       (err) => handleErr(OperationType.GET, productsPath, err)
@@ -289,7 +295,7 @@ export const subscribeToStoreRealtime = (
       (docSnap) => {
         if (docSnap.exists() && callbacks.onCashRegisterStatus) {
           const status = docSnap.data() as CashRegisterStatusDoc;
-          console.info(`[PosVenecia Firestore] onSnapshot cashRegisterStatus: caja ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
+          devLog(`[PosVenecia Firestore] onSnapshot cashRegisterStatus: caja ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
           callbacks.onCashRegisterStatus(status);
         }
       },
@@ -362,7 +368,7 @@ export const saveCashRegisterStatusToFirestore = async (
         cleanForFirestore({ activeCashShift: cleaned.activeShift, updatedAt: new Date().toISOString() }),
         { merge: true }
       );
-      console.info(`[PosVenecia Firestore] Estado de caja ${status.isOpen ? 'ABIERTA' : 'CERRADA'} guardado exitosamente en Firestore.`);
+      devLog(`[PosVenecia Firestore] Estado de caja ${status.isOpen ? 'ABIERTA' : 'CERRADA'} guardado exitosamente en Firestore.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -414,7 +420,7 @@ export const saveSaleAtomic = async (
       }
 
       await batch.commit();
-      console.info(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} guardada en Firestore.`);
+      devLog(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} guardada en Firestore.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -467,7 +473,7 @@ export const cancelSaleAtomic = async (
       }
 
       await batch.commit();
-      console.info(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} anulada en Firestore.`);
+      devLog(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} anulada en Firestore.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -521,7 +527,7 @@ export const saveCreditNoteAtomic = async (
       }
 
       await batch.commit();
-      console.info(`[PosVenecia Firestore] Nota de Crédito ${creditNote.creditNoteNumber} guardada y stock reincorporado en Firestore.`);
+      devLog(`[PosVenecia Firestore] Nota de Crédito ${creditNote.creditNoteNumber} guardada y stock reincorporado en Firestore.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -573,7 +579,7 @@ export const saveInventoryDischargeAtomic = async (
       }
 
       await batch.commit();
-      console.info(`[PosVenecia Firestore] Desincorporación ${discharge.dischargeNumber} (${discharge.reason}) guardada atómicamente en Firestore.`);
+      devLog(`[PosVenecia Firestore] Desincorporación ${discharge.dischargeNumber} (${discharge.reason}) guardada atómicamente en Firestore.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -589,7 +595,7 @@ export const deleteCreditNoteFromFirestore = async (businessId: string, id: stri
   const op = (async () => {
     try {
       await deleteDoc(doc(db, 'businesses', businessId, 'creditNotes', id));
-      console.info(`[PosVenecia Firestore] Nota de crédito eliminada: ${id}`);
+      devLog(`[PosVenecia Firestore] Nota de crédito eliminada: ${id}`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -605,7 +611,7 @@ export const deleteInventoryDischargeFromFirestore = async (businessId: string, 
   const op = (async () => {
     try {
       await deleteDoc(doc(db, 'businesses', businessId, 'inventoryDischarges', id));
-      console.info(`[PosVenecia Firestore] Desincorporación eliminada: ${id}`);
+      devLog(`[PosVenecia Firestore] Desincorporación eliminada: ${id}`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -622,7 +628,7 @@ export const saveProductToFirestore = async (businessId: string, product: Produc
     try {
       const cleaned = cleanForFirestore(product);
       await setDoc(doc(db, 'businesses', businessId, 'products', product.id), cleaned, { merge: true });
-      console.info(`[PosVenecia Firestore] Producto guardado: ${product.name} (${product.id})`);
+      devLog(`[PosVenecia Firestore] Producto guardado: ${product.name} (${product.id})`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -638,7 +644,7 @@ export const deleteProductFromFirestore = async (businessId: string, productId: 
   const op = (async () => {
     try {
       await deleteDoc(doc(db, 'businesses', businessId, 'products', productId));
-      console.info(`[PosVenecia Firestore] Producto eliminado: ${productId}`);
+      devLog(`[PosVenecia Firestore] Producto eliminado: ${productId}`);
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -655,7 +661,7 @@ export const adjustProductStockInFirestore = async (businessId: string, productI
     try {
       const prodRef = doc(db, 'businesses', businessId, 'products', productId);
       await setDoc(prodRef, { stock: newStock }, { merge: true });
-      console.info(`[PosVenecia Firestore] Stock ajustado a ${newStock} para producto ${productId}`);
+      devLog(`[PosVenecia Firestore] Stock ajustado a ${newStock} para producto ${productId}`);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
     }
@@ -705,7 +711,7 @@ export const saveExpenseWithInventoryAtomic = async (
       }
 
       await batch.commit();
-      console.info(`[PosVenecia Firestore] Factura ${expense.invoiceNumber} y ${updatedProducts.length} productos actualizados atómicamente.`);
+      devLog(`[PosVenecia Firestore] Factura ${expense.invoiceNumber} y ${updatedProducts.length} productos actualizados atómicamente.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -792,6 +798,35 @@ export const saveCuentaPorPagarToFirestore = async (businessId: string, cuenta: 
 };
 
 /**
+ * Atomic write for saving a CuentaPorPagar abono AND its cash outflow Expense in Firestore
+ */
+export const saveCuentaWithCashOutflowAtomic = async (
+  businessId: string,
+  cuenta: CuentaPorPagar,
+  cashExpense: Expense
+): Promise<void> => {
+  const path = `businesses/${businessId}/cuentasPorPagar/${cuenta.id}`;
+  const op = (async () => {
+    try {
+      const batch = writeBatch(db);
+      const cleanedCuenta = cleanForFirestore(cuenta);
+      const cuentaRef = doc(db, 'businesses', businessId, 'cuentasPorPagar', cuenta.id);
+      batch.set(cuentaRef, cleanedCuenta, { merge: true });
+
+      const cleanedExp = cleanForFirestore(cashExpense);
+      const expRef = doc(db, 'businesses', businessId, 'expenses', cashExpense.id);
+      batch.set(expRef, cleanedExp, { merge: true });
+
+      await batch.commit();
+      devLog(`[PosVenecia Firestore] Abono CuentaPorPagar ${cuenta.invoiceNumber} y egreso de caja guardados atómicamente.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
  * Delete Cuenta Por Pagar from Firestore
  */
 export const deleteCuentaPorPagarFromFirestore = async (businessId: string, cuentaId: string): Promise<void> => {
@@ -823,6 +858,37 @@ export const saveGastoOperativoToFirestore = async (businessId: string, gasto: G
 };
 
 /**
+ * Atomic write for saving a GastoOperativo (or partial abono) AND its cash outflow Expense in Firestore
+ */
+export const saveGastoWithCashOutflowAtomic = async (
+  businessId: string,
+  gasto: GastoOperativo,
+  cashExpense?: Expense
+): Promise<void> => {
+  const path = `businesses/${businessId}/gastosOperativos/${gasto.id}`;
+  const op = (async () => {
+    try {
+      const batch = writeBatch(db);
+      const cleanedGasto = cleanForFirestore(gasto);
+      const gastoRef = doc(db, 'businesses', businessId, 'gastosOperativos', gasto.id);
+      batch.set(gastoRef, cleanedGasto, { merge: true });
+
+      if (cashExpense) {
+        const cleanedExp = cleanForFirestore(cashExpense);
+        const expRef = doc(db, 'businesses', businessId, 'expenses', cashExpense.id);
+        batch.set(expRef, cleanedExp, { merge: true });
+      }
+
+      await batch.commit();
+      devLog(`[PosVenecia Firestore] GastoOperativo ${gasto.id} y flujo de caja guardados atómicamente.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
  * Delete Gasto Operativo from Firestore
  */
 export const deleteGastoOperativoFromFirestore = async (businessId: string, gastoId: string): Promise<void> => {
@@ -830,6 +896,21 @@ export const deleteGastoOperativoFromFirestore = async (businessId: string, gast
   const op = (async () => {
     try {
       await deleteDoc(doc(db, 'businesses', businessId, 'gastosOperativos', gastoId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Delete Sale from Firestore
+ */
+export const deleteSaleFromFirestore = async (businessId: string, saleId: string): Promise<void> => {
+  const path = `businesses/${businessId}/sales/${saleId}`;
+  const op = (async () => {
+    try {
+      await deleteDoc(doc(db, 'businesses', businessId, 'sales', saleId));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -885,7 +966,7 @@ export const flushPendingQueueToFirestore = async (
   const pendingItems = await getPendingSyncQueue();
   if (pendingItems.length === 0) return { flushedCount: 0 };
 
-  console.info(`[PosVenecia Sync] Vaciando ${pendingItems.length} transacciones pendientes hacia Cloud Firestore...`);
+  devLog(`[PosVenecia Sync] Vaciando ${pendingItems.length} transacciones pendientes hacia Cloud Firestore...`);
   const syncedIds: string[] = [];
 
   for (const item of pendingItems) {
@@ -896,7 +977,7 @@ export const flushPendingQueueToFirestore = async (
         const saleRef = doc(db, 'businesses', businessId, 'sales', sale.id);
         const existingSnap = await getDoc(saleRef);
         if (existingSnap.exists()) {
-          console.info(`[PosVenecia Sync] Venta ${sale.invoiceNumber} ya existía en Firestore. Omitiendo duplicación de inventario.`);
+          devLog(`[PosVenecia Sync] Venta ${sale.invoiceNumber} ya existía en Firestore. Omitiendo duplicación de inventario.`);
           syncedIds.push(item.id);
           continue;
         }
@@ -931,7 +1012,7 @@ export const flushPendingQueueToFirestore = async (
 
   if (syncedIds.length > 0) {
     await batchClearSyncQueue(syncedIds);
-    console.info(`[PosVenecia Sync] ${syncedIds.length} transacciones confirmadas en Firestore.`);
+    devLog(`[PosVenecia Sync] ${syncedIds.length} transacciones confirmadas en Firestore.`);
   }
 
   return { flushedCount: syncedIds.length };
@@ -969,7 +1050,7 @@ export const checkAndMigrateLocalDataToFirestore = async (
       return false;
     }
 
-    console.info('[PosVenecia Firestore] Migrando catálogo local a Firestore en la nube...');
+    devLog('[PosVenecia Firestore] Migrando catálogo local a Firestore en la nube...');
 
     // Batch upload products in chunks of 400
     const chunkSize = 400;
@@ -1020,7 +1101,7 @@ export const checkAndMigrateLocalDataToFirestore = async (
       });
     }
 
-    console.info('[PosVenecia Firestore] Migración a Firestore completada con éxito.');
+    devLog('[PosVenecia Firestore] Migración a Firestore completada con éxito.');
     return true;
   } catch (err) {
     console.error('Error during Firestore migration:', err);

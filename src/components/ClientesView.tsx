@@ -132,7 +132,7 @@ export const ClientesView: React.FC = () => {
       finalPhone = '58' + finalPhone.substring(1);
     }
     const url = `https://wa.me/${finalPhone}?text=${encodeURIComponent(`Hola estimado(a) ${client.name}, le saludamos de PosVenecia.`)}`;
-    window.open(url, '_blank');
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   // Compute pending fiados for a client

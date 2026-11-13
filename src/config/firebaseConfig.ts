@@ -14,17 +14,17 @@ export interface FirebaseClientConfig {
   oAuthClientId?: string;
 }
 
-// Read configuration exclusively from Vite environment variables (import.meta.env) with active project defaults
+// Read configuration exclusively from Vite environment variables (import.meta.env)
 export const firebaseConfig: FirebaseClientConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyDKMG2tIxJNlEWH9zfZODyLFvw3ckkSZSw',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'gen-lang-client-0878270695.firebaseapp.com',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'gen-lang-client-0878270695',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'gen-lang-client-0878270695.firebasestorage.app',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '304580032049',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:304580032049:web:ffebf0cb8a0ce41cbbc710',
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || 'ai-studio-puntodeventavene-02f013f6-59ff-468a-bab5-b3cb84f54e52',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || '',
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || '',
-  oAuthClientId: import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || '304580032049-he01jhueqb8b2g7du98aks9co0f62hft.apps.googleusercontent.com'
+  oAuthClientId: import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || ''
 };
 
 export const isFirebaseConfigured = Boolean(
@@ -32,6 +32,7 @@ export const isFirebaseConfigured = Boolean(
   firebaseConfig.projectId &&
   firebaseConfig.apiKey !== 'AIzaSy...' &&
   !firebaseConfig.apiKey.includes('...') &&
+  !firebaseConfig.apiKey.includes('Placeholder') &&
   firebaseConfig.projectId !== 'tu-proyecto' &&
   firebaseConfig.projectId !== 'posvenecia-local'
 );
@@ -40,12 +41,12 @@ export const isFirebaseConfigured = Boolean(
 const safeConfig = isFirebaseConfigured
   ? firebaseConfig
   : {
-      apiKey: firebaseConfig.apiKey || 'AIzaSyPlaceholderKeyForLocalModeOnly123456',
-      authDomain: firebaseConfig.authDomain || 'posvenecia-local.firebaseapp.com',
-      projectId: firebaseConfig.projectId || 'posvenecia-local',
-      storageBucket: firebaseConfig.storageBucket || 'posvenecia-local.firebasestorage.app',
-      messagingSenderId: firebaseConfig.messagingSenderId || '123456789012',
-      appId: firebaseConfig.appId || '1:123456789012:web:placeholder'
+      apiKey: 'AIzaSyPlaceholderKeyForLocalModeOnly000000',
+      authDomain: 'posvenecia-local.firebaseapp.com',
+      projectId: 'posvenecia-local',
+      storageBucket: 'posvenecia-local.firebasestorage.app',
+      messagingSenderId: '000000000000',
+      appId: '1:000000000000:web:placeholder'
     };
 
 // Initialize Firebase App instance
@@ -87,33 +88,43 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
+      email: import.meta.env.DEV ? auth.currentUser?.email : undefined,
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
+      providerInfo: import.meta.env.DEV
+        ? auth.currentUser?.providerData?.map(provider => ({
+            providerId: provider.providerId,
+            email: provider.email,
+          })) || []
+        : []
     },
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  if (import.meta.env.DEV) {
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+  } else {
+    console.error(`[PosVenecia Firestore] Error (${operationType}): ${errMessage}`);
+  }
   throw new Error(JSON.stringify(errInfo));
 }
 
 // Test connection on boot
 export async function testConnection() {
+  if (!isFirebaseConfigured) return;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+      if (import.meta.env.DEV) {
+        console.error('Please check your Firebase configuration.');
+      }
     }
   }
 }

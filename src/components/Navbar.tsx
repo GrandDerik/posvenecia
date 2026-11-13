@@ -37,6 +37,7 @@ export const Navbar: React.FC = () => {
     baseCurrency,
     clients,
     cuentasPorPagar,
+    gastosOperativos,
     activeTab, 
     setActiveTab, 
     cart, 
@@ -66,7 +67,9 @@ export const Navbar: React.FC = () => {
   const [displayedCurrencyRate, setDisplayedCurrencyRate] = useState<'USD' | 'EUR'>('USD');
 
   const activeFiadosCount = fiados.filter(f => f.status !== 'saldado').length;
-  const activeCuentasPorPagarCount = cuentasPorPagar.filter(c => c.status !== 'pagada').length;
+  const activeCuentasPorPagarCount =
+    cuentasPorPagar.filter(c => c.status !== 'pagada').length +
+    gastosOperativos.filter(g => g.status !== 'pagado').length;
   const cartItemCount = cart.reduce((acc, item) => acc + item.quantity, 0);
 
   const handleSaveRate = (e: React.FormEvent) => {

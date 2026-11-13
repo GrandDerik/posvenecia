@@ -98,9 +98,9 @@ export const DashboardView: React.FC = () => {
 
   // 5. Cuentas por Pagar (Proveedores) & Gastos del Mes
   const activeCPP = cuentasPorPagar.filter(c => c.status !== 'pagada');
-  const pendingGastos = gastosOperativos.filter(g => g.status === 'pendiente');
+  const pendingGastos = gastosOperativos.filter(g => g.status !== 'pagado');
   const totalCPPUSD = activeCPP.reduce((a, c) => a + c.remainingUSD, 0);
-  const totalPendingGastosUSD = pendingGastos.reduce((a, g) => a + g.amountUSD, 0);
+  const totalPendingGastosUSD = pendingGastos.reduce((a, g) => a + (g.remainingUSD ?? g.amountUSD), 0);
   const totalCombinedDebtUSD = totalCPPUSD + totalPendingGastosUSD;
   const totalCombinedDebtBs = totalCombinedDebtUSD * bcvRate;
   const overdueCPPCount = activeCPP.filter(c => new Date(c.dueDate) < new Date()).length;

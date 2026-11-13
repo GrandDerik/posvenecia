@@ -122,7 +122,7 @@ Para cancelar mediante Pago Móvil:
     const cleanPhone = f.clientPhone.replace(/[^0-9]/g, '');
     if (cleanPhone.length >= 10) {
       const waPhone = cleanPhone.startsWith('58') ? cleanPhone : `58${cleanPhone.replace(/^0/, '')}`;
-      window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(message)}`, '_blank');
+      window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
     }
   };
 

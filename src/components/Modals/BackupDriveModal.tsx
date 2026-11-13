@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   Cloud, 
@@ -54,6 +54,19 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [downloadFeedback, setDownloadFeedback] = useState<string | null>(null);
 
+  const timersRef = useRef<number[]>([]);
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach(t => window.clearTimeout(t));
+      timersRef.current = [];
+    };
+  }, []);
+
+  const scheduleTimer = (fn: () => void, ms: number) => {
+    const id = window.setTimeout(fn, ms);
+    timersRef.current.push(id);
+  };
+
   if (!isOpen) return null;
 
   const currentPayload: BackupDataPayload = {
@@ -86,10 +99,10 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
         businessInfo
       });
       setDownloadFeedback(`Descargado con éxito: ${filename}`);
-      setTimeout(() => setDownloadFeedback(null), 4000);
+      scheduleTimer(() => setDownloadFeedback(null), 4000);
     } catch (err: any) {
       setDownloadFeedback(`Error al generar reporte Excel: ${err.message}`);
-      setTimeout(() => setDownloadFeedback(null), 5000);
+      scheduleTimer(() => setDownloadFeedback(null), 5000);
     }
   };
 
@@ -97,10 +110,10 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     try {
       const filename = downloadSystemBackupJSON(currentPayload);
       setDownloadFeedback(`Copia JSON descargada: ${filename}`);
-      setTimeout(() => setDownloadFeedback(null), 4000);
+      scheduleTimer(() => setDownloadFeedback(null), 4000);
     } catch (err: any) {
       setDownloadFeedback(`Error al generar backup: ${err.message}`);
-      setTimeout(() => setDownloadFeedback(null), 5000);
+      scheduleTimer(() => setDownloadFeedback(null), 5000);
     }
   };
 
@@ -121,10 +134,10 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
         await restoreDatabase(parsed);
 
         setDownloadFeedback('¡Copia de seguridad restaurada e importada con éxito!');
-        setTimeout(() => setDownloadFeedback(null), 4000);
+        scheduleTimer(() => setDownloadFeedback(null), 4000);
       } catch (err: any) {
         setDownloadFeedback(`Error al restaurar: ${err.message}`);
-        setTimeout(() => setDownloadFeedback(null), 5000);
+        scheduleTimer(() => setDownloadFeedback(null), 5000);
       }
     };
     reader.readAsText(file);
@@ -135,10 +148,10 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
       setSyncStatus('Conectando con Google...');
       await loginWithGoogle();
       setSyncStatus('¡Google Drive conectado correctamente!');
-      setTimeout(() => setSyncStatus(null), 3500);
+      scheduleTimer(() => setSyncStatus(null), 3500);
     } catch (err: any) {
       setSyncStatus(`Error: ${err?.message || 'No se pudo conectar'}`);
-      setTimeout(() => setSyncStatus(null), 4000);
+      scheduleTimer(() => setSyncStatus(null), 4000);
     }
   };
 
@@ -151,10 +164,10 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
       } else {
         setSyncStatus('No se pudo reconectar la sesión.');
       }
-      setTimeout(() => setSyncStatus(null), 4000);
+      scheduleTimer(() => setSyncStatus(null), 4000);
     } catch (err: any) {
       setSyncStatus(`Error: ${err?.message || 'Error al renovar sesión'}`);
-      setTimeout(() => setSyncStatus(null), 4000);
+      scheduleTimer(() => setSyncStatus(null), 4000);
     }
   };
 
@@ -168,10 +181,10 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
       } else {
         setSyncStatus('La base de datos ya está al día con la nube.');
       }
-      setTimeout(() => setSyncStatus(null), 4000);
+      scheduleTimer(() => setSyncStatus(null), 4000);
     } catch (err: any) {
       setSyncStatus(`Error: ${err?.message || 'Error al descargar datos'}`);
-      setTimeout(() => setSyncStatus(null), 4000);
+      scheduleTimer(() => setSyncStatus(null), 4000);
     } finally {
       setIsSyncingLocal(false);
     }
@@ -187,10 +200,10 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
       } else {
         setSyncStatus('No se pudo subir a Google Drive. Inicia sesión primero.');
       }
-      setTimeout(() => setSyncStatus(null), 4000);
+      scheduleTimer(() => setSyncStatus(null), 4000);
     } catch (err: any) {
       setSyncStatus(`Error: ${err?.message || 'Error al respaldar'}`);
-      setTimeout(() => setSyncStatus(null), 4000);
+      scheduleTimer(() => setSyncStatus(null), 4000);
     } finally {
       setIsSyncingLocal(false);
     }

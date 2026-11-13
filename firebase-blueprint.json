@@ -67,6 +67,7 @@
         "controlNumber": { "type": "string", "maxLength": 100 },
         "supplierName": { "type": "string", "maxLength": 200 },
         "supplierRIF": { "type": "string", "maxLength": 50 },
+        "supplierPhone": { "type": "string", "maxLength": 50 },
         "description": { "type": "string", "maxLength": 500 },
         "category": { "type": "string", "maxLength": 100 },
         "amountUSD": { "type": "number" },
@@ -77,7 +78,9 @@
         "retencionISLRBs": { "type": "number" },
         "bcvRate": { "type": "number" },
         "paymentMethod": { "type": "string", "maxLength": 50 },
-        "reference": { "type": "string", "maxLength": 100 }
+        "reference": { "type": "string", "maxLength": 100 },
+        "linkedGastoId": { "type": "string", "maxLength": 128 },
+        "linkedCuentaId": { "type": "string", "maxLength": 128 }
       },
       "required": ["id", "date", "supplierName", "amountUSD", "amountBs", "category"]
     },
@@ -156,7 +159,13 @@
         "amountUSD": { "type": "number" },
         "amountBs": { "type": "number" },
         "bcvRate": { "type": "number" },
+        "paidAmountUSD": { "type": "number" },
+        "remainingUSD": { "type": "number" },
         "status": { "type": "string", "maxLength": 50 },
+        "supplierName": { "type": "string", "maxLength": 200 },
+        "supplierRIF": { "type": "string", "maxLength": 50 },
+        "supplierPhone": { "type": "string", "maxLength": 50 },
+        "invoiceNumber": { "type": "string", "maxLength": 100 },
         "paymentDate": { "type": "string", "maxLength": 100 },
         "paymentMethod": { "type": "string", "maxLength": 50 },
         "reference": { "type": "string", "maxLength": 100 },

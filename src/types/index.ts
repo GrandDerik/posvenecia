@@ -216,6 +216,7 @@ export interface Expense {
   controlNumber: string;
   supplierName: string;
   supplierRIF: string;
+  supplierPhone?: string;
   description: string;
   category: 'Mercancía' | 'Servicios' | 'Alquiler' | 'Nómina' | 'Mantenimiento' | 'Otros';
   amountUSD: number;
@@ -229,6 +230,8 @@ export interface Expense {
   reference?: string;
   items?: ExpenseItem[];
   costStrategy?: PurchaseCostStrategy;
+  linkedGastoId?: string;
+  linkedCuentaId?: string;
   syncStatus?: 'synced' | 'pending_sync';
 }
 
@@ -370,22 +373,31 @@ export type GastoOperativoCategory =
   | 'Transporte' 
   | 'Eventual' 
   | 'Papelería' 
+  | 'Insumos / Papelería'
   | 'Pérdida por Merma / Vencimiento'
   | 'Uso Interno'
   | 'Otros';
 
 export interface GastoOperativo {
   id: string;
-  concept: string; // Ej: "Alquiler Local Comercial", "Luz Eléctrica (Corpoelec)", "Fibra Óptica Cantv", "Nómina Semanal", "Reparación Santamaría (Eventual)"
+  concept: string; // Ej: "Alquiler Local Comercial", "Resma de Hojas y Tinta", etc.
   category: GastoOperativoCategory;
   type: 'mensual_fijo' | 'eventual'; // Gasto mensual fijo recurrente vs Eventual / Imprevisto
   month: string; // Ej: "Noviembre 2026"
   date: string; // Fecha de emisión/asignación ISO
   dueDate: string; // Fecha límite de pago ISO
+  // Datos fiscales y de contacto del proveedor/emisor:
+  supplierName?: string;
+  supplierRIF?: string;
+  supplierPhone?: string;
+  invoiceNumber?: string;
   amountUSD: number;
   amountBs: number;
   bcvRate: number;
-  status: 'pendiente' | 'pagado';
+  status: 'pendiente' | 'parcial' | 'pagado';
+  paidAmountUSD?: number;
+  remainingUSD?: number;
+  abonos?: Abono[];
   paymentDate?: string;
   paymentMethod?: PaymentMethod;
   reference?: string;
