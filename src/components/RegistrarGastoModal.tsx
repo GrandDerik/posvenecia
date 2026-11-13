@@ -56,36 +56,42 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const [customNewPriceUSD, setCustomNewPriceUSD] = useState('');
   const [showItemSection, setShowItemSection] = useState(true);
 
+  const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products]);
+  const safeBcvRate = typeof bcvRate === 'number' && !isNaN(bcvRate) && bcvRate > 0 ? bcvRate : 1;
+
   // Filter products for dropdown
   const filteredProducts = useMemo(() => {
-    if (!productSearch.trim()) return products;
+    if (!productSearch.trim()) return safeProducts;
     const query = productSearch.toLowerCase();
-    return products.filter(p => 
-      p.name.toLowerCase().includes(query) || 
-      (p.code && p.code.toLowerCase().includes(query)) ||
-      (p.category && p.category.toLowerCase().includes(query))
+    return safeProducts.filter(p => 
+      (p?.name || '').toLowerCase().includes(query) || 
+      (p?.code && p.code.toLowerCase().includes(query)) ||
+      (p?.category && p.category.toLowerCase().includes(query))
     );
-  }, [products, productSearch]);
+  }, [safeProducts, productSearch]);
 
   const selectedProduct = useMemo(() => {
-    return products.find(p => p.id === selectedProductId);
-  }, [products, selectedProductId]);
+    if (!selectedProductId) return undefined;
+    return safeProducts.find(p => p?.id === selectedProductId);
+  }, [safeProducts, selectedProductId]);
 
   // When selected product changes, pre-fill cost & default price calculation
   const handleProductSelect = (prodId: string) => {
     setSelectedProductId(prodId);
-    const prod = products.find(p => p.id === prodId);
+    const prod = safeProducts.find(p => p?.id === prodId);
     if (prod) {
-      const defaultCost = prod.costUSD > 0 ? prod.costUSD.toString() : '';
+      const prodCost = Number(prod.costUSD) || 0;
+      const prodPrice = Number(prod.priceUSD) || 0;
+      const defaultCost = prodCost > 0 ? prodCost.toString() : '';
       setItemCostInput(defaultCost);
       setItemCostCurrency('USD');
 
       // Calculate suggested new price
-      const unitCost = prod.costUSD > 0 ? prod.costUSD : (prod.priceUSD * 0.7);
+      const unitCost = prodCost > 0 ? prodCost : (prodPrice * 0.7);
       const margin = prod.profitMarginPercent 
         ? prod.profitMarginPercent / 100 
-        : (prod.costUSD > 0 && prod.priceUSD > prod.costUSD 
-            ? (prod.priceUSD - prod.costUSD) / prod.costUSD 
+        : (prodCost > 0 && prodPrice > prodCost 
+            ? (prodPrice - prodCost) / prodCost 
             : 0.30);
       const calculatedPrice = (unitCost * (1 + margin)).toFixed(2);
       setCustomNewPriceUSD(calculatedPrice);
@@ -99,13 +105,15 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const handleCostChange = (val: string, curr: 'USD' | 'Bs' = itemCostCurrency) => {
     setItemCostInput(val);
     const numCost = parseFloat(val) || 0;
-    const costUSD = curr === 'USD' ? numCost : (bcvRate > 0 ? numCost / bcvRate : 0);
+    const costUSD = curr === 'USD' ? numCost : (safeBcvRate > 0 ? numCost / safeBcvRate : 0);
     
     if (selectedProduct && costUSD > 0) {
+      const prodCost = Number(selectedProduct.costUSD) || 0;
+      const prodPrice = Number(selectedProduct.priceUSD) || 0;
       const margin = selectedProduct.profitMarginPercent 
         ? selectedProduct.profitMarginPercent / 100 
-        : (selectedProduct.costUSD > 0 && selectedProduct.priceUSD > selectedProduct.costUSD 
-            ? (selectedProduct.priceUSD - selectedProduct.costUSD) / selectedProduct.costUSD 
+        : (prodCost > 0 && prodPrice > prodCost 
+            ? (prodPrice - prodCost) / prodCost 
             : 0.30);
       const calculatedPrice = (costUSD * (1 + margin)).toFixed(2);
       setCustomNewPriceUSD(calculatedPrice);
@@ -121,22 +129,23 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
     const rawCost = parseFloat(itemCostInput);
     if (isNaN(rawCost) || rawCost < 0) return;
 
-    const unitCostUSD = itemCostCurrency === 'USD' ? rawCost : (bcvRate > 0 ? rawCost / bcvRate : 0);
+    const unitCostUSD = itemCostCurrency === 'USD' ? rawCost : (safeBcvRate > 0 ? rawCost / safeBcvRate : 0);
     const totalCostUSD = Number((unitCostUSD * qty).toFixed(2));
+    const currentPriceUSD = Number(selectedProduct.priceUSD) || 0;
 
     const finalNewPriceUSD = itemStrategy === 'average_cost'
-      ? (parseFloat(customNewPriceUSD) || selectedProduct.priceUSD)
-      : selectedProduct.priceUSD;
+      ? (parseFloat(customNewPriceUSD) || currentPriceUSD)
+      : currentPriceUSD;
 
     const newItem: ExpenseItem = {
       productId: selectedProduct.id,
-      productName: selectedProduct.name,
+      productName: selectedProduct.name || 'Producto',
       quantity: qty,
       unitCostUSD: Number(unitCostUSD.toFixed(4)),
       totalCostUSD,
       strategy: itemStrategy,
-      previousCostUSD: selectedProduct.costUSD,
-      previousPriceUSD: selectedProduct.priceUSD,
+      previousCostUSD: Number(selectedProduct.costUSD) || 0,
+      previousPriceUSD: currentPriceUSD,
       newPriceUSD: finalNewPriceUSD
     };
 
@@ -156,10 +165,10 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
 
   // Items total calculation
   const totalItemsUSD = useMemo(() => {
-    return purchasedItems.reduce((sum, item) => sum + item.totalCostUSD, 0);
+    return purchasedItems.reduce((sum, item) => sum + (Number(item?.totalCostUSD) || 0), 0);
   }, [purchasedItems]);
 
-  const totalItemsBs = totalItemsUSD * bcvRate;
+  const totalItemsBs = totalItemsUSD * safeBcvRate;
 
   // Auto-sync invoice amount with items total
   const syncInvoiceAmountWithItems = () => {
@@ -171,18 +180,6 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       }
     }
   };
-
-  if (!isOpen) return null;
-
-  const rawAmount = parseFloat(amountInput) || 0;
-  const amountUSD = currency === 'USD' ? rawAmount : (bcvRate > 0 ? rawAmount / bcvRate : 0);
-  const amountBs = currency === 'USD' ? rawAmount * bcvRate : rawAmount;
-
-  // SENIAT calculations for purchases
-  const baseImponibleBs = hasIVA ? (amountBs / 1.16) : amountBs;
-  const ivaBs = hasIVA ? (amountBs - baseImponibleBs) : 0;
-  const retencionIVABs = applyRetencionIVA ? (ivaBs * 0.75) : 0; // 75% retention standard SENIAT
-  const retencionISLRBs = baseImponibleBs * 0.02; // 2% ISLR retention
 
   useEffect(() => {
     if (isOpen && editingExpense) {
@@ -199,7 +196,14 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setApplyRetencionIVA((editingExpense.retencionIVABs || 0) > 0);
       setPaymentMethod(editingExpense.paymentMethod || 'pago_movil');
       setReference(editingExpense.reference || '');
-      setPurchasedItems(editingExpense.items || []);
+      setPurchasedItems(Array.isArray(editingExpense.items) ? editingExpense.items : []);
+      setSelectedProductId('');
+      setProductSearch('');
+      setItemQuantityInput('1');
+      setItemCostInput('');
+      setItemCostCurrency('USD');
+      setItemStrategy('fifo');
+      setCustomNewPriceUSD('');
     } else if (isOpen && !editingExpense) {
       setSupplierName('');
       setSupplierRIF('J-');
@@ -215,8 +219,28 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setPaymentMethod('pago_movil');
       setReference('');
       setPurchasedItems([]);
+      setSelectedProductId('');
+      setProductSearch('');
+      setItemQuantityInput('1');
+      setItemCostInput('');
+      setItemCostCurrency('USD');
+      setItemStrategy('fifo');
+      setCustomNewPriceUSD('');
     }
   }, [isOpen, editingExpense]);
+
+  // Early return MUST appear after all React hooks to comply with Rules of Hooks
+  if (!isOpen) return null;
+
+  const rawAmount = parseFloat(amountInput) || 0;
+  const amountUSD = currency === 'USD' ? rawAmount : (safeBcvRate > 0 ? rawAmount / safeBcvRate : 0);
+  const amountBs = currency === 'USD' ? rawAmount * safeBcvRate : rawAmount;
+
+  // SENIAT calculations for purchases
+  const baseImponibleBs = hasIVA ? (amountBs / 1.16) : amountBs;
+  const ivaBs = hasIVA ? (amountBs - baseImponibleBs) : 0;
+  const retencionIVABs = applyRetencionIVA ? (ivaBs * 0.75) : 0; // 75% retention standard SENIAT
+  const retencionISLRBs = baseImponibleBs * 0.02; // 2% ISLR retention
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -291,7 +315,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
               <p className="text-xs text-teal-200">Impacta el Libro de Compras, Inventario en Firestore y Cuadre de Caja</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-white/10 text-white transition-colors cursor-pointer">
+          <button type="button" onClick={onClose} className="p-1.5 rounded-full hover:bg-white/10 text-white transition-colors cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -652,25 +676,25 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                       {purchasedItems.map((item, idx) => (
                         <tr key={idx} className="hover:bg-teal-50/40">
                           <td className="py-2 px-2.5 font-medium text-slate-900">
-                            {item.productName}
+                            {item?.productName || 'Producto'}
                           </td>
                           <td className="py-2 px-2 text-center font-mono font-bold text-slate-800">
-                            +{item.quantity}
+                            +{item?.quantity ?? 0}
                           </td>
                           <td className="py-2 px-2 text-right font-mono text-slate-700">
-                            ${item.unitCostUSD.toFixed(2)}
+                            ${(Number(item?.unitCostUSD) || 0).toFixed(2)}
                           </td>
                           <td className="py-2 px-2 text-right font-mono font-bold text-teal-800">
-                            ${item.totalCostUSD.toFixed(2)}
+                            ${(Number(item?.totalCostUSD) || 0).toFixed(2)}
                           </td>
                           <td className="py-2 px-2 text-center">
-                            {item.strategy === 'fifo' ? (
+                            {item?.strategy === 'fifo' ? (
                               <span className="px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-[10px] font-semibold">
                                 FIFO (Lote)
                               </span>
                             ) : (
                               <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-semibold">
-                                Actualizado (${item.newPriceUSD?.toFixed(2)})
+                                Actualizado (${(Number(item?.newPriceUSD) || 0).toFixed(2)})
                               </span>
                             )}
                           </td>
@@ -761,7 +785,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
 
             <div className="text-[11px] text-slate-600 flex justify-between font-mono">
               <span>Equivalente: {currency === 'USD' ? `Bs. ${formatBs(amountBs)}` : `$ ${formatUSD(amountUSD)}`}</span>
-              <span>Tasa BCV: Bs. {bcvRate.toFixed(2)}</span>
+              <span>Tasa BCV: Bs. {safeBcvRate.toFixed(2)}</span>
             </div>
           </div>
 
