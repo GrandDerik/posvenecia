@@ -3,27 +3,22 @@ import {
   ShieldCheck, 
   Wifi, 
   WifiOff, 
-  HardDrive, 
-  CheckCircle2, 
-  ArrowRight, 
-  Layers, 
+  Database, 
   Lock,
   Sparkles,
-  Users,
   Store,
-  DollarSign
+  DollarSign,
+  Cloud
 } from 'lucide-react';
 
 interface LoginViewProps {
   onLoginWithGoogle: () => Promise<void>;
-  onContinueAsGuest: () => void;
   isOnline: boolean;
   bcvRate: number;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({
   onLoginWithGoogle,
-  onContinueAsGuest,
   isOnline,
   bcvRate,
 }) => {
@@ -31,13 +26,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
 
   const handleGoogleClick = async () => {
+    if (!isOnline) {
+      setErrorMsg('Se requiere conexión a internet para autenticar tu cuenta y sincronizar en tiempo real.');
+      return;
+    }
     setIsLoading(true);
     setErrorMsg('');
     try {
       await onLoginWithGoogle();
     } catch (err: any) {
       console.error('Login error:', err);
-      setErrorMsg(err?.message || 'No se pudo iniciar sesión con Google. Puedes continuar en modo local.');
+      setErrorMsg(err?.message || 'No se pudo iniciar sesión con Google. Verifica tu conexión e intenta nuevamente.');
     } finally {
       setIsLoading(false);
     }
@@ -59,7 +58,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </div>
           <div>
             <span className="font-extrabold text-sm tracking-tight text-white block">POS Venecia</span>
-            <span className="text-[10px] text-slate-400">Punto de Venta Profesional</span>
+            <span className="text-[10px] text-slate-400">Punto de Venta Profesional en la Nube</span>
           </div>
         </div>
 
@@ -74,10 +73,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
             isOnline 
               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
-              : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+              : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
           }`}>
             {isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-            <span>{isOnline ? 'Conexión activa' : 'Modo Offline (Sin red)'}</span>
+            <span>{isOnline ? 'Conexión activa' : 'Sin conexión a internet'}</span>
           </div>
         </div>
       </header>
@@ -88,8 +87,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
         {/* Left Column: Value Proposition & Architecture */}
         <div className="lg:col-span-7 space-y-6 text-left">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-400/30 text-indigo-300 text-xs font-semibold backdrop-blur-md">
-            <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Arquitectura Offline-First + Sincronización Google Drive</span>
+            <Cloud className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Sincronización en Vivo Multi-Dispositivo (Cloud Firestore)</span>
           </div>
 
           <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
@@ -97,28 +96,28 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </h1>
 
           <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-lg">
-            Facturación fiscal SENIAT, arqueo diario de caja, control de inventario con fotos, cuentas por pagar y sincronización continua multi-dispositivo.
+            Facturación fiscal SENIAT, arqueo diario de caja, control de inventario, cuentas por pagar y sincronización instantánea en vivo entre PC y teléfono.
           </p>
 
           {/* Feature List */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
             <div className="p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex items-start gap-3">
               <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 shrink-0">
-                <Wifi className="w-4 h-4" />
+                <Database className="w-4 h-4" />
               </div>
               <div>
-                <h4 className="text-xs font-bold text-white">100% Offline-First</h4>
-                <p className="text-[11px] text-slate-400 mt-0.5">Sigue vendiendo aunque se caiga internet. Los datos se guardan en IndexedDB.</p>
+                <h4 className="text-xs font-bold text-white">100% Tiempo Real</h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">Cada venta, cierre de caja o cambio de stock se refleja al instante en Firebase Firestore.</p>
               </div>
             </div>
 
             <div className="p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md flex items-start gap-3">
               <div className="p-2 rounded-xl bg-blue-500/20 text-blue-400 shrink-0">
-                <HardDrive className="w-4 h-4" />
+                <ShieldCheck className="w-4 h-4" />
               </div>
               <div>
-                <h4 className="text-xs font-bold text-white">Nube Google Drive</h4>
-                <p className="text-[11px] text-slate-400 mt-0.5">Tus datos pertenecen a tu cuenta personal de Google sin servidores de terceros.</p>
+                <h4 className="text-xs font-bold text-white">Aislamiento por Cuenta</h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">Tus datos están estrictamente protegidos y aislados bajo tu UID personal de Google.</p>
               </div>
             </div>
 
@@ -128,7 +127,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
               <div>
                 <h4 className="text-xs font-bold text-white">Multi-Dispositivo</h4>
-                <p className="text-[11px] text-slate-400 mt-0.5">Usa la misma cuenta en laptop, tablet o teléfono con sincronización continua automática.</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Usa la misma cuenta en laptop, tablet o teléfono sin necesidad de copias manuales.</p>
               </div>
             </div>
 
@@ -156,7 +155,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </div>
               </div>
               <h2 className="text-xl font-black text-white tracking-tight">Iniciar Sesión</h2>
-              <p className="text-xs text-slate-400">Accede con tu cuenta autorizada para comenzar</p>
+              <p className="text-xs text-slate-400">Conecta tu cuenta de Google para acceder a tu comercio en vivo</p>
             </div>
 
             {errorMsg && (
@@ -170,7 +169,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <button
                 type="button"
                 onClick={handleGoogleClick}
-                disabled={isLoading}
+                disabled={isLoading || !isOnline}
                 className="w-full py-3.5 px-4 bg-white hover:bg-slate-100 text-slate-900 rounded-2xl font-black text-xs sm:text-sm shadow-xl flex items-center justify-center gap-3 transition-all cursor-pointer active:scale-98 disabled:opacity-60"
               >
                 {isLoading ? (
@@ -197,30 +196,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 )}
                 <span>{isLoading ? 'Conectando con Google...' : 'Continuar con Google'}</span>
               </button>
-
-              <div className="relative flex items-center justify-center py-2">
-                <div className="border-t border-white/10 w-full" />
-                <span className="bg-slate-900 px-3 text-[10px] text-slate-400 font-bold uppercase tracking-wider relative z-10">
-                  O prueba sin conexión
-                </span>
-                <div className="border-t border-white/10 w-full" />
-              </div>
-
-              {/* Guest / Local Storage fallback */}
-              <button
-                type="button"
-                onClick={onContinueAsGuest}
-                className="w-full py-2.5 px-4 bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-98"
-              >
-                <span>Acceder en Modo Local / Dispositivo</span>
-                <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
-              </button>
             </div>
 
             {/* Privacy note */}
             <div className="pt-2 border-t border-white/10 flex items-center gap-2 text-[11px] text-slate-400">
               <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>Autenticación oficial y almacenamiento cifrado en tu propia cuenta.</span>
+              <span>Acceso exclusivo en la nube. Al cerrar sesión, la memoria local se limpia por completo.</span>
             </div>
 
           </div>
@@ -230,7 +211,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       {/* Footer */}
       <footer className="relative z-10 max-w-6xl w-full mx-auto text-center py-3 text-[11px] text-slate-300">
-        POS Venecia • Cumplimiento Normativo Fiscal Venezolano (SENIAT) • Versión 2.5 Multi-Usuario Offline
+        POS Venecia • Cumplimiento Normativo Fiscal Venezolano (SENIAT) • Sincronización Cloud en Vivo
       </footer>
 
     </div>

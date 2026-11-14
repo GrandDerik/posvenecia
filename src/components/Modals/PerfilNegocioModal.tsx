@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   Building2, 
@@ -150,6 +150,33 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
   const [resetError, setResetError] = useState('');
   const [resetSuccessFeedback, setResetSuccessFeedback] = useState(false);
 
+  // Sync modal form with live Cloud Firestore businessInfo whenever modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    setFormData({
+      name: businessInfo.name,
+      rif: businessInfo.rif,
+      phone: businessInfo.phone,
+      address: businessInfo.address,
+      email: businessInfo.email || '',
+      instagram: businessInfo.instagram || '',
+      logoUrl: businessInfo.logoUrl || '',
+      footerMessage: businessInfo.footerMessage || '¡Gracias por su compra! Vuelva pronto.',
+      pagoMovilPhone: businessInfo.pagoMovilPhone,
+      pagoMovilCI: businessInfo.pagoMovilCI,
+      pagoMovilBank: businessInfo.pagoMovilBank
+    });
+    if (businessInfo.pagoMovilAccounts) {
+      setPagoMovilAccounts(businessInfo.pagoMovilAccounts);
+    }
+    if (businessInfo.posTerminals) {
+      setPosTerminals(businessInfo.posTerminals);
+    }
+    if (businessInfo.bankAccounts) {
+      setBankAccounts(businessInfo.bankAccounts);
+    }
+  }, [isOpen, businessInfo]);
+
   if (!isOpen) return null;
 
   const VENEZUELAN_BANKS = [
@@ -169,19 +196,46 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        alert('La imagen no debe superar los 2MB');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          setFormData(prev => ({ ...prev, logoUrl: reader.result as string }));
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) {
+      alert('La imagen no debe superar los 4MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result !== 'string') return;
+      const rawDataUrl = reader.result;
+      // Compress/resize logo automatically so it fits safely within Firestore's 1MB document limit
+      const img = new Image();
+      img.onload = () => {
+        const MAX_DIM = 400;
+        let { width, height } = img;
+        if (width > MAX_DIM || height > MAX_DIM) {
+          const ratio = Math.min(MAX_DIM / width, MAX_DIM / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/webp', 0.82);
+          setFormData(prev => ({
+            ...prev,
+            logoUrl: compressed.length < rawDataUrl.length ? compressed : rawDataUrl
+          }));
+        } else {
+          setFormData(prev => ({ ...prev, logoUrl: rawDataUrl }));
         }
       };
-      reader.readAsDataURL(file);
-    }
+      img.onerror = () => {
+        setFormData(prev => ({ ...prev, logoUrl: rawDataUrl }));
+      };
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleApplyLogoUrl = () => {
@@ -1033,7 +1087,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                       Privacidad y Seguridad Garantizada
                     </h4>
                     <p className="text-xs text-emerald-200 mt-1 leading-relaxed">
-                      Esta aplicación fue diseñada con arquitectura <strong>Zero-Server Privacy</strong>: tus registros de ventas, inventario, precios y clientes se almacenan <strong>exclusivamente en tu propio Google Drive personal</strong>.
+                      Tus registros de ventas, inventario, precios, clientes y contabilidad viven <strong>exclusivamente en Cloud Firestore aislados bajo tu UID de Google</strong>, sincronizados en vivo entre tus dispositivos sin caché local permanente.
                     </p>
                   </div>
                 </div>
@@ -1098,9 +1152,9 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
-                      <span className="text-slate-500">Aislamiento local por UID:</span>
+                      <span className="text-slate-500">Aislamiento en Firestore por UID:</span>
                       <span className="font-mono text-slate-800 font-bold text-[11px]">
-                        {googleUser?.uid ? `usr_${googleUser.uid.slice(0, 10)}...` : 'Local aislado'}
+                        {googleUser?.uid ? `users/${googleUser.uid.slice(0, 10)}...` : 'Sin sesión'}
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-1">

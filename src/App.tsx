@@ -17,7 +17,7 @@ import { NotaCreditoModal } from './components/Modals/NotaCreditoModal';
 import { DesincorporarStockModal } from './components/Modals/DesincorporarStockModal';
 import { ComprobanteNotaCreditoModal } from './components/Modals/ComprobanteNotaCreditoModal';
 import { LoginView } from './components/LoginView';
-import { ShieldCheck, Heart, CheckCircle2, X, RotateCw } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { formatBs } from './utils/exportUtils';
 
 const AppContent: React.FC = () => {
@@ -28,15 +28,9 @@ const AppContent: React.FC = () => {
     isProfileModalOpen, 
     setIsProfileModalOpen,
     googleUser,
+    isAuthLoading,
     loginWithGoogle,
-    isSessionStarted,
-    startLocalSession,
     isOnline,
-    offlineSyncNotification,
-    dismissOfflineNotification,
-    driveSyncStatus,
-    renewGoogleSession,
-    isDriveSyncing,
     isCreditNoteModalOpen,
     setIsCreditNoteModalOpen,
     selectedSaleForCreditNote,
@@ -45,12 +39,22 @@ const AppContent: React.FC = () => {
     setLastCompletedCreditNote
   } = useApp();
 
-  // Show modern LoginView if user has not logged in with Google or entered local session
-  if (!isSessionStarted && !googleUser) {
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col items-center justify-center gap-3">
+        <div className="w-9 h-9 border-3 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+        <p className="text-xs font-bold tracking-wide text-slate-300">
+          Conectando con tu cuenta y Cloud Firestore...
+        </p>
+      </div>
+    );
+  }
+
+  // Require authenticated Google user for strict UID-isolated Cloud Firestore sync
+  if (!googleUser) {
     return (
       <LoginView
         onLoginWithGoogle={loginWithGoogle}
-        onContinueAsGuest={startLocalSession}
         isOnline={isOnline}
         bcvRate={bcvRate}
       />
@@ -59,28 +63,8 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col relative bg-slate-100 text-slate-800">
-      {/* Offline Sync Reconnection Toast Notification */}
-      {offlineSyncNotification && (
-        <div className="fixed bottom-5 right-5 z-50 bg-slate-900/95 text-emerald-200 border border-emerald-500/40 p-3.5 sm:p-4 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-md animate-in slide-in-from-bottom-5 max-w-md">
-          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-            <CheckCircle2 className="w-5 h-5" />
-          </div>
-          <div className="text-xs">
-            <div className="font-extrabold text-white">Conexión Restablecida</div>
-            <div className="text-slate-300 mt-0.5">{offlineSyncNotification}</div>
-          </div>
-          <button 
-            onClick={dismissOfflineNotification} 
-            className="text-slate-400 hover:text-white p-1 rounded-full cursor-pointer ml-auto"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
       {/* Top Navbar with BCV ticker and tabs */}
       <Navbar />
-
 
       {/* Main Tab Content */}
       <main className="flex-1 pb-12">

@@ -255,47 +255,51 @@
     }
   },
   "firestore": {
-    "/businesses/{businessId}/products/{productId}": {
+    "/users/{userId}/products/{productId}": {
       "schema": { "$ref": "Product" },
-      "description": "Store catalog products and inventory"
+      "description": "User catalog products and inventory"
     },
-    "/businesses/{businessId}/sales/{saleId}": {
+    "/users/{userId}/sales/{saleId}": {
       "schema": { "$ref": "Sale" },
-      "description": "Store completed and canceled sales transactions"
+      "description": "User completed and canceled sales transactions"
     },
-    "/businesses/{businessId}/expenses/{expenseId}": {
+    "/users/{userId}/expenses/{expenseId}": {
       "schema": { "$ref": "Expense" },
-      "description": "Store expenses and purchases book"
+      "description": "User expenses and purchases book"
     },
-    "/businesses/{businessId}/fiados/{fiadoId}": {
+    "/users/{userId}/fiados/{fiadoId}": {
       "schema": { "$ref": "FiadoRecord" },
       "description": "Accounts receivable and customer credits"
     },
-    "/businesses/{businessId}/clients/{clientId}": {
+    "/users/{userId}/clients/{clientId}": {
       "schema": { "$ref": "Client" },
-      "description": "Store customer directory"
+      "description": "User customer directory"
     },
-    "/businesses/{businessId}/cuentasPorPagar/{cuentaId}": {
+    "/users/{userId}/cuentasPorPagar/{cuentaId}": {
       "schema": { "$ref": "CuentaPorPagar" },
       "description": "Supplier accounts payable"
     },
-    "/businesses/{businessId}/gastosOperativos/{gastoId}": {
+    "/users/{userId}/gastosOperativos/{gastoId}": {
       "schema": { "$ref": "GastoOperativo" },
       "description": "Monthly recurring and eventual operational expenses"
     },
-    "/businesses/{businessId}/cashShiftHistory/{shiftId}": {
+    "/users/{userId}/cashShiftHistory/{shiftId}": {
       "schema": { "$ref": "CashShift" },
       "description": "Historical cash register shifts and closures"
     },
-    "/businesses/{businessId}/metadata/{docId}": {
+    "/users/{userId}/businessProfile/{docId}": {
       "schema": { "$ref": "StoreMetadata" },
-      "description": "Business profile, BCV exchange rates, and active shift state"
+      "description": "Business profile, logo, BCV exchange rates, and categories"
     },
-    "/businesses/{businessId}/creditNotes/{noteId}": {
+    "/users/{userId}/cashRegister/{docId}": {
+      "schema": { "$ref": "StoreMetadata" },
+      "description": "Live multi-device cash register open/close status"
+    },
+    "/users/{userId}/creditNotes/{noteId}": {
       "schema": { "$ref": "CreditNote" },
       "description": "Sales returns and credit notes records"
     },
-    "/businesses/{businessId}/inventoryDischarges/{dischargeId}": {
+    "/users/{userId}/inventoryDischarges/{dischargeId}": {
       "schema": { "$ref": "InventoryDischarge" },
       "description": "Damaged, expired, and shrinkage inventory discharges"
     }

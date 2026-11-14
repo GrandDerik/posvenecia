@@ -454,11 +454,3 @@ export interface CashShift {
   totalExpensesBs?: number;
   closedBy?: string;
 }
-
-export interface OfflineSyncItem {
-  id: string;
-  action: 'create_sale' | 'create_expense' | 'update_product' | 'close_shift';
-  payload: any;
-  timestamp: string;
-  synced: boolean;
-}

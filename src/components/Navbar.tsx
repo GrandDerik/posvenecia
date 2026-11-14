@@ -52,13 +52,8 @@ export const Navbar: React.FC = () => {
     setIsAperturaModalOpen,
     setIsCierreModalOpen,
     isOnline,
-    isSyncingOffline,
-    pendingOfflineCount,
-    syncOfflineData,
     logoutGoogle,
-    driveSyncStatus,
-    firestoreSyncStatus,
-    renewGoogleSession
+    firestoreSyncStatus
   } = useApp();
 
   const [isEditingRate, setIsEditingRate] = useState(false);
@@ -273,43 +268,27 @@ export const Navbar: React.FC = () => {
               )}
             </button>
 
-            {/* Network Status & Offline-First Pill */}
+            {/* Connection & Multi-Device Realtime Cloud Sync Status */}
             {!isOnline ? (
               <div 
-                className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-black tracking-tight"
-                title="Sin internet. Modo Offline-First activo: ventas y transacciones guardadas en IndexedDB."
+                className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-full bg-rose-100 border border-rose-300 text-rose-900 text-[10px] font-black tracking-tight"
+                title="Sin conexión a internet. Reconecta para continuar sincronizando en vivo con Cloud Firestore."
               >
-                <WifiOff className="w-3 h-3 text-amber-700 shrink-0" />
-                <span>Offline{pendingOfflineCount > 0 ? ` (${pendingOfflineCount})` : ''}</span>
+                <WifiOff className="w-3 h-3 text-rose-700 shrink-0" />
+                <span>Sin Red</span>
               </div>
-            ) : isSyncingOffline ? (
-              <div className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold">
-                <RotateCw className="w-3 h-3 animate-spin text-blue-600 shrink-0" />
-                <span className="hidden sm:inline">Sincronizando...</span>
-              </div>
-            ) : pendingOfflineCount > 0 ? (
+            ) : (
               <button
                 type="button"
-                onClick={() => syncOfflineData()}
-                className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-full bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-[10px] font-bold cursor-pointer transition-colors"
-                title="Clic para sincronizar transacciones pendientes"
+                onClick={() => setIsGoogleModalOpen(true)}
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition-all active:scale-95 cursor-pointer shadow-2xs"
+                title="Sincronización en vivo multi-dispositivo (Firebase Firestore)"
               >
-                <RotateCw className="w-3 h-3 text-emerald-600 shrink-0" />
-                <span>Sincronizar ({pendingOfflineCount})</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                <Cloud className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>En Vivo</span>
               </button>
-            ) : null}
-
-            {/* Multi-Device Realtime Cloud Sync Status Button */}
-            <button
-              type="button"
-              onClick={() => setIsGoogleModalOpen(true)}
-              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition-all active:scale-95 cursor-pointer shadow-2xs"
-              title="Sincronización en tiempo real multi-dispositivo (Firebase Firestore) y respaldo seguro en Google Drive. Clic para gestionar."
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
-              <Cloud className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>Tiempo Real</span>
-            </button>
+            )}
 
             {/* Daily Cash Shift Status Button */}
             {isCashRegisterOpen ? (

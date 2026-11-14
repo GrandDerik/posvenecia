@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { getFirestore } from 'firebase/firestore';
 
 export interface FirebaseClientConfig {
   apiKey: string;
@@ -113,20 +113,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     console.error(`[PosVenecia Firestore] Error (${operationType}): ${errMessage}`);
   }
   throw new Error(JSON.stringify(errInfo));
-}
-
-// Test connection on boot
-export async function testConnection() {
-  if (!isFirebaseConfigured) return;
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      if (import.meta.env.DEV) {
-        console.error('Please check your Firebase configuration.');
-      }
-    }
-  }
 }
 
 export default firebaseConfig;

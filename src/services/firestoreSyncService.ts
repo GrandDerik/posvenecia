@@ -1,38 +1,39 @@
-import { 
-  collection, 
-  doc, 
-  getDoc,
-  onSnapshot, 
-  setDoc, 
-  deleteDoc, 
-  getDocs, 
+import {
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
+  deleteDoc,
+  getDocs,
   writeBatch,
   increment,
   Unsubscribe
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, auth } from '../config/firebaseConfig';
-import { 
-  Product, 
-  Sale, 
-  Expense, 
-  FiadoRecord, 
-  Client, 
-  CuentaPorPagar, 
-  GastoOperativo, 
-  CashShift, 
+import {
+  Product,
+  Sale,
+  Expense,
+  FiadoRecord,
+  Client,
+  CuentaPorPagar,
+  GastoOperativo,
+  CashShift,
   BusinessInfo,
   CreditNote,
-  InventoryDischarge
+  InventoryDischarge,
+  BaseCurrency
 } from '../types';
-import { getPendingSyncQueue, batchClearSyncQueue } from './indexedDBService';
 
-export interface StoreMetadataDoc {
+export interface UserBusinessProfileDoc {
   updatedAt: string;
   businessInfo?: BusinessInfo;
   bcvRate?: number;
   bcvEuroRate?: number;
-  activeCashShift?: CashShift | null;
+  baseCurrency?: BaseCurrency;
+  rateHistory?: { date: string; rate: number }[];
   customCategories?: string[];
+  managerPin?: string;
   lastUpdatedBy?: string;
 }
 
@@ -54,7 +55,7 @@ export interface FirestoreStoreListeners {
   onCuentasPorPagar: (cuentas: CuentaPorPagar[]) => void;
   onGastosOperativos: (gastos: GastoOperativo[]) => void;
   onCashShiftHistory: (history: CashShift[]) => void;
-  onMetadata: (metadata: StoreMetadataDoc) => void;
+  onBusinessProfile: (profile: UserBusinessProfileDoc) => void;
   onCashRegisterStatus?: (status: CashRegisterStatusDoc) => void;
   onCreditNotes?: (creditNotes: CreditNote[]) => void;
   onInventoryDischarges?: (discharges: InventoryDischarge[]) => void;
@@ -87,7 +88,7 @@ export const waitForAllPendingWrites = async (): Promise<void> => {
 
 /**
  * Strips all `undefined` fields recursively from any object or array.
- * CRITICAL: Cloud Firestore strictly crashes if any document property is `undefined`.
+ * CRITICAL: Cloud Firestore strictly rejects any document property set to `undefined`.
  */
 export const cleanForFirestore = <T>(data: T): T => {
   if (data === null || data === undefined) {
@@ -111,11 +112,11 @@ export const cleanForFirestore = <T>(data: T): T => {
 };
 
 /**
- * Derives the canonical unique businessId directly from the authenticated Google user.
- * Guarantees all devices logged in with the same Google account map to the exact same Firestore path.
+ * Derives the canonical unique UID directly from the authenticated Firebase/Google user.
+ * Guarantees strict isolation under `users/{uid}/...` across all devices logged into the same account.
  */
-export const getCanonicalBusinessId = (uidOrEmail?: string | null): string => {
-  const candidate = uidOrEmail?.trim() || auth.currentUser?.uid;
+export const getCanonicalUserId = (uid?: string | null): string => {
+  const candidate = auth.currentUser?.uid || uid?.trim();
   if (!candidate) {
     throw new Error('No hay sesión de usuario autenticada para interactuar con Cloud Firestore.');
   }
@@ -123,12 +124,14 @@ export const getCanonicalBusinessId = (uidOrEmail?: string | null): string => {
 };
 
 /**
- * Subscribe to all store collections in real-time for instant multi-device sync
+ * Subscribe to all user-scoped collections in real-time via onSnapshot for instant multi-device sync.
+ * All paths strictly live under `users/{uid}/...`.
  */
 export const subscribeToStoreRealtime = (
-  businessId: string,
+  uid: string,
   callbacks: FirestoreStoreListeners
 ): (() => void) => {
+  const userId = getCanonicalUserId(uid);
   const unsubscribers: Unsubscribe[] = [];
 
   const handleErr = (opType: OperationType, path: string, err: unknown) => {
@@ -139,19 +142,19 @@ export const subscribeToStoreRealtime = (
     }
   };
 
-  devLog(`[PosVenecia Firestore] Iniciando suscripción en tiempo real para businessId: ${businessId}`);
+  devLog(`[PosVenecia Firestore] Iniciando suscripción en vivo (users/${userId}/...)`);
 
   // 1. Products
-  const productsPath = `businesses/${businessId}/products`;
+  const productsPath = `users/${userId}/products`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'products'),
+      collection(db, 'users', userId, 'products'),
       (snapshot) => {
         const products: Product[] = [];
         snapshot.forEach((d) => {
           products.push(d.data() as Product);
         });
-        devLog(`[PosVenecia Firestore] onSnapshot: ${products.length} productos recibidos (fromCache: ${snapshot.metadata.fromCache})`);
+        devLog(`[PosVenecia Firestore] onSnapshot products: ${products.length}`);
         callbacks.onProducts(products);
       },
       (err) => handleErr(OperationType.GET, productsPath, err)
@@ -159,10 +162,10 @@ export const subscribeToStoreRealtime = (
   );
 
   // 2. Sales
-  const salesPath = `businesses/${businessId}/sales`;
+  const salesPath = `users/${userId}/sales`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'sales'),
+      collection(db, 'users', userId, 'sales'),
       (snapshot) => {
         const sales: Sale[] = [];
         snapshot.forEach((d) => {
@@ -175,11 +178,11 @@ export const subscribeToStoreRealtime = (
     )
   );
 
-  // 3. Expenses
-  const expensesPath = `businesses/${businessId}/expenses`;
+  // 3. Expenses / Compras
+  const expensesPath = `users/${userId}/expenses`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'expenses'),
+      collection(db, 'users', userId, 'expenses'),
       (snapshot) => {
         const expenses: Expense[] = [];
         snapshot.forEach((d) => {
@@ -193,10 +196,10 @@ export const subscribeToStoreRealtime = (
   );
 
   // 4. Fiados
-  const fiadosPath = `businesses/${businessId}/fiados`;
+  const fiadosPath = `users/${userId}/fiados`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'fiados'),
+      collection(db, 'users', userId, 'fiados'),
       (snapshot) => {
         const fiados: FiadoRecord[] = [];
         snapshot.forEach((d) => {
@@ -209,10 +212,10 @@ export const subscribeToStoreRealtime = (
   );
 
   // 5. Clients
-  const clientsPath = `businesses/${businessId}/clients`;
+  const clientsPath = `users/${userId}/clients`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'clients'),
+      collection(db, 'users', userId, 'clients'),
       (snapshot) => {
         const clients: Client[] = [];
         snapshot.forEach((d) => {
@@ -225,10 +228,10 @@ export const subscribeToStoreRealtime = (
   );
 
   // 6. Cuentas Por Pagar
-  const cppPath = `businesses/${businessId}/cuentasPorPagar`;
+  const cppPath = `users/${userId}/cuentasPorPagar`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'cuentasPorPagar'),
+      collection(db, 'users', userId, 'cuentasPorPagar'),
       (snapshot) => {
         const cuentas: CuentaPorPagar[] = [];
         snapshot.forEach((d) => {
@@ -241,10 +244,10 @@ export const subscribeToStoreRealtime = (
   );
 
   // 7. Gastos Operativos
-  const gastosPath = `businesses/${businessId}/gastosOperativos`;
+  const gastosPath = `users/${userId}/gastosOperativos`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'gastosOperativos'),
+      collection(db, 'users', userId, 'gastosOperativos'),
       (snapshot) => {
         const gastos: GastoOperativo[] = [];
         snapshot.forEach((d) => {
@@ -256,11 +259,11 @@ export const subscribeToStoreRealtime = (
     )
   );
 
-  // 8. Cash Shift History
-  const historyPath = `businesses/${businessId}/cashShiftHistory`;
+  // 8. Cash Shift History (Cierres de Caja)
+  const historyPath = `users/${userId}/cashShiftHistory`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'cashShiftHistory'),
+      collection(db, 'users', userId, 'cashShiftHistory'),
       (snapshot) => {
         const history: CashShift[] = [];
         snapshot.forEach((d) => {
@@ -273,30 +276,39 @@ export const subscribeToStoreRealtime = (
     )
   );
 
-  // 9. Store Metadata (Tasas, perfil de negocio)
-  const metaPath = `businesses/${businessId}/metadata/store`;
+  // 9. Business Profile, Logo, BCV Rates, Base Currency & Custom Categories
+  const profilePath = `users/${userId}/businessProfile/profile`;
   unsubscribers.push(
     onSnapshot(
-      doc(db, 'businesses', businessId, 'metadata', 'store'),
+      doc(db, 'users', userId, 'businessProfile', 'profile'),
       (docSnap) => {
         if (docSnap.exists()) {
-          callbacks.onMetadata(docSnap.data() as StoreMetadataDoc);
+          callbacks.onBusinessProfile(docSnap.data() as UserBusinessProfileDoc);
         }
       },
-      (err) => handleErr(OperationType.GET, metaPath, err)
+      (err) => handleErr(OperationType.GET, profilePath, err)
     )
   );
 
-  // 10. Dedicated Cash Register Status Document (Apertura y Cierre en Tiempo Real Multi-dispositivo)
-  const regStatusPath = `businesses/${businessId}/metadata/cashRegisterStatus`;
+  // 10. Dedicated Live Cash Register Status Document (Apertura y Cierre en Tiempo Real Multi-dispositivo)
+  const regStatusPath = `users/${userId}/cashRegister/status`;
   unsubscribers.push(
     onSnapshot(
-      doc(db, 'businesses', businessId, 'metadata', 'cashRegisterStatus'),
+      doc(db, 'users', userId, 'cashRegister', 'status'),
       (docSnap) => {
-        if (docSnap.exists() && callbacks.onCashRegisterStatus) {
-          const status = docSnap.data() as CashRegisterStatusDoc;
-          devLog(`[PosVenecia Firestore] onSnapshot cashRegisterStatus: caja ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
-          callbacks.onCashRegisterStatus(status);
+        if (callbacks.onCashRegisterStatus) {
+          if (docSnap.exists()) {
+            const status = docSnap.data() as CashRegisterStatusDoc;
+            devLog(`[PosVenecia Firestore] onSnapshot cashRegister/status: ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
+            callbacks.onCashRegisterStatus(status);
+          } else {
+            callbacks.onCashRegisterStatus({
+              isOpen: false,
+              activeShift: null,
+              updatedAt: '',
+              updatedBy: ''
+            });
+          }
         }
       },
       (err) => handleErr(OperationType.GET, regStatusPath, err)
@@ -304,10 +316,10 @@ export const subscribeToStoreRealtime = (
   );
 
   // 11. Credit Notes (Notas de Crédito y Devoluciones)
-  const creditNotesPath = `businesses/${businessId}/creditNotes`;
+  const creditNotesPath = `users/${userId}/creditNotes`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'creditNotes'),
+      collection(db, 'users', userId, 'creditNotes'),
       (snapshot) => {
         const notes: CreditNote[] = [];
         snapshot.forEach((d) => {
@@ -323,10 +335,10 @@ export const subscribeToStoreRealtime = (
   );
 
   // 12. Inventory Discharges (Salidas por Daño, Vencimiento, Merma, Uso Interno)
-  const dischargesPath = `businesses/${businessId}/inventoryDischarges`;
+  const dischargesPath = `users/${userId}/inventoryDischarges`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'businesses', businessId, 'inventoryDischarges'),
+      collection(db, 'users', userId, 'inventoryDischarges'),
       (snapshot) => {
         const discharges: InventoryDischarge[] = [];
         snapshot.forEach((d) => {
@@ -350,25 +362,42 @@ export const subscribeToStoreRealtime = (
  * Save cash register status (open/close) in Cloud Firestore for instant multi-device reflection
  */
 export const saveCashRegisterStatusToFirestore = async (
-  businessId: string,
+  uid: string,
   status: CashRegisterStatusDoc
 ): Promise<void> => {
-  const path = `businesses/${businessId}/metadata/cashRegisterStatus`;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/cashRegister/status`;
   const op = (async () => {
     try {
       const cleaned = cleanForFirestore({
         ...status,
         updatedAt: new Date().toISOString()
       });
-      // 1. Write dedicated status document
-      await setDoc(doc(db, 'businesses', businessId, 'metadata', 'cashRegisterStatus'), cleaned, { merge: true });
-      // 2. Also mirror to metadata/store for backwards compatibility
-      await setDoc(
-        doc(db, 'businesses', businessId, 'metadata', 'store'),
-        cleanForFirestore({ activeCashShift: cleaned.activeShift, updatedAt: new Date().toISOString() }),
-        { merge: true }
-      );
-      devLog(`[PosVenecia Firestore] Estado de caja ${status.isOpen ? 'ABIERTA' : 'CERRADA'} guardado exitosamente en Firestore.`);
+      await setDoc(doc(db, 'users', userId, 'cashRegister', 'status'), cleaned, { merge: true });
+      devLog(`[PosVenecia Firestore] Estado de caja ${status.isOpen ? 'ABIERTA' : 'CERRADA'} guardado en users/${userId}/cashRegister/status.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Save business profile, logo, BCV rates, base currency, custom categories, and PIN to Firestore
+ */
+export const saveBusinessProfileToFirestore = async (
+  uid: string,
+  profilePatch: Partial<UserBusinessProfileDoc>
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/businessProfile/profile`;
+  const op = (async () => {
+    try {
+      const cleaned = cleanForFirestore({
+        ...profilePatch,
+        updatedAt: new Date().toISOString()
+      });
+      await setDoc(doc(db, 'users', userId, 'businessProfile', 'profile'), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -381,22 +410,21 @@ export const saveCashRegisterStatusToFirestore = async (
  * Saves sale document and reduces product inventory in a single atomic batch
  */
 export const saveSaleAtomic = async (
-  businessId: string,
+  uid: string,
   sale: Sale,
   stockDeductions: Array<{ productId: string; quantity: number }>,
   newFiado?: FiadoRecord
 ): Promise<void> => {
-  const path = `businesses/${businessId}/sales/${sale.id}`;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/sales/${sale.id}`;
   const op = (async () => {
     try {
       const batch = writeBatch(db);
 
-      // 1. Add sale doc cleaned of any undefined values
-      const cleanedSale = cleanForFirestore(sale);
-      const saleRef = doc(db, 'businesses', businessId, 'sales', sale.id);
+      const cleanedSale = cleanForFirestore({ ...sale, syncStatus: 'synced' });
+      const saleRef = doc(db, 'users', userId, 'sales', sale.id);
       batch.set(saleRef, cleanedSale);
 
-      // 2. Consolidate deductions by productId to guarantee each product is decremented exactly once in the batch
       const consolidatedDeductions = new Map<string, number>();
       for (const item of stockDeductions) {
         if (item.productId && item.quantity > 0) {
@@ -406,21 +434,20 @@ export const saveSaleAtomic = async (
       }
 
       for (const [productId, quantity] of consolidatedDeductions.entries()) {
-        const prodRef = doc(db, 'businesses', businessId, 'products', productId);
+        const prodRef = doc(db, 'users', userId, 'products', productId);
         batch.update(prodRef, {
           stock: increment(-quantity)
         });
       }
 
-      // 3. Add fiado doc if payment is fiao or has remaining credit
       if (newFiado) {
         const cleanedFiado = cleanForFirestore(newFiado);
-        const fiadoRef = doc(db, 'businesses', businessId, 'fiados', newFiado.id);
+        const fiadoRef = doc(db, 'users', userId, 'fiados', newFiado.id);
         batch.set(fiadoRef, cleanedFiado);
       }
 
       await batch.commit();
-      devLog(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} guardada en Firestore.`);
+      devLog(`[PosVenecia Firestore] Venta ${sale.invoiceNumber} confirmada en users/${userId}/sales.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -433,21 +460,20 @@ export const saveSaleAtomic = async (
  * Marks sale as 'anulada' and restores stock for physical products
  */
 export const cancelSaleAtomic = async (
-  businessId: string,
+  uid: string,
   sale: Sale,
   stockRestorations: Array<{ productId: string; quantity: number }>,
   associatedFiadoId?: string
 ): Promise<void> => {
-  const path = `businesses/${businessId}/sales/${sale.id}`;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/sales/${sale.id}`;
   const op = (async () => {
     try {
       const batch = writeBatch(db);
 
-      // 1. Update sale status to anulada
-      const saleRef = doc(db, 'businesses', businessId, 'sales', sale.id);
+      const saleRef = doc(db, 'users', userId, 'sales', sale.id);
       batch.update(saleRef, { status: 'anulada' });
 
-      // 2. Restore physical product stock (consolidated by productId)
       const consolidatedRestorations = new Map<string, number>();
       for (const item of stockRestorations) {
         if (item.productId && item.quantity > 0) {
@@ -457,15 +483,14 @@ export const cancelSaleAtomic = async (
       }
 
       for (const [productId, quantity] of consolidatedRestorations.entries()) {
-        const prodRef = doc(db, 'businesses', businessId, 'products', productId);
+        const prodRef = doc(db, 'users', userId, 'products', productId);
         batch.update(prodRef, {
           stock: increment(quantity)
         });
       }
 
-      // 3. If fiado, mark it as saldado/anulado
       if (associatedFiadoId) {
-        const fiadoRef = doc(db, 'businesses', businessId, 'fiados', associatedFiadoId);
+        const fiadoRef = doc(db, 'users', userId, 'fiados', associatedFiadoId);
         batch.update(fiadoRef, {
           status: 'saldado',
           notes: '[VENTA ANULADA EN POS] Fiado cancelado automáticamente por anulación de factura.'
@@ -485,25 +510,24 @@ export const cancelSaleAtomic = async (
  * Atomic write for saveCreditNoteAtomic:
  * 1. Saves Credit Note doc
  * 2. Reincorporates returned products into stock (increment)
- * 3. Updates original sale status to 'devuelta' or partial refund
+ * 3. Updates original sale status to 'devuelta'
  */
 export const saveCreditNoteAtomic = async (
-  businessId: string,
+  uid: string,
   creditNote: CreditNote,
   stockRestorations: Array<{ productId: string; quantity: number }>,
   updatedSale?: Sale
 ): Promise<void> => {
-  const path = `businesses/${businessId}/creditNotes/${creditNote.id}`;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/creditNotes/${creditNote.id}`;
   const op = (async () => {
     try {
       const batch = writeBatch(db);
 
-      // 1. Add credit note doc
       const cleanedNC = cleanForFirestore(creditNote);
-      const ncRef = doc(db, 'businesses', businessId, 'creditNotes', creditNote.id);
+      const ncRef = doc(db, 'users', userId, 'creditNotes', creditNote.id);
       batch.set(ncRef, cleanedNC);
 
-      // 2. Reincorporate products into stock
       const consolidatedRestorations = new Map<string, number>();
       for (const item of stockRestorations) {
         if (item.productId && item.quantity > 0) {
@@ -513,21 +537,20 @@ export const saveCreditNoteAtomic = async (
       }
 
       for (const [productId, quantity] of consolidatedRestorations.entries()) {
-        const prodRef = doc(db, 'businesses', businessId, 'products', productId);
+        const prodRef = doc(db, 'users', userId, 'products', productId);
         batch.update(prodRef, {
           stock: increment(quantity)
         });
       }
 
-      // 3. Update original sale if provided
       if (updatedSale) {
         const cleanedSale = cleanForFirestore(updatedSale);
-        const saleRef = doc(db, 'businesses', businessId, 'sales', updatedSale.id);
+        const saleRef = doc(db, 'users', userId, 'sales', updatedSale.id);
         batch.set(saleRef, cleanedSale, { merge: true });
       }
 
       await batch.commit();
-      devLog(`[PosVenecia Firestore] Nota de Crédito ${creditNote.creditNoteNumber} guardada y stock reincorporado en Firestore.`);
+      devLog(`[PosVenecia Firestore] Nota de Crédito ${creditNote.creditNoteNumber} guardada y stock reincorporado.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -537,49 +560,45 @@ export const saveCreditNoteAtomic = async (
 
 /**
  * Atomic write for saveInventoryDischargeAtomic:
- * 1. Saves Inventory Discharge record (Salida por daño/merma/uso interno)
+ * 1. Saves Inventory Discharge record
  * 2. Deducts product stock in Firestore (increment(-quantity))
  * 3. Registers GastoOperativo (pérdida contable)
- * 4. Registers Expense (para libro de compras/gastos y cuadre de caja)
  */
 export const saveInventoryDischargeAtomic = async (
-  businessId: string,
+  uid: string,
   discharge: InventoryDischarge,
   associatedGastoOperativo: GastoOperativo,
   associatedExpense?: Expense
 ): Promise<void> => {
-  const path = `businesses/${businessId}/inventoryDischarges/${discharge.id}`;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/inventoryDischarges/${discharge.id}`;
   const op = (async () => {
     try {
       const batch = writeBatch(db);
 
-      // 1. Add inventory discharge record
       const cleanedDischarge = cleanForFirestore(discharge);
-      const discRef = doc(db, 'businesses', businessId, 'inventoryDischarges', discharge.id);
+      const discRef = doc(db, 'users', userId, 'inventoryDischarges', discharge.id);
       batch.set(discRef, cleanedDischarge);
 
-      // 2. Decrement physical product stock
       if (discharge.productId && discharge.quantity > 0) {
-        const prodRef = doc(db, 'businesses', businessId, 'products', discharge.productId);
+        const prodRef = doc(db, 'users', userId, 'products', discharge.productId);
         batch.update(prodRef, {
           stock: increment(-discharge.quantity)
         });
       }
 
-      // 3. Create associated Gasto Operativo
       const cleanedGasto = cleanForFirestore(associatedGastoOperativo);
-      const gastoRef = doc(db, 'businesses', businessId, 'gastosOperativos', associatedGastoOperativo.id);
+      const gastoRef = doc(db, 'users', userId, 'gastosOperativos', associatedGastoOperativo.id);
       batch.set(gastoRef, cleanedGasto);
 
-      // 4. Create associated Expense for Libro de Gastos y Cuadre de Caja if provided
       if (associatedExpense) {
         const cleanedExpense = cleanForFirestore(associatedExpense);
-        const expRef = doc(db, 'businesses', businessId, 'expenses', associatedExpense.id);
+        const expRef = doc(db, 'users', userId, 'expenses', associatedExpense.id);
         batch.set(expRef, cleanedExpense);
       }
 
       await batch.commit();
-      devLog(`[PosVenecia Firestore] Desincorporación ${discharge.dischargeNumber} (${discharge.reason}) guardada atómicamente en Firestore.`);
+      devLog(`[PosVenecia Firestore] Desincorporación ${discharge.dischargeNumber} (${discharge.reason}) guardada atómicamente.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -587,64 +606,12 @@ export const saveInventoryDischargeAtomic = async (
   return trackFirestoreWrite(op);
 };
 
-/**
- * Delete credit note from Firestore
- */
-export const deleteCreditNoteFromFirestore = async (businessId: string, id: string): Promise<void> => {
-  const path = `businesses/${businessId}/creditNotes/${id}`;
+export const deleteCreditNoteFromFirestore = async (uid: string, id: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/creditNotes/${id}`;
   const op = (async () => {
     try {
-      await deleteDoc(doc(db, 'businesses', businessId, 'creditNotes', id));
-      devLog(`[PosVenecia Firestore] Nota de crédito eliminada: ${id}`);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  })();
-  return trackFirestoreWrite(op);
-};
-
-/**
- * Delete inventory discharge from Firestore
- */
-export const deleteInventoryDischargeFromFirestore = async (businessId: string, id: string): Promise<void> => {
-  const path = `businesses/${businessId}/inventoryDischarges/${id}`;
-  const op = (async () => {
-    try {
-      await deleteDoc(doc(db, 'businesses', businessId, 'inventoryDischarges', id));
-      devLog(`[PosVenecia Firestore] Desincorporación eliminada: ${id}`);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  })();
-  return trackFirestoreWrite(op);
-};
-
-/**
- * Save or update a product in Firestore directly using setDoc with merge
- */
-export const saveProductToFirestore = async (businessId: string, product: Product): Promise<void> => {
-  const path = `businesses/${businessId}/products/${product.id}`;
-  const op = (async () => {
-    try {
-      const cleaned = cleanForFirestore(product);
-      await setDoc(doc(db, 'businesses', businessId, 'products', product.id), cleaned, { merge: true });
-      devLog(`[PosVenecia Firestore] Producto guardado: ${product.name} (${product.id})`);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  })();
-  return trackFirestoreWrite(op);
-};
-
-/**
- * Delete product from Firestore
- */
-export const deleteProductFromFirestore = async (businessId: string, productId: string): Promise<void> => {
-  const path = `businesses/${businessId}/products/${productId}`;
-  const op = (async () => {
-    try {
-      await deleteDoc(doc(db, 'businesses', businessId, 'products', productId));
-      devLog(`[PosVenecia Firestore] Producto eliminado: ${productId}`);
+      await deleteDoc(doc(db, 'users', userId, 'creditNotes', id));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -652,32 +619,26 @@ export const deleteProductFromFirestore = async (businessId: string, productId: 
   return trackFirestoreWrite(op);
 };
 
-/**
- * Adjust product stock directly
- */
-export const adjustProductStockInFirestore = async (businessId: string, productId: string, newStock: number): Promise<void> => {
-  const path = `businesses/${businessId}/products/${productId}`;
+export const deleteInventoryDischargeFromFirestore = async (uid: string, id: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/inventoryDischarges/${id}`;
   const op = (async () => {
     try {
-      const prodRef = doc(db, 'businesses', businessId, 'products', productId);
-      await setDoc(prodRef, { stock: newStock }, { merge: true });
-      devLog(`[PosVenecia Firestore] Stock ajustado a ${newStock} para producto ${productId}`);
+      await deleteDoc(doc(db, 'users', userId, 'inventoryDischarges', id));
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      handleFirestoreError(err, OperationType.DELETE, path);
     }
   })();
   return trackFirestoreWrite(op);
 };
 
-/**
- * Save or update expense in Firestore
- */
-export const saveExpenseToFirestore = async (businessId: string, expense: Expense): Promise<void> => {
-  const path = `businesses/${businessId}/expenses/${expense.id}`;
+export const saveProductToFirestore = async (uid: string, product: Product): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/products/${product.id}`;
   const op = (async () => {
     try {
-      const cleaned = cleanForFirestore(expense);
-      await setDoc(doc(db, 'businesses', businessId, 'expenses', expense.id), cleaned, { merge: true });
+      const cleaned = cleanForFirestore(product);
+      await setDoc(doc(db, 'users', userId, 'products', product.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -685,27 +646,64 @@ export const saveExpenseToFirestore = async (businessId: string, expense: Expens
   return trackFirestoreWrite(op);
 };
 
-/**
- * Atomic write for recording a purchase invoice and updating products inventory/costs in Firestore
- */
+export const deleteProductFromFirestore = async (uid: string, productId: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/products/${productId}`;
+  const op = (async () => {
+    try {
+      await deleteDoc(doc(db, 'users', userId, 'products', productId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const adjustProductStockInFirestore = async (uid: string, productId: string, newStock: number): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/products/${productId}`;
+  const op = (async () => {
+    try {
+      const prodRef = doc(db, 'users', userId, 'products', productId);
+      await setDoc(prodRef, { stock: newStock }, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const saveExpenseToFirestore = async (uid: string, expense: Expense): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/expenses/${expense.id}`;
+  const op = (async () => {
+    try {
+      const cleaned = cleanForFirestore(expense);
+      await setDoc(doc(db, 'users', userId, 'expenses', expense.id), cleaned, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
 export const saveExpenseWithInventoryAtomic = async (
-  businessId: string,
+  uid: string,
   expense: Expense,
   updatedProducts: Product[]
 ): Promise<void> => {
-  const path = `businesses/${businessId}/expenses/${expense.id}`;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/expenses/${expense.id}`;
   const op = (async () => {
     try {
       const batch = writeBatch(db);
 
-      // 1. Save expense document in Libro de Compras
       const cleanedExpense = cleanForFirestore(expense);
-      const expRef = doc(db, 'businesses', businessId, 'expenses', expense.id);
+      const expRef = doc(db, 'users', userId, 'expenses', expense.id);
       batch.set(expRef, cleanedExpense, { merge: true });
 
-      // 2. Atomically update each modified product in the catalog
       for (const prod of updatedProducts) {
-        const prodRef = doc(db, 'businesses', businessId, 'products', prod.id);
+        const prodRef = doc(db, 'users', userId, 'products', prod.id);
         const cleanedProduct = cleanForFirestore(prod);
         batch.set(prodRef, cleanedProduct, { merge: true });
       }
@@ -719,14 +717,12 @@ export const saveExpenseWithInventoryAtomic = async (
   return trackFirestoreWrite(op);
 };
 
-/**
- * Delete expense from Firestore
- */
-export const deleteExpenseFromFirestore = async (businessId: string, expenseId: string): Promise<void> => {
-  const path = `businesses/${businessId}/expenses/${expenseId}`;
+export const deleteExpenseFromFirestore = async (uid: string, expenseId: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/expenses/${expenseId}`;
   const op = (async () => {
     try {
-      await deleteDoc(doc(db, 'businesses', businessId, 'expenses', expenseId));
+      await deleteDoc(doc(db, 'users', userId, 'expenses', expenseId));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -734,15 +730,13 @@ export const deleteExpenseFromFirestore = async (businessId: string, expenseId: 
   return trackFirestoreWrite(op);
 };
 
-/**
- * Save or update Fiado in Firestore
- */
-export const saveFiadoToFirestore = async (businessId: string, fiado: FiadoRecord): Promise<void> => {
-  const path = `businesses/${businessId}/fiados/${fiado.id}`;
+export const saveFiadoToFirestore = async (uid: string, fiado: FiadoRecord): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/fiados/${fiado.id}`;
   const op = (async () => {
     try {
       const cleaned = cleanForFirestore(fiado);
-      await setDoc(doc(db, 'businesses', businessId, 'fiados', fiado.id), cleaned, { merge: true });
+      await setDoc(doc(db, 'users', userId, 'fiados', fiado.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -750,15 +744,13 @@ export const saveFiadoToFirestore = async (businessId: string, fiado: FiadoRecor
   return trackFirestoreWrite(op);
 };
 
-/**
- * Save or update Client in Firestore
- */
-export const saveClientToFirestore = async (businessId: string, client: Client): Promise<void> => {
-  const path = `businesses/${businessId}/clients/${client.id}`;
+export const saveClientToFirestore = async (uid: string, client: Client): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/clients/${client.id}`;
   const op = (async () => {
     try {
       const cleaned = cleanForFirestore(client);
-      await setDoc(doc(db, 'businesses', businessId, 'clients', client.id), cleaned, { merge: true });
+      await setDoc(doc(db, 'users', userId, 'clients', client.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -766,14 +758,12 @@ export const saveClientToFirestore = async (businessId: string, client: Client):
   return trackFirestoreWrite(op);
 };
 
-/**
- * Delete Client from Firestore
- */
-export const deleteClientFromFirestore = async (businessId: string, clientId: string): Promise<void> => {
-  const path = `businesses/${businessId}/clients/${clientId}`;
+export const deleteClientFromFirestore = async (uid: string, clientId: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/clients/${clientId}`;
   const op = (async () => {
     try {
-      await deleteDoc(doc(db, 'businesses', businessId, 'clients', clientId));
+      await deleteDoc(doc(db, 'users', userId, 'clients', clientId));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -781,15 +771,13 @@ export const deleteClientFromFirestore = async (businessId: string, clientId: st
   return trackFirestoreWrite(op);
 };
 
-/**
- * Save or update Cuenta Por Pagar in Firestore
- */
-export const saveCuentaPorPagarToFirestore = async (businessId: string, cuenta: CuentaPorPagar): Promise<void> => {
-  const path = `businesses/${businessId}/cuentasPorPagar/${cuenta.id}`;
+export const saveCuentaPorPagarToFirestore = async (uid: string, cuenta: CuentaPorPagar): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/cuentasPorPagar/${cuenta.id}`;
   const op = (async () => {
     try {
       const cleaned = cleanForFirestore(cuenta);
-      await setDoc(doc(db, 'businesses', businessId, 'cuentasPorPagar', cuenta.id), cleaned, { merge: true });
+      await setDoc(doc(db, 'users', userId, 'cuentasPorPagar', cuenta.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -797,28 +785,25 @@ export const saveCuentaPorPagarToFirestore = async (businessId: string, cuenta: 
   return trackFirestoreWrite(op);
 };
 
-/**
- * Atomic write for saving a CuentaPorPagar abono AND its cash outflow Expense in Firestore
- */
 export const saveCuentaWithCashOutflowAtomic = async (
-  businessId: string,
+  uid: string,
   cuenta: CuentaPorPagar,
   cashExpense: Expense
 ): Promise<void> => {
-  const path = `businesses/${businessId}/cuentasPorPagar/${cuenta.id}`;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/cuentasPorPagar/${cuenta.id}`;
   const op = (async () => {
     try {
       const batch = writeBatch(db);
       const cleanedCuenta = cleanForFirestore(cuenta);
-      const cuentaRef = doc(db, 'businesses', businessId, 'cuentasPorPagar', cuenta.id);
+      const cuentaRef = doc(db, 'users', userId, 'cuentasPorPagar', cuenta.id);
       batch.set(cuentaRef, cleanedCuenta, { merge: true });
 
       const cleanedExp = cleanForFirestore(cashExpense);
-      const expRef = doc(db, 'businesses', businessId, 'expenses', cashExpense.id);
+      const expRef = doc(db, 'users', userId, 'expenses', cashExpense.id);
       batch.set(expRef, cleanedExp, { merge: true });
 
       await batch.commit();
-      devLog(`[PosVenecia Firestore] Abono CuentaPorPagar ${cuenta.invoiceNumber} y egreso de caja guardados atómicamente.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -826,14 +811,12 @@ export const saveCuentaWithCashOutflowAtomic = async (
   return trackFirestoreWrite(op);
 };
 
-/**
- * Delete Cuenta Por Pagar from Firestore
- */
-export const deleteCuentaPorPagarFromFirestore = async (businessId: string, cuentaId: string): Promise<void> => {
-  const path = `businesses/${businessId}/cuentasPorPagar/${cuentaId}`;
+export const deleteCuentaPorPagarFromFirestore = async (uid: string, cuentaId: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/cuentasPorPagar/${cuentaId}`;
   const op = (async () => {
     try {
-      await deleteDoc(doc(db, 'businesses', businessId, 'cuentasPorPagar', cuentaId));
+      await deleteDoc(doc(db, 'users', userId, 'cuentasPorPagar', cuentaId));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -841,15 +824,13 @@ export const deleteCuentaPorPagarFromFirestore = async (businessId: string, cuen
   return trackFirestoreWrite(op);
 };
 
-/**
- * Save or update Gasto Operativo in Firestore
- */
-export const saveGastoOperativoToFirestore = async (businessId: string, gasto: GastoOperativo): Promise<void> => {
-  const path = `businesses/${businessId}/gastosOperativos/${gasto.id}`;
+export const saveGastoOperativoToFirestore = async (uid: string, gasto: GastoOperativo): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/gastosOperativos/${gasto.id}`;
   const op = (async () => {
     try {
       const cleaned = cleanForFirestore(gasto);
-      await setDoc(doc(db, 'businesses', businessId, 'gastosOperativos', gasto.id), cleaned, { merge: true });
+      await setDoc(doc(db, 'users', userId, 'gastosOperativos', gasto.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -857,30 +838,27 @@ export const saveGastoOperativoToFirestore = async (businessId: string, gasto: G
   return trackFirestoreWrite(op);
 };
 
-/**
- * Atomic write for saving a GastoOperativo (or partial abono) AND its cash outflow Expense in Firestore
- */
 export const saveGastoWithCashOutflowAtomic = async (
-  businessId: string,
+  uid: string,
   gasto: GastoOperativo,
   cashExpense?: Expense
 ): Promise<void> => {
-  const path = `businesses/${businessId}/gastosOperativos/${gasto.id}`;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/gastosOperativos/${gasto.id}`;
   const op = (async () => {
     try {
       const batch = writeBatch(db);
       const cleanedGasto = cleanForFirestore(gasto);
-      const gastoRef = doc(db, 'businesses', businessId, 'gastosOperativos', gasto.id);
+      const gastoRef = doc(db, 'users', userId, 'gastosOperativos', gasto.id);
       batch.set(gastoRef, cleanedGasto, { merge: true });
 
       if (cashExpense) {
         const cleanedExp = cleanForFirestore(cashExpense);
-        const expRef = doc(db, 'businesses', businessId, 'expenses', cashExpense.id);
+        const expRef = doc(db, 'users', userId, 'expenses', cashExpense.id);
         batch.set(expRef, cleanedExp, { merge: true });
       }
 
       await batch.commit();
-      devLog(`[PosVenecia Firestore] GastoOperativo ${gasto.id} y flujo de caja guardados atómicamente.`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -888,14 +866,12 @@ export const saveGastoWithCashOutflowAtomic = async (
   return trackFirestoreWrite(op);
 };
 
-/**
- * Delete Gasto Operativo from Firestore
- */
-export const deleteGastoOperativoFromFirestore = async (businessId: string, gastoId: string): Promise<void> => {
-  const path = `businesses/${businessId}/gastosOperativos/${gastoId}`;
+export const deleteGastoOperativoFromFirestore = async (uid: string, gastoId: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/gastosOperativos/${gastoId}`;
   const op = (async () => {
     try {
-      await deleteDoc(doc(db, 'businesses', businessId, 'gastosOperativos', gastoId));
+      await deleteDoc(doc(db, 'users', userId, 'gastosOperativos', gastoId));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -903,14 +879,12 @@ export const deleteGastoOperativoFromFirestore = async (businessId: string, gast
   return trackFirestoreWrite(op);
 };
 
-/**
- * Delete Sale from Firestore
- */
-export const deleteSaleFromFirestore = async (businessId: string, saleId: string): Promise<void> => {
-  const path = `businesses/${businessId}/sales/${saleId}`;
+export const deleteSaleFromFirestore = async (uid: string, saleId: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/sales/${saleId}`;
   const op = (async () => {
     try {
-      await deleteDoc(doc(db, 'businesses', businessId, 'sales', saleId));
+      await deleteDoc(doc(db, 'users', userId, 'sales', saleId));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -918,15 +892,13 @@ export const deleteSaleFromFirestore = async (businessId: string, saleId: string
   return trackFirestoreWrite(op);
 };
 
-/**
- * Save Cash Shift to history in Firestore
- */
-export const saveCashShiftToFirestore = async (businessId: string, shift: CashShift): Promise<void> => {
-  const path = `businesses/${businessId}/cashShiftHistory/${shift.id}`;
+export const saveCashShiftToFirestore = async (uid: string, shift: CashShift): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/cashShiftHistory/${shift.id}`;
   const op = (async () => {
     try {
       const cleaned = cleanForFirestore(shift);
-      await setDoc(doc(db, 'businesses', businessId, 'cashShiftHistory', shift.id), cleaned, { merge: true });
+      await setDoc(doc(db, 'users', userId, 'cashShiftHistory', shift.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -935,96 +907,11 @@ export const saveCashShiftToFirestore = async (businessId: string, shift: CashSh
 };
 
 /**
- * Save store metadata (rates, business profile, active shift state)
+ * Uploads an entire JSON backup/restore payload atomically (chunked batches) directly to Cloud Firestore under users/{uid}/...
  */
-export const saveStoreMetadataToFirestore = async (
-  businessId: string,
-  metadata: Partial<StoreMetadataDoc>
-): Promise<void> => {
-  const path = `businesses/${businessId}/metadata/store`;
-  const op = (async () => {
-    try {
-      const cleaned = cleanForFirestore({
-        ...metadata,
-        updatedAt: new Date().toISOString()
-      });
-      await setDoc(doc(db, 'businesses', businessId, 'metadata', 'store'), cleaned, { merge: true });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  })();
-  return trackFirestoreWrite(op);
-};
-
-/**
- * Flushes all pending sync queue items from IndexedDB into Cloud Firestore.
- * Used prior to logout to guarantee no transaction is lost!
- */
-export const flushPendingQueueToFirestore = async (
-  businessId: string
-): Promise<{ flushedCount: number }> => {
-  const pendingItems = await getPendingSyncQueue();
-  if (pendingItems.length === 0) return { flushedCount: 0 };
-
-  devLog(`[PosVenecia Sync] Vaciando ${pendingItems.length} transacciones pendientes hacia Cloud Firestore...`);
-  const syncedIds: string[] = [];
-
-  for (const item of pendingItems) {
-    try {
-      if (item.action === 'create_sale' && item.payload) {
-        const sale = item.payload as Sale;
-        // Verify if the sale was already saved in Firestore to prevent duplicate inventory decrement
-        const saleRef = doc(db, 'businesses', businessId, 'sales', sale.id);
-        const existingSnap = await getDoc(saleRef);
-        if (existingSnap.exists()) {
-          devLog(`[PosVenecia Sync] Venta ${sale.invoiceNumber} ya existía en Firestore. Omitiendo duplicación de inventario.`);
-          syncedIds.push(item.id);
-          continue;
-        }
-
-        const deductionMap = new Map<string, number>();
-        (sale.items || []).forEach(i => {
-          if (!i.product.isService && i.product.itemType !== 'servicio' && i.product.id) {
-            const cur = deductionMap.get(i.product.id) || 0;
-            deductionMap.set(i.product.id, cur + i.quantity);
-          }
-        });
-        const stockDeductions = Array.from(deductionMap.entries()).map(([productId, quantity]) => ({
-          productId,
-          quantity
-        }));
-        await saveSaleAtomic(businessId, sale, stockDeductions);
-        syncedIds.push(item.id);
-      } else if (item.action === 'create_expense' && item.payload) {
-        await saveExpenseToFirestore(businessId, item.payload as Expense);
-        syncedIds.push(item.id);
-      } else if (item.action === 'update_product' && item.payload) {
-        await saveProductToFirestore(businessId, item.payload as Product);
-        syncedIds.push(item.id);
-      } else if (item.action === 'close_shift' && item.payload) {
-        await saveCashShiftToFirestore(businessId, item.payload as CashShift);
-        syncedIds.push(item.id);
-      }
-    } catch (err) {
-      console.error(`[PosVenecia Sync] Error al sincronizar item ${item.id} (${item.action}):`, err);
-    }
-  }
-
-  if (syncedIds.length > 0) {
-    await batchClearSyncQueue(syncedIds);
-    devLog(`[PosVenecia Sync] ${syncedIds.length} transacciones confirmadas en Firestore.`);
-  }
-
-  return { flushedCount: syncedIds.length };
-};
-
-/**
- * Migration helper: If Firestore is clean/empty for a newly connected user,
- * populate it with their existing local/IndexedDB catalog so they never lose any data!
- */
-export const checkAndMigrateLocalDataToFirestore = async (
-  businessId: string,
-  localData: {
+export const restoreStoreDataToFirestore = async (
+  uid: string,
+  data: {
     products: Product[];
     sales: Sale[];
     expenses: Expense[];
@@ -1036,75 +923,86 @@ export const checkAndMigrateLocalDataToFirestore = async (
     businessInfo: BusinessInfo;
     bcvRate: number;
     bcvEuroRate: number;
+    customCategories?: string[];
     cashShift?: CashShift | null;
   }
-): Promise<boolean> => {
-  try {
-    const productsSnap = await getDocs(collection(db, 'businesses', businessId, 'products'));
-    if (!productsSnap.empty) {
-      // Remote already has products, do not overwrite
-      return false;
-    }
-
-    if (localData.products.length === 0 && localData.sales.length === 0) {
-      return false;
-    }
-
-    devLog('[PosVenecia Firestore] Migrando catálogo local a Firestore en la nube...');
-
-    // Batch upload products in chunks of 400
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const writeCollection = async (colName: string, docs: Array<{ id: string }>) => {
     const chunkSize = 400;
-    for (let i = 0; i < localData.products.length; i += chunkSize) {
-      const chunk = localData.products.slice(i, i + chunkSize);
+    for (let i = 0; i < docs.length; i += chunkSize) {
+      const chunk = docs.slice(i, i + chunkSize);
       const batch = writeBatch(db);
-      for (const p of chunk) {
-        batch.set(doc(db, 'businesses', businessId, 'products', p.id), cleanForFirestore(p));
+      for (const item of chunk) {
+        if (!item?.id) continue;
+        batch.set(doc(db, 'users', userId, colName, item.id), cleanForFirestore(item));
       }
       await batch.commit();
     }
+  };
 
-    // Batch upload clients
-    if (localData.clients.length > 0) {
-      const batch = writeBatch(db);
-      for (const c of localData.clients) {
-        batch.set(doc(db, 'businesses', businessId, 'clients', c.id), cleanForFirestore(c));
-      }
-      await batch.commit();
-    }
+  await writeCollection('products', data.products || []);
+  await writeCollection('sales', data.sales || []);
+  await writeCollection('expenses', data.expenses || []);
+  await writeCollection('fiados', data.fiados || []);
+  await writeCollection('clients', data.clients || []);
+  await writeCollection('cuentasPorPagar', data.cuentasPorPagar || []);
+  await writeCollection('gastosOperativos', data.gastosOperativos || []);
+  await writeCollection('cashShiftHistory', data.cashShiftHistory || []);
 
-    // Batch upload sales
-    if (localData.sales.length > 0) {
-      for (let i = 0; i < localData.sales.length; i += chunkSize) {
-        const chunk = localData.sales.slice(i, i + chunkSize);
+  await saveBusinessProfileToFirestore(userId, {
+    businessInfo: data.businessInfo,
+    bcvRate: data.bcvRate,
+    bcvEuroRate: data.bcvEuroRate,
+    customCategories: data.customCategories || []
+  });
+
+  await saveCashRegisterStatusToFirestore(userId, {
+    isOpen: Boolean(data.cashShift?.isOpen),
+    activeShift: data.cashShift || null,
+    updatedAt: new Date().toISOString(),
+    updatedBy: data.cashShift?.openedBy || 'Restauración'
+  });
+};
+
+/**
+ * Deletes all transactional collections under users/{uid}/... for Factory Reset (Arrancar de 0).
+ * Preserves businessProfile (nombre, RIF, logo) unless overwritten.
+ */
+export const clearUserFirestoreCollections = async (uid: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const collectionsToClear = [
+    'products',
+    'sales',
+    'expenses',
+    'fiados',
+    'clients',
+    'cuentasPorPagar',
+    'gastosOperativos',
+    'cashShiftHistory',
+    'creditNotes',
+    'inventoryDischarges'
+  ];
+
+  const op = (async () => {
+    for (const colName of collectionsToClear) {
+      const snap = await getDocs(collection(db, 'users', userId, colName));
+      if (snap.empty) continue;
+      const docs = snap.docs;
+      const chunkSize = 400;
+      for (let i = 0; i < docs.length; i += chunkSize) {
         const batch = writeBatch(db);
-        for (const s of chunk) {
-          batch.set(doc(db, 'businesses', businessId, 'sales', s.id), cleanForFirestore(s));
-        }
+        docs.slice(i, i + chunkSize).forEach((d) => batch.delete(d.ref));
         await batch.commit();
       }
     }
-
-    // Metadata
-    await saveStoreMetadataToFirestore(businessId, {
-      businessInfo: localData.businessInfo,
-      bcvRate: localData.bcvRate,
-      bcvEuroRate: localData.bcvEuroRate,
-      activeCashShift: localData.cashShift
+    await saveCashRegisterStatusToFirestore(userId, {
+      isOpen: false,
+      activeShift: null,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'Reinicio de Fábrica'
     });
+  })();
 
-    if (localData.cashShift) {
-      await saveCashRegisterStatusToFirestore(businessId, {
-        isOpen: Boolean(localData.cashShift.isOpen),
-        activeShift: localData.cashShift,
-        updatedAt: new Date().toISOString(),
-        updatedBy: localData.cashShift.openedBy || 'Administrador'
-      });
-    }
-
-    devLog('[PosVenecia Firestore] Migración a Firestore completada con éxito.');
-    return true;
-  } catch (err) {
-    console.error('Error during Firestore migration:', err);
-    return false;
-  }
+  return trackFirestoreWrite(op);
 };
