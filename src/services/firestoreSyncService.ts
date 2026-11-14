@@ -10,6 +10,7 @@ import {
   query,
   where,
   orderBy,
+  deleteField,
   Unsubscribe
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, auth } from '../config/firebaseConfig';
@@ -901,7 +902,9 @@ export const saveProductToFirestore = async (uid: string, product: Product): Pro
   const path = `users/${userId}/products/${product.id}`;
   const op = (async () => {
     try {
-      const cleaned = cleanForFirestore(product);
+      const cleaned = cleanForFirestore(product) as unknown as Record<string, unknown>;
+      if (product.priceBsFixed === undefined) cleaned.priceBsFixed = deleteField();
+      if (product.costBsFixed === undefined) cleaned.costBsFixed = deleteField();
       await setDoc(doc(db, 'users', userId, 'products', product.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
@@ -920,7 +923,9 @@ export const saveProductWithKardexAtomic = async (
   const op = (async () => {
     try {
       const batch = writeBatch(db);
-      const cleaned = cleanForFirestore(product);
+      const cleaned = cleanForFirestore(product) as unknown as Record<string, unknown>;
+      if (product.priceBsFixed === undefined) cleaned.priceBsFixed = deleteField();
+      if (product.costBsFixed === undefined) cleaned.costBsFixed = deleteField();
       batch.set(doc(db, 'users', userId, 'products', product.id), cleaned, { merge: true });
       if (kardexEntry) {
         batch.set(doc(db, 'users', userId, 'kardex', kardexEntry.id), cleanForFirestore(kardexEntry));

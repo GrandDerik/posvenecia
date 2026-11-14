@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Product, KardexMovementType } from '../types';
-import { formatBs, formatUSD, getLocalDateStr, round2 } from '../utils/exportUtils';
+import { formatBs, formatUSD, getLocalDateStr, round2, round6, getProductPriceBs, getProductPriceUSD } from '../utils/exportUtils';
 
 export const ProductsView: React.FC = () => {
   const { 
@@ -67,6 +67,10 @@ export const ProductsView: React.FC = () => {
   const [costUSD, setCostUSD] = useState('');
   const [costBs, setCostBs] = useState('');
   const [activeCurrencyInput, setActiveCurrencyInput] = useState<'USD' | 'Bs'>(baseCurrency === 'VED' ? 'Bs' : 'USD');
+  const [priceSourceCurrency, setPriceSourceCurrency] = useState<'USD' | 'Bs'>(baseCurrency === 'VED' ? 'Bs' : 'USD');
+  const [costSourceCurrency, setCostSourceCurrency] = useState<'USD' | 'Bs'>(baseCurrency === 'VED' ? 'Bs' : 'USD');
+
+  const safeBcvRate = typeof bcvRate === 'number' && Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 1;
 
   // Stock & specs
   const [stock, setStock] = useState('');
@@ -91,6 +95,7 @@ export const ProductsView: React.FC = () => {
   });
 
   const handleOpenAdd = () => {
+    const defaultCurr: 'USD' | 'Bs' = baseCurrency === 'VED' ? 'Bs' : 'USD';
     setEditingProduct(null);
     setCode(''); // Blanco por defecto según solicitud del usuario para escanear o escribir directo
     setName('');
@@ -101,7 +106,9 @@ export const ProductsView: React.FC = () => {
     setCostBs('');
     setPriceUSD('');
     setPriceBs('');
-    setActiveCurrencyInput(baseCurrency === 'VED' ? 'Bs' : 'USD');
+    setActiveCurrencyInput(defaultCurr);
+    setPriceSourceCurrency(defaultCurr);
+    setCostSourceCurrency(defaultCurr);
     setStock('20');
     setMinStock('5');
     setUnit('unidad');
@@ -113,17 +120,44 @@ export const ProductsView: React.FC = () => {
   };
 
   const handleOpenEdit = (p: Product) => {
+    const isPriceBs = p.priceCurrency === 'Bs' || (p.priceCurrency === undefined && typeof p.priceBsFixed === 'number' && p.priceBsFixed > 0);
+    const isCostBs = p.costCurrency === 'Bs' || (p.costCurrency === undefined && typeof p.costBsFixed === 'number' && p.costBsFixed > 0);
+    const defaultTab: 'USD' | 'Bs' = isPriceBs
+      ? 'Bs'
+      : (p.priceCurrency === 'USD' ? 'USD' : (baseCurrency === 'VED' ? 'Bs' : 'USD'));
+
     setEditingProduct(p);
     setCode(p.code);
     setName(p.name);
     setCategory(p.category);
     setIsCreatingCategory(false);
     setNewCategoryInput('');
-    setCostUSD(p.costUSD ? p.costUSD.toString() : '');
-    setCostBs(p.costUSD ? (p.costUSD * bcvRate).toFixed(2) : '');
-    setPriceUSD(p.priceUSD ? p.priceUSD.toString() : '');
-    setPriceBs(p.priceUSD ? (p.priceUSD * bcvRate).toFixed(2) : '');
-    setActiveCurrencyInput(baseCurrency === 'VED' ? 'Bs' : 'USD');
+
+    if (isCostBs) {
+      const exactCostBs = (typeof p.costBsFixed === 'number' && p.costBsFixed > 0)
+        ? round2(p.costBsFixed)
+        : round2((p.costUSD || 0) * safeBcvRate);
+      setCostBs(exactCostBs > 0 ? exactCostBs.toString() : '');
+      setCostUSD(exactCostBs > 0 ? (exactCostBs / safeBcvRate).toFixed(2) : '');
+    } else {
+      setCostUSD(p.costUSD ? p.costUSD.toString() : '');
+      setCostBs(p.costUSD ? round2(p.costUSD * safeBcvRate).toFixed(2) : '');
+    }
+
+    if (isPriceBs) {
+      const exactPriceBs = (typeof p.priceBsFixed === 'number' && p.priceBsFixed > 0)
+        ? round2(p.priceBsFixed)
+        : round2((p.priceUSD || 0) * safeBcvRate);
+      setPriceBs(exactPriceBs > 0 ? exactPriceBs.toString() : '');
+      setPriceUSD(exactPriceBs > 0 ? (exactPriceBs / safeBcvRate).toFixed(2) : '');
+    } else {
+      setPriceUSD(p.priceUSD ? p.priceUSD.toString() : '');
+      setPriceBs(p.priceUSD ? round2(p.priceUSD * safeBcvRate).toFixed(2) : '');
+    }
+
+    setPriceSourceCurrency(isPriceBs ? 'Bs' : 'USD');
+    setCostSourceCurrency(isCostBs ? 'Bs' : 'USD');
+    setActiveCurrencyInput(defaultTab);
     setStock(p.stock.toString());
     setMinStock(p.minStock.toString());
     setUnit(p.unit);
@@ -151,42 +185,46 @@ export const ProductsView: React.FC = () => {
     }
   };
 
-  // Price changes sync
+  // Price changes sync (source-preserving: never overwrites entered Bs via round-trip)
   const handlePriceUSDChange = (val: string) => {
+    setPriceSourceCurrency('USD');
     setPriceUSD(val);
     const num = parseFloat(val);
     if (!isNaN(num)) {
-      setPriceBs((num * bcvRate).toFixed(2));
+      setPriceBs(round2(num * safeBcvRate).toFixed(2));
     } else {
       setPriceBs('');
     }
   };
 
   const handlePriceBsChange = (val: string) => {
+    setPriceSourceCurrency('Bs');
     setPriceBs(val);
     const num = parseFloat(val);
-    if (!isNaN(num) && bcvRate > 0) {
-      setPriceUSD((num / bcvRate).toFixed(2));
+    if (!isNaN(num) && safeBcvRate > 0) {
+      setPriceUSD((num / safeBcvRate).toFixed(2));
     } else {
       setPriceUSD('');
     }
   };
 
   const handleCostUSDChange = (val: string) => {
+    setCostSourceCurrency('USD');
     setCostUSD(val);
     const num = parseFloat(val);
     if (!isNaN(num)) {
-      setCostBs((num * bcvRate).toFixed(2));
+      setCostBs(round2(num * safeBcvRate).toFixed(2));
     } else {
       setCostBs('');
     }
   };
 
   const handleCostBsChange = (val: string) => {
+    setCostSourceCurrency('Bs');
     setCostBs(val);
     const num = parseFloat(val);
-    if (!isNaN(num) && bcvRate > 0) {
-      setCostUSD((num / bcvRate).toFixed(2));
+    if (!isNaN(num) && safeBcvRate > 0) {
+      setCostUSD((num / safeBcvRate).toFixed(2));
     } else {
       setCostUSD('');
     }
@@ -204,8 +242,23 @@ export const ProductsView: React.FC = () => {
       finalCategory = 'Servicios';
     }
 
-    const calculatedPriceUSD = parseFloat(priceUSD) || 0;
-    const calculatedCostUSD = parseFloat(costUSD) || 0;
+    const parsedPriceBs = parseFloat(priceBs);
+    const parsedPriceUSD = parseFloat(priceUSD);
+    const finalPriceBsFixed = priceSourceCurrency === 'Bs' && !isNaN(parsedPriceBs) && parsedPriceBs > 0
+      ? round2(parsedPriceBs)
+      : undefined;
+    const calculatedPriceUSD = priceSourceCurrency === 'Bs'
+      ? (finalPriceBsFixed && safeBcvRate > 0 ? round6(finalPriceBsFixed / safeBcvRate) : 0)
+      : (!isNaN(parsedPriceUSD) && parsedPriceUSD > 0 ? round6(parsedPriceUSD) : 0);
+
+    const parsedCostBs = parseFloat(costBs);
+    const parsedCostUSD = parseFloat(costUSD);
+    const finalCostBsFixed = costSourceCurrency === 'Bs' && !isNaN(parsedCostBs) && parsedCostBs > 0
+      ? round2(parsedCostBs)
+      : undefined;
+    const calculatedCostUSD = costSourceCurrency === 'Bs'
+      ? (finalCostBsFixed && safeBcvRate > 0 ? round6(finalCostBsFixed / safeBcvRate) : 0)
+      : (!isNaN(parsedCostUSD) && parsedCostUSD > 0 ? round6(parsedCostUSD) : 0);
 
     const prodData: Omit<Product, 'id'> = {
       code: code.trim() || (isService ? 'SRV-' + Math.floor(1000 + Math.random() * 9000) : '759' + Date.now().toString().slice(-9)),
@@ -213,7 +266,10 @@ export const ProductsView: React.FC = () => {
       category: finalCategory,
       costUSD: calculatedCostUSD,
       priceUSD: calculatedPriceUSD,
-      priceBsFixed: baseCurrency === 'VED' ? (parseFloat(priceBs) || undefined) : undefined,
+      priceBsFixed: finalPriceBsFixed,
+      costBsFixed: finalCostBsFixed,
+      priceCurrency: priceSourceCurrency,
+      costCurrency: costSourceCurrency,
       stock: isService ? 999999 : (parseInt(stock) || 0),
       minStock: isService ? 0 : (parseInt(minStock) || 5),
       unit: unit.trim() || (isService ? 'servicio' : 'unidad'),
@@ -226,6 +282,8 @@ export const ProductsView: React.FC = () => {
 
     if (editingProduct) {
       updateProduct({
+        ...(editingProduct.batches ? { batches: editingProduct.batches } : {}),
+        ...(editingProduct.profitMarginPercent !== undefined ? { profitMarginPercent: editingProduct.profitMarginPercent } : {}),
         ...prodData,
         id: editingProduct.id
       });
@@ -243,9 +301,9 @@ export const ProductsView: React.FC = () => {
       'Código de Barra': p.code,
       'Nombre': p.name,
       'Categoría': p.category,
-      'Costo USD': p.costUSD,
-      'Precio USD': p.priceUSD,
-      'Precio Bs (Tasa BCV)': Number((p.priceUSD * bcvRate).toFixed(2)),
+      'Costo USD': round2(p.costUSD),
+      'Precio USD': round2(getProductPriceUSD(p, bcvRate)),
+      'Precio Bs (Tasa BCV)': getProductPriceBs(p, bcvRate),
       'Stock Actual': (p.isService || p.itemType === 'servicio') ? 'Ilimitado' : p.stock,
       'Stock Mínimo': (p.isService || p.itemType === 'servicio') ? '-' : p.minStock,
       'Unidad': p.unit,
@@ -488,7 +546,8 @@ export const ProductsView: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((prod) => {
-                const priceBsVal = prod.priceUSD * bcvRate;
+                const priceBsVal = getProductPriceBs(prod, bcvRate);
+                const priceUSDVal = getProductPriceUSD(prod, bcvRate);
                 const isService = Boolean(prod.isService || prod.itemType === 'servicio');
                 const isLow = !isService && prod.stock <= prod.minStock;
 
@@ -552,13 +611,13 @@ export const ProductsView: React.FC = () => {
                     <td className="py-3 px-4 text-right font-mono-numbers font-black text-[#0B1528] text-sm">
                       {baseCurrency === 'VED' 
                         ? `Bs. ${formatBs(priceBsVal)}` 
-                        : `$${formatUSD(prod.priceUSD)}`}
+                        : `$${formatUSD(priceUSDVal)}`}
                     </td>
 
                     {/* Secondary Converted Price */}
                     <td className="py-3 px-4 text-right font-mono-numbers font-bold text-blue-700 text-sm">
                       {baseCurrency === 'VED' 
-                        ? `$${formatUSD(prod.priceUSD)}` 
+                        ? `$${formatUSD(priceUSDVal)}` 
                         : `Bs. ${formatBs(priceBsVal)}`}
                     </td>
 
@@ -1159,8 +1218,8 @@ export const ProductsView: React.FC = () => {
                     )}
                     <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">
                       {activeCurrencyInput === 'USD' 
-                        ? `≈ Bs. ${formatBs((parseFloat(priceUSD) || 0) * bcvRate)}`
-                        : `≈ $${formatUSD(parseFloat(priceUSD) || 0)} USD`}
+                        ? `≈ Bs. ${formatBs(priceSourceCurrency === 'Bs' && (parseFloat(priceBs) || 0) > 0 ? round2(parseFloat(priceBs) || 0) : round2((parseFloat(priceUSD) || 0) * safeBcvRate))} (informativo)`
+                        : `≈ $${formatUSD((parseFloat(priceBs) || 0) / safeBcvRate)} USD (informativo)`}
                     </span>
                   </div>
 
@@ -1194,9 +1253,15 @@ export const ProductsView: React.FC = () => {
                       </div>
                     )}
                     <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">
-                      Margen: {priceUSD && costUSD && parseFloat(priceUSD) > 0 
-                        ? `${Math.round(((parseFloat(priceUSD) - parseFloat(costUSD)) / parseFloat(priceUSD)) * 100)}%` 
-                        : '-'}
+                      {(() => {
+                        const pRef = activeCurrencyInput === 'Bs' ? (parseFloat(priceBs) || 0) : (parseFloat(priceUSD) || 0);
+                        const cRef = activeCurrencyInput === 'Bs' ? (parseFloat(costBs) || 0) : (parseFloat(costUSD) || 0);
+                        const marginStr = pRef > 0 && cRef > 0 ? `${Math.round(((pRef - cRef) / pRef) * 100)}%` : '-';
+                        const equivStr = activeCurrencyInput === 'Bs' && cRef > 0
+                          ? ` • ≈ $${formatUSD(cRef / safeBcvRate)}`
+                          : (activeCurrencyInput === 'USD' && cRef > 0 ? ` • ≈ Bs. ${formatBs(round2(cRef * safeBcvRate))}` : '');
+                        return `Margen: ${marginStr}${equivStr}`;
+                      })()}
                     </span>
                   </div>
                 </div>

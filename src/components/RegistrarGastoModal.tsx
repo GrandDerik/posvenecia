@@ -18,7 +18,7 @@ import {
   Info,
   ArrowRight
 } from 'lucide-react';
-import { formatBs, formatUSD, round2, getLocalDateStr } from '../utils/exportUtils';
+import { formatBs, formatUSD, round2, round6, safeDiv, getLocalDateStr } from '../utils/exportUtils';
 import { Expense, ExpenseItem, PurchaseCostStrategy } from '../types';
 
 interface RegistrarGastoModalProps {
@@ -65,6 +65,9 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
 
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products]);
   const safeBcvRate = typeof bcvRate === 'number' && !isNaN(bcvRate) && bcvRate > 0 ? bcvRate : 1;
+  const effectiveBcvRate = useMemo(() => {
+    return editingExpense?.bcvRate && editingExpense.bcvRate > 0 ? editingExpense.bcvRate : safeBcvRate;
+  }, [editingExpense, safeBcvRate]);
 
   // Filter products for dropdown
   const filteredProducts = useMemo(() => {
@@ -89,9 +92,18 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
     if (prod) {
       const prodCost = Number(prod.costUSD) || 0;
       const prodPrice = Number(prod.priceUSD) || 0;
-      const defaultCost = prodCost > 0 ? prodCost.toString() : '';
-      setItemCostInput(defaultCost);
-      setItemCostCurrency('USD');
+      const isCostBs = prod.costCurrency === 'Bs' || (typeof prod.costBsFixed === 'number' && prod.costBsFixed > 0);
+      if (isCostBs) {
+        const defaultCostBs = typeof prod.costBsFixed === 'number' && prod.costBsFixed > 0
+          ? round2(prod.costBsFixed)
+          : round2(prodCost * effectiveBcvRate);
+        setItemCostInput(defaultCostBs > 0 ? defaultCostBs.toString() : '');
+        setItemCostCurrency('Bs');
+      } else {
+        const defaultCost = prodCost > 0 ? prodCost.toString() : '';
+        setItemCostInput(defaultCost);
+        setItemCostCurrency('USD');
+      }
 
       // Calculate suggested new price
       const unitCost = prodCost > 0 ? prodCost : (prodPrice * 0.7);
@@ -112,7 +124,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const handleCostChange = (val: string, curr: 'USD' | 'Bs' = itemCostCurrency) => {
     setItemCostInput(val);
     const numCost = parseFloat(val) || 0;
-    const costUSD = curr === 'USD' ? numCost : (safeBcvRate > 0 ? numCost / safeBcvRate : 0);
+    const costUSD = curr === 'USD' ? numCost : safeDiv(numCost, effectiveBcvRate, 0);
     
     if (selectedProduct && costUSD > 0) {
       const prodCost = Number(selectedProduct.costUSD) || 0;
@@ -136,8 +148,19 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
     const rawCost = parseFloat(itemCostInput);
     if (isNaN(rawCost) || rawCost < 0) return;
 
-    const unitCostUSD = itemCostCurrency === 'USD' ? rawCost : (safeBcvRate > 0 ? rawCost / safeBcvRate : 0);
-    const totalCostUSD = Number((unitCostUSD * qty).toFixed(2));
+    const unitCostBs = itemCostCurrency === 'Bs'
+      ? round2(rawCost)
+      : round2(rawCost * effectiveBcvRate);
+    const totalCostBs = itemCostCurrency === 'Bs'
+      ? round2(unitCostBs * qty)
+      : round2(round2(rawCost * qty) * effectiveBcvRate);
+    const unitCostUSD = itemCostCurrency === 'USD'
+      ? round6(rawCost)
+      : round6(safeDiv(unitCostBs, effectiveBcvRate, 0));
+    const totalCostUSD = itemCostCurrency === 'USD'
+      ? round2(unitCostUSD * qty)
+      : round2(safeDiv(totalCostBs, effectiveBcvRate, 0));
+
     const currentPriceUSD = Number(selectedProduct.priceUSD) || 0;
 
     const finalNewPriceUSD = itemStrategy === 'average_cost'
@@ -148,8 +171,11 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       productId: selectedProduct.id,
       productName: selectedProduct.name || 'Producto',
       quantity: qty,
-      unitCostUSD: Number(unitCostUSD.toFixed(4)),
+      unitCostUSD,
       totalCostUSD,
+      costCurrency: itemCostCurrency,
+      unitCostBs,
+      totalCostBs,
       strategy: itemStrategy,
       previousCostUSD: Number(selectedProduct.costUSD) || 0,
       previousPriceUSD: currentPriceUSD,
@@ -170,26 +196,54 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
     setPurchasedItems(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Items total calculation
+  // Items total calculation (preserves exact Bs sum when item costs were entered in Bs)
+  const totalItemsBs = useMemo(() => {
+    return round2(
+      purchasedItems.reduce((sum, item) => {
+        if (item?.costCurrency === 'Bs' && typeof item.totalCostBs === 'number') {
+          return sum + item.totalCostBs;
+        }
+        return sum + round2((Number(item?.totalCostUSD) || 0) * effectiveBcvRate);
+      }, 0)
+    );
+  }, [purchasedItems, effectiveBcvRate]);
+
   const totalItemsUSD = useMemo(() => {
-    return purchasedItems.reduce((sum, item) => sum + (Number(item?.totalCostUSD) || 0), 0);
-  }, [purchasedItems]);
+    return round2(
+      purchasedItems.reduce((sum, item) => {
+        if (item?.costCurrency === 'Bs' && typeof item.totalCostBs === 'number' && effectiveBcvRate > 0) {
+          return sum + (item.totalCostBs / effectiveBcvRate);
+        }
+        return sum + (Number(item?.totalCostUSD) || 0);
+      }, 0)
+    );
+  }, [purchasedItems, effectiveBcvRate]);
 
-  const totalItemsBs = totalItemsUSD * safeBcvRate;
-
-  // Auto-sync invoice amount with items total
+  // Auto-sync invoice amount with items total cleanly without decimal drift
   const syncInvoiceAmountWithItems = () => {
-    if (totalItemsUSD > 0) {
-      if (currency === 'USD') {
-        setAmountInput(totalItemsUSD.toFixed(2));
-      } else {
-        setAmountInput(totalItemsBs.toFixed(2));
+    if (totalItemsUSD <= 0 && totalItemsBs <= 0) return;
+    let targetCurrency: 'USD' | 'Bs' = currency;
+    if (!amountInput.trim() && purchasedItems.length > 0) {
+      if (purchasedItems.every(i => i?.costCurrency === 'Bs')) {
+        targetCurrency = 'Bs';
+        setCurrency('Bs');
+      } else if (purchasedItems.every(i => i?.costCurrency === 'USD')) {
+        targetCurrency = 'USD';
+        setCurrency('USD');
       }
     }
+    setAmountInput(targetCurrency === 'Bs' ? totalItemsBs.toFixed(2) : totalItemsUSD.toFixed(2));
   };
 
   useEffect(() => {
     if (isOpen && editingExpense) {
+      const editRate = editingExpense.bcvRate && editingExpense.bcvRate > 0 ? editingExpense.bcvRate : safeBcvRate;
+      const inferredCurrency: 'USD' | 'Bs' = editingExpense.enteredCurrency
+        ? editingExpense.enteredCurrency
+        : (editRate > 0 && round2((editingExpense.amountUSD || 0) * editRate) !== round2(editingExpense.amountBs || 0)
+            ? 'Bs'
+            : 'USD');
+
       setSelectedSupplierId(editingExpense.supplierId || '');
       setSaveAsNewSupplier(false);
       setSupplierName(editingExpense.supplierName || '');
@@ -199,8 +253,12 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setControlNumber(editingExpense.controlNumber || '');
       setDescription(editingExpense.description || '');
       setCategory(editingExpense.category || 'Mercancía');
-      setCurrency('USD');
-      setAmountInput(editingExpense.amountUSD ? editingExpense.amountUSD.toFixed(2) : '');
+      setCurrency(inferredCurrency);
+      setAmountInput(
+        inferredCurrency === 'Bs'
+          ? (editingExpense.amountBs ? editingExpense.amountBs.toFixed(2) : '')
+          : (editingExpense.amountUSD ? editingExpense.amountUSD.toFixed(2) : '')
+      );
       setHasIVA((editingExpense.ivaBs || 0) > 0);
       setApplyRetencionIVA((editingExpense.retencionIVABs || 0) > 0);
       setPaymentMethod(editingExpense.paymentMethod || 'pago_movil');
@@ -266,10 +324,10 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   if (!isOpen) return null;
 
   const rawAmount = parseFloat(amountInput) || 0;
-  const amountUSD = round2(currency === 'USD' ? rawAmount : (safeBcvRate > 0 ? rawAmount / safeBcvRate : 0));
-  const amountBs = round2(currency === 'USD' ? rawAmount * safeBcvRate : rawAmount);
+  const amountBs = currency === 'Bs' ? round2(rawAmount) : round2(rawAmount * effectiveBcvRate);
+  const amountUSD = currency === 'USD' ? round2(rawAmount) : round2(safeDiv(amountBs, effectiveBcvRate, 0));
 
-  // SENIAT calculations for purchases
+  // SENIAT calculations for purchases (derived cleanly from exact amountBs)
   const baseImponibleBs = round2(hasIVA ? (amountBs / 1.16) : amountBs);
   const ivaBs = round2(hasIVA ? (amountBs - baseImponibleBs) : 0);
   const retencionIVABs = round2(applyRetencionIVA ? (ivaBs * 0.75) : 0); // 75% retention standard SENIAT
@@ -317,10 +375,13 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
         ivaBs,
         retencionIVABs,
         retencionISLRBs,
-        bcvRate: editingExpense.bcvRate || bcvRate,
+        bcvRate: effectiveBcvRate,
+        enteredCurrency: currency,
         paymentMethod,
         dueDate: normalizedDueDate ?? editingExpense.dueDate,
-        reference
+        reference,
+        items: purchasedItems.length > 0 ? purchasedItems : undefined,
+        costStrategy: defaultStrategy
       });
     } else {
       addExpense({
@@ -339,7 +400,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
         ivaBs,
         retencionIVABs,
         retencionISLRBs,
-        bcvRate,
+        bcvRate: effectiveBcvRate,
+        enteredCurrency: currency,
         paymentMethod,
         dueDate: normalizedDueDate,
         reference: paymentMethod === 'credito' ? (reference.trim() || 'CRÉDITO') : reference,
@@ -767,10 +829,14 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                             +{item?.quantity ?? 0}
                           </td>
                           <td className="py-2 px-2 text-right font-mono text-slate-700">
-                            ${(Number(item?.unitCostUSD) || 0).toFixed(2)}
+                            {item?.costCurrency === 'Bs' && typeof item.unitCostBs === 'number'
+                              ? `Bs. ${formatBs(item.unitCostBs)}`
+                              : `$${(Number(item?.unitCostUSD) || 0).toFixed(2)}`}
                           </td>
                           <td className="py-2 px-2 text-right font-mono font-bold text-teal-800">
-                            ${(Number(item?.totalCostUSD) || 0).toFixed(2)}
+                            {item?.costCurrency === 'Bs' && typeof item.totalCostBs === 'number'
+                              ? `Bs. ${formatBs(item.totalCostBs)}`
+                              : `$${(Number(item?.totalCostUSD) || 0).toFixed(2)}`}
                           </td>
                           <td className="py-2 px-2 text-center">
                             {item?.strategy === 'fifo' ? (
@@ -802,10 +868,22 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                 {/* Items Total Summary & Sync Button */}
                 <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-teal-100/70 border border-teal-200 rounded-xl text-xs">
                   <div className="font-medium text-teal-950">
-                    Total Artículos Comprados: <strong className="font-mono text-sm">${totalItemsUSD.toFixed(2)}</strong>
-                    <span className="text-[11px] text-teal-800 font-mono ml-1.5">
-                      (≈ Bs. {formatBs(totalItemsBs)})
-                    </span>
+                    Total Artículos Comprados:{' '}
+                    {currency === 'Bs' || (purchasedItems.length > 0 && purchasedItems.every(i => i?.costCurrency === 'Bs')) ? (
+                      <>
+                        <strong className="font-mono text-sm">Bs. {formatBs(totalItemsBs)}</strong>
+                        <span className="text-[11px] text-teal-800 font-mono ml-1.5">
+                          (≈ ${formatUSD(totalItemsUSD)})
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <strong className="font-mono text-sm">${totalItemsUSD.toFixed(2)}</strong>
+                        <span className="text-[11px] text-teal-800 font-mono ml-1.5">
+                          (≈ Bs. {formatBs(totalItemsBs)})
+                        </span>
+                      </>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -870,7 +948,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
 
             <div className="text-[11px] text-slate-600 flex justify-between font-mono">
               <span>Equivalente: {currency === 'USD' ? `Bs. ${formatBs(amountBs)}` : `$ ${formatUSD(amountUSD)}`}</span>
-              <span>Tasa BCV: Bs. {safeBcvRate.toFixed(2)}</span>
+              <span>Tasa BCV: Bs. {effectiveBcvRate.toFixed(2)}</span>
             </div>
           </div>
 

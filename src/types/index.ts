@@ -19,7 +19,10 @@ export interface Product {
   category: string;
   costUSD: number;
   priceUSD: number;
-  priceBsFixed?: number; // Precio asignado cuando la tienda opera en base Bolívares (VED)
+  priceBsFixed?: number; // Precio asignado en Bolívares exactos
+  costBsFixed?: number; // Costo unitario asignado en Bolívares exactos
+  priceCurrency?: 'USD' | 'Bs'; // Moneda original en que se fijó el precio de venta
+  costCurrency?: 'USD' | 'Bs'; // Moneda original en que se fijó el costo unitario
   stock: number;
   minStock: number;
   isExemptFromIVA: boolean; // Alimentos básicos exentos de IVA según ley venezolana
@@ -206,6 +209,9 @@ export interface ExpenseItem {
   quantity: number;
   unitCostUSD: number;
   totalCostUSD: number;
+  costCurrency?: 'USD' | 'Bs';
+  unitCostBs?: number;
+  totalCostBs?: number;
   strategy: PurchaseCostStrategy;
   previousCostUSD?: number;
   previousPriceUSD?: number;
@@ -230,6 +236,7 @@ export interface Expense {
   retencionIVABs: number; // Retención 75% o 100%
   retencionISLRBs: number;
   bcvRate: number;
+  enteredCurrency?: 'USD' | 'Bs';
   paymentMethod: 'efectivo_usd' | 'efectivo_bs' | 'pago_movil' | 'debito' | 'transferencia' | 'credito';
   dueDate?: string;
   reference?: string;

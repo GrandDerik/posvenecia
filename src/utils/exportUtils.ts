@@ -1,11 +1,37 @@
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Sale, Expense, CashShift, CuentaPorPagar, GastoOperativo } from '../types';
+import { Sale, Expense, CashShift, CuentaPorPagar, GastoOperativo, Product } from '../types';
 
 export const round2 = (n: number): number => {
   if (!Number.isFinite(n)) return 0;
   return Math.round((n + Number.EPSILON) * 100) / 100;
+};
+
+export const round6 = (n: number): number => {
+  if (!Number.isFinite(n)) return 0;
+  return Math.round((n + Number.EPSILON) * 1000000) / 1000000;
+};
+
+export const getProductPriceBs = (
+  prod: Pick<Product, 'priceUSD' | 'priceBsFixed' | 'priceCurrency'>,
+  bcvRate: number
+): number => {
+  if (typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0) {
+    return round2(prod.priceBsFixed);
+  }
+  const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
+  return round2((prod.priceUSD || 0) * safeRate);
+};
+
+export const getProductPriceUSD = (
+  prod: Pick<Product, 'priceUSD' | 'priceBsFixed' | 'priceCurrency'>,
+  bcvRate: number
+): number => {
+  if (typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0 && Number.isFinite(bcvRate) && bcvRate > 0) {
+    return round6(prod.priceBsFixed / bcvRate);
+  }
+  return prod.priceUSD || 0;
 };
 
 export const safeDiv = (numerator: number, denominator: number, fallback = 0): number => {

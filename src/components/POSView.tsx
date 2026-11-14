@@ -33,7 +33,7 @@ import {
   TrendingUp
 } from 'lucide-react';
 import { Product, PaymentMethod, PaymentDetails, Sale, Client } from '../types';
-import { formatBs, formatUSD, round2, safeDiv } from '../utils/exportUtils';
+import { formatBs, formatUSD, round2, safeDiv, getProductPriceBs, getProductPriceUSD } from '../utils/exportUtils';
 import { PagoMovilModal } from './Modals/PagoMovilModal';
 import { VentaFiadaModal } from './Modals/VentaFiadaModal';
 import { PagoCombinadoModal } from './Modals/PagoCombinadoModal';
@@ -216,12 +216,24 @@ export const POSView: React.FC = () => {
   // Cart calculations
   let exemptUSD = 0;
   let taxableUSD = 0;
+  let exemptBsRaw = 0;
+  let taxableBsRaw = 0;
+  let hasFixedBsItems = false;
 
   cart.forEach(item => {
+    const itemTotalUSD = round2(item.quantity * item.unitPriceUSD);
+    const hasFixedBs = typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0;
+    if (hasFixedBs) hasFixedBsItems = true;
+    const itemTotalBs = hasFixedBs
+      ? round2(item.quantity * item.product.priceBsFixed!)
+      : round2(itemTotalUSD * bcvRate);
+
     if (applyIVA && !item.product.isExemptFromIVA) {
-      taxableUSD += item.totalUSD;
+      taxableUSD += itemTotalUSD;
+      taxableBsRaw += itemTotalBs;
     } else {
-      exemptUSD += item.totalUSD;
+      exemptUSD += itemTotalUSD;
+      exemptBsRaw += itemTotalBs;
     }
   });
 
@@ -241,12 +253,12 @@ export const POSView: React.FC = () => {
 
   const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
 
-  const subtotalBs = round2(subtotalUSD * bcvRate);
-  const exemptBs = round2(exemptUSD * bcvRate);
-  const taxableBs = round2(taxableUSD * bcvRate);
-  const ivaBs = round2(ivaUSD * bcvRate);
+  const exemptBs = hasFixedBsItems ? round2(exemptBsRaw) : round2(exemptUSD * bcvRate);
+  const taxableBs = hasFixedBsItems ? round2(taxableBsRaw) : round2(taxableUSD * bcvRate);
+  const subtotalBs = hasFixedBsItems ? round2(exemptBs + taxableBs) : round2(subtotalUSD * bcvRate);
+  const ivaBs = hasFixedBsItems ? round2(taxableBs * 0.16) : round2(ivaUSD * bcvRate);
   const igtfBs = round2(igtfUSD * bcvRate);
-  const totalBs = round2(totalUSD * bcvRate);
+  const totalBs = hasFixedBsItems ? round2(subtotalBs + ivaBs + igtfBs) : round2(totalUSD * bcvRate);
 
   // Handle Payment Method Selection
   const handleSelectPaymentMethod = (method: PaymentMethod) => {
@@ -581,7 +593,8 @@ export const POSView: React.FC = () => {
             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
               {filteredProducts.map((prod) => {
                 const inCartItem = cart.find(c => c.product.id === prod.id);
-                const priceBs = prod.priceUSD * bcvRate;
+                const priceBs = getProductPriceBs(prod, bcvRate);
+                const priceUSDVal = getProductPriceUSD(prod, bcvRate);
                 const isService = Boolean(prod.isService || prod.itemType === 'servicio');
                 const isOutOfStock = !isService && prod.stock <= 0;
                 const isMaxInCart = !isService && inCartItem && inCartItem.quantity >= prod.stock;
@@ -650,10 +663,10 @@ export const POSView: React.FC = () => {
                     <div className="pt-2 border-t border-slate-100 flex items-end justify-between">
                       <div>
                         <div className={`text-sm font-black font-mono-numbers ${isOutOfStock ? 'text-slate-600' : 'text-[#0B1528]'}`}>
-                          {baseCurrency === 'VED' ? `Bs ${formatBs(priceBs)}` : `$${formatUSD(prod.priceUSD)}`}
+                          {baseCurrency === 'VED' ? `Bs ${formatBs(priceBs)}` : `$${formatUSD(priceUSDVal)}`}
                         </div>
                         <div className={`text-[10px] font-bold font-mono-numbers ${isOutOfStock ? 'text-slate-500' : 'text-blue-700'}`}>
-                          {baseCurrency === 'VED' ? `$${formatUSD(prod.priceUSD)}` : `Bs ${formatBs(priceBs)}`}
+                          {baseCurrency === 'VED' ? `$${formatUSD(priceUSDVal)}` : `Bs ${formatBs(priceBs)}`}
                         </div>
                       </div>
 
@@ -719,7 +732,8 @@ export const POSView: React.FC = () => {
             <div className="space-y-2">
               {filteredProducts.map((prod) => {
                 const inCartItem = cart.find(c => c.product.id === prod.id);
-                const priceBs = prod.priceUSD * bcvRate;
+                const priceBs = getProductPriceBs(prod, bcvRate);
+                const priceUSDVal = getProductPriceUSD(prod, bcvRate);
                 const isService = Boolean(prod.isService || prod.itemType === 'servicio');
                 const isOutOfStock = !isService && prod.stock <= 0;
                 const isMaxInCart = !isService && inCartItem && inCartItem.quantity >= prod.stock;
@@ -784,10 +798,10 @@ export const POSView: React.FC = () => {
                     <div className="flex items-center gap-3 shrink-0">
                       <div className="text-right">
                         <div className="text-xs sm:text-sm font-black text-[#0B1528] font-mono-numbers">
-                          {baseCurrency === 'VED' ? `Bs ${formatBs(priceBs)}` : `$${formatUSD(prod.priceUSD)}`}
+                          {baseCurrency === 'VED' ? `Bs ${formatBs(priceBs)}` : `$${formatUSD(priceUSDVal)}`}
                         </div>
                         <div className="text-[10px] font-bold text-blue-700 font-mono-numbers">
-                          {baseCurrency === 'VED' ? `$${formatUSD(prod.priceUSD)}` : `Bs ${formatBs(priceBs)}`}
+                          {baseCurrency === 'VED' ? `$${formatUSD(priceUSDVal)}` : `Bs ${formatBs(priceBs)}`}
                         </div>
                       </div>
 
@@ -987,7 +1001,11 @@ export const POSView: React.FC = () => {
                       )}
                     </div>
                     <div className="text-[11px] text-slate-500 font-mono">
-                      ${formatUSD(item.unitPriceUSD)} c/u • Bs. {formatBs(item.unitPriceUSD * bcvRate)}
+                      ${formatUSD(item.unitPriceUSD)} c/u • Bs. {formatBs(
+                        typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0
+                          ? item.product.priceBsFixed
+                          : round2(item.unitPriceUSD * bcvRate)
+                      )}
                     </div>
                   </div>
 
@@ -1022,7 +1040,11 @@ export const POSView: React.FC = () => {
                   {/* Line Total */}
                   <div className="w-20 text-right font-mono">
                     <div className="font-bold text-slate-900">${formatUSD(item.totalUSD)}</div>
-                    <div className="text-[10px] text-blue-700">Bs {formatBs(item.totalUSD * bcvRate)}</div>
+                    <div className="text-[10px] text-blue-700">Bs {formatBs(
+                      typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0
+                        ? round2(item.quantity * item.product.priceBsFixed)
+                        : round2(item.totalUSD * bcvRate)
+                    )}</div>
                   </div>
                 </div>
               ))

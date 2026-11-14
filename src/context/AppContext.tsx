@@ -88,7 +88,7 @@ import {
   restoreStoreDataToFirestore,
   clearUserFirestoreCollections
 } from '../services/firestoreSyncService';
-import { round2, getLocalDateStr } from '../utils/exportUtils';
+import { round2, round6, getLocalDateStr, getProductPriceUSD } from '../utils/exportUtils';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
 export type FirestoreSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated';
@@ -1724,6 +1724,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Cart operations
   const addToCart = (product: Product, quantity = 1) => {
+    const effectiveUnitUSD = getProductPriceUSD(product, bcvRate);
     setCart(prev => {
       const existing = prev.find(item => item.product.id === product.id);
       if (existing) {
@@ -1732,7 +1733,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ? {
                 ...item,
                 quantity: item.quantity + quantity,
-                totalUSD: Number(((item.quantity + quantity) * item.unitPriceUSD).toFixed(2))
+                totalUSD: round2((item.quantity + quantity) * item.unitPriceUSD)
               }
             : item
         );
@@ -1742,8 +1743,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         {
           product,
           quantity,
-          unitPriceUSD: product.priceUSD,
-          totalUSD: Number((quantity * product.priceUSD).toFixed(2))
+          unitPriceUSD: effectiveUnitUSD,
+          totalUSD: round2(quantity * effectiveUnitUSD)
         }
       ];
     });
@@ -1830,14 +1831,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let rawSubtotalUSD = 0;
       let rawExemptUSD = 0;
       let rawTaxableUSD = 0;
+      let rawExemptBs = 0;
+      let rawTaxableBs = 0;
+      let hasFixedBsItems = false;
 
       cart.forEach(item => {
         const itemTotal = round2(item.quantity * item.unitPriceUSD);
+        const hasFixedBs = typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0;
+        if (hasFixedBs) hasFixedBsItems = true;
+        const itemTotalBs = hasFixedBs
+          ? round2(item.quantity * item.product.priceBsFixed!)
+          : round2(itemTotal * bcvRate);
+
         rawSubtotalUSD += itemTotal;
         if (!applyIVA || item.product.isExemptFromIVA) {
           rawExemptUSD += itemTotal;
+          rawExemptBs += itemTotalBs;
         } else {
           rawTaxableUSD += itemTotal;
+          rawTaxableBs += itemTotalBs;
         }
       });
 
@@ -1854,12 +1866,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
-      const subtotalBs = round2(subtotalUSD * bcvRate);
-      const exemptBs = round2(exemptUSD * bcvRate);
-      const taxableBs = round2(taxableUSD * bcvRate);
-      const ivaBs = round2(ivaUSD * bcvRate);
+      const exemptBs = hasFixedBsItems ? round2(rawExemptBs) : round2(exemptUSD * bcvRate);
+      const taxableBs = hasFixedBsItems ? round2(rawTaxableBs) : round2(taxableUSD * bcvRate);
+      const subtotalBs = hasFixedBsItems ? round2(exemptBs + taxableBs) : round2(subtotalUSD * bcvRate);
+      const ivaBs = hasFixedBsItems ? (applyIVA ? round2(taxableBs * 0.16) : 0) : round2(ivaUSD * bcvRate);
       const igtfBs = round2(igtfUSD * bcvRate);
-      const totalBs = round2(totalUSD * bcvRate);
+      const totalBs = hasFixedBsItems ? round2(subtotalBs + ivaBs + igtfBs) : round2(totalUSD * bcvRate);
 
       const snapshotItems: CartItem[] = cart.map(item => ({
         ...item,
@@ -2604,9 +2616,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!prod) continue;
 
         const incomingQty = Math.max(0, item.quantity);
-        const incomingCostUSD = round2(Math.max(0, item.unitCostUSD));
+        const incomingCostUSD = round6(Math.max(0, item.unitCostUSD));
         const previousStock = prod.stock || 0;
         prod.stock = round2(previousStock + incomingQty);
+
+        if (item.costCurrency === 'Bs' && typeof item.unitCostBs === 'number' && item.unitCostBs >= 0) {
+          prod.costBsFixed = round2(item.unitCostBs);
+          prod.costCurrency = 'Bs';
+        } else {
+          prod.costCurrency = 'USD';
+          prod.costBsFixed = undefined;
+        }
 
         if (item.strategy === 'fifo') {
           if (!prod.costUSD || prod.costUSD <= 0) {
@@ -2634,7 +2654,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : prod.priceUSD;
 
           const weightedAvgCost = (previousStock + incomingQty) > 0
-            ? round2(((previousStock * previousCost) + (incomingQty * incomingCostUSD)) / (previousStock + incomingQty))
+            ? round6(((previousStock * previousCost) + (incomingQty * incomingCostUSD)) / (previousStock + incomingQty))
             : incomingCostUSD;
 
           prod.costUSD = weightedAvgCost > 0 ? weightedAvgCost : incomingCostUSD;
@@ -2647,6 +2667,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           if (baseCurrency === 'VED') {
             prod.priceBsFixed = round2(prod.priceUSD * bcvRate);
+            prod.priceCurrency = 'Bs';
           }
 
           prod.purchaseNote = `Actualizado Factura ${newExp.invoiceNumber} - Costo Prom. $${prod.costUSD.toFixed(2)} / Venta $${prod.priceUSD.toFixed(2)}`;
