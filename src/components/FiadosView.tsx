@@ -127,21 +127,21 @@ Para cancelar mediante Pago Móvil:
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div className="max-w-6xl mx-auto px-3 sm:px-6 py-5 space-y-5">
       
       {/* Header Banner */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-white/95 p-5 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="p-2 rounded-xl bg-amber-100 text-amber-800">
+          <div className="flex items-center gap-2.5">
+            <span className="p-2.5 rounded-2xl bg-[#FFF3E8] border border-[#F5D3B3] text-[#D96B27]">
               <Users className="w-5 h-5" />
             </span>
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+            <h1 className="text-xl sm:text-2xl font-black text-[#0B1528] tracking-tight">
               Control de Fiados & Cuentas por Cobrar
             </h1>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Indexación automática en Bolívares según la tasa oficial BCV del día: <strong className="text-amber-800 font-mono">Bs. {bcvRate.toFixed(2)}</strong>
+            Indexación automática en Bolívares según la tasa oficial BCV del día: <strong className="text-[#9A4B12] font-mono-numbers">Bs. {bcvRate.toFixed(2)}</strong>
           </p>
         </div>
 
@@ -154,7 +154,7 @@ Para cancelar mediante Pago Móvil:
             setNewNotes('');
             setIsManualModalOpen(true);
           }}
-          className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors self-start sm:self-auto"
+          className="flex items-center gap-1.5 px-4 py-2.5 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white rounded-xl text-xs font-bold shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] transition-all self-start sm:self-auto cursor-pointer whitespace-nowrap"
         >
           <Plus className="w-4 h-4" />
           <span>Registrar Fiado Manual</span>
@@ -162,13 +162,13 @@ Para cancelar mediante Pago Móvil:
       </div>
 
       {/* Indexation Warning Banner */}
-      <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3">
-        <div className="w-9 h-9 rounded-xl bg-amber-200 text-amber-800 flex items-center justify-center flex-shrink-0">
+      <div className="bg-[#FFF3E8] border border-[#F5D3B3] rounded-2xl p-4 flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-white/80 border border-[#F5D3B3] text-[#D96B27] flex items-center justify-center flex-shrink-0">
           <AlertCircle className="w-5 h-5" />
         </div>
-        <div className="text-xs text-amber-900">
+        <div className="text-xs text-[#7C3A0B]">
           <strong className="font-bold">Principio de Indexación Cambiaria (Comercio Venezuela):</strong>
-          <span className="ml-1 text-amber-800">
+          <span className="ml-1 text-[#9A4B12]">
             Los créditos otorgados se fijan en USD para proteger el capital de trabajo de la devaluación. Cuando el cliente paga en Bolívares (Pago Móvil o efectivo), el saldo se liquida a la tasa oficial BCV del momento del abono.
           </span>
         </div>
@@ -176,49 +176,49 @@ Para cancelar mediante Pago Móvil:
 
       {/* Summary Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+        <div className="bg-[#FFF3E8] p-4 rounded-2xl border border-[#F5D3B3] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.04)]">
+          <span className="text-[11px] font-bold text-[#9A4B12] uppercase tracking-wide">
             Total Deuda en USD
           </span>
-          <div className="text-2xl font-black text-amber-900 font-mono-numbers mt-1">
+          <div className="text-2xl font-black text-[#D96B27] font-mono-numbers mt-1">
             ${formatUSD(totalDebtUSD)}
           </div>
-          <span className="text-xs text-slate-400">Capital otorgado pendiente</span>
+          <span className="text-xs text-[#9A4B12]/80">Capital otorgado pendiente</span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+        <div className="bg-gradient-to-b from-white to-[#F4F8FF] p-4 rounded-2xl border border-[#93C5FD] shadow-[0_2px_12px_-4px_rgba(37,99,235,0.08)]">
+          <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wide">
             Total Deuda Indexada (Bs)
           </span>
-          <div className="text-2xl font-black text-slate-900 font-mono-numbers mt-1">
+          <div className="text-2xl font-black text-[#0B1528] font-mono-numbers mt-1">
             Bs. {formatBs(totalDebtBs)}
           </div>
-          <span className="text-xs text-blue-700 font-semibold">A tasa BCV de Bs. {formatBs(bcvRate)}</span>
+          <span className="text-xs text-blue-700 font-semibold font-mono-numbers">A tasa BCV de Bs. {formatBs(bcvRate)}</span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="bg-white/95 p-4 rounded-2xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
           <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
             Clientes con Deuda Activa
           </span>
-          <div className="text-2xl font-black text-slate-900 font-mono-numbers mt-1">
+          <div className="text-2xl font-black text-[#0B1528] font-mono-numbers mt-1">
             {activeFiados.length}
           </div>
           <span className="text-xs text-slate-400">Deudores en cuenta</span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+        <div className="bg-[#E7F8EE] p-4 rounded-2xl border border-[#A7E6C4] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.04)]">
+          <span className="text-[11px] font-bold text-[#065F46] uppercase tracking-wide">
             Total Cobrado en Abonos
           </span>
-          <div className="text-2xl font-black text-emerald-700 font-mono-numbers mt-1">
+          <div className="text-2xl font-black text-[#065F46] font-mono-numbers mt-1">
             ${formatUSD(totalCollectedUSD)}
           </div>
-          <span className="text-xs text-slate-400">Recuperación acumulada</span>
+          <span className="text-xs text-[#065F46]/80">Recuperación acumulada</span>
         </div>
       </div>
 
       {/* Search and Filters */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="bg-white/95 p-4 rounded-2xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
           <input
@@ -226,11 +226,11 @@ Para cancelar mediante Pago Móvil:
             placeholder="Buscar deudor por nombre o cédula..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium"
+            className="w-full pl-9 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-medium focus:bg-white focus:border-blue-500 focus:outline-none"
           />
         </div>
 
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+        <div className="flex items-center gap-1 bg-[#EEF2F7] p-1 rounded-xl border border-[#DCE4F0] text-xs font-semibold">
           {[
             { id: 'todos', label: 'Todos' },
             { id: 'pendiente', label: 'Pendientes' },
@@ -240,8 +240,8 @@ Para cancelar mediante Pago Móvil:
             <button
               key={tab.id}
               onClick={() => setStatusFilter(tab.id as any)}
-              className={`px-3 py-1.5 rounded-lg transition-colors ${
-                statusFilter === tab.id ? 'bg-white text-slate-900 shadow-xs font-bold' : 'text-slate-600'
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                statusFilter === tab.id ? 'bg-white text-[#0B1528] shadow-xs font-bold' : 'text-slate-600 hover:text-[#0B1528]'
               }`}
             >
               {tab.label}
@@ -251,19 +251,19 @@ Para cancelar mediante Pago Móvil:
       </div>
 
       {/* Fiados List Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+      <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider border-b border-slate-200">
+            <thead className="bg-[#F8FAFC] text-slate-500 font-bold uppercase tracking-wider border-b border-[#DCE4F0]">
               <tr>
-                <th className="py-3 px-4">Cliente / Cédula</th>
-                <th className="py-3 px-4">Fecha / Factura</th>
-                <th className="py-3 px-4">Teléfono</th>
-                <th className="py-3 px-4 text-right">Deuda Inicial</th>
-                <th className="py-3 px-4 text-right">Resta ($)</th>
-                <th className="py-3 px-4 text-right">Resta (Bs Hoy)</th>
-                <th className="py-3 px-4 text-center">Estatus</th>
-                <th className="py-3 px-4 text-center">Acciones</th>
+                <th className="py-3.5 px-4">Cliente / Cédula</th>
+                <th className="py-3.5 px-4">Fecha / Factura</th>
+                <th className="py-3.5 px-4">Teléfono</th>
+                <th className="py-3.5 px-4 text-right">Deuda Inicial</th>
+                <th className="py-3.5 px-4 text-right">Resta ($)</th>
+                <th className="py-3.5 px-4 text-right">Resta (Bs Hoy)</th>
+                <th className="py-3.5 px-4 text-center">Estatus</th>
+                <th className="py-3.5 px-4 text-center">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -273,34 +273,34 @@ Para cancelar mediante Pago Móvil:
 
                 return (
                   <React.Fragment key={fiado.id}>
-                    <tr className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3.5 px-4 font-bold text-slate-900">
+                    <tr className="hover:bg-[#F8FAFC] transition-colors">
+                      <td className="py-3.5 px-4 font-bold text-[#0B1528]">
                         <div>{fiado.clientName}</div>
-                        <div className="text-[10px] text-slate-400 font-mono font-normal">{fiado.clientCI}</div>
+                        <div className="text-[10px] text-slate-400 font-mono-numbers font-normal">{fiado.clientCI}</div>
                       </td>
                       <td className="py-3.5 px-4 text-slate-600">
                         <div>{new Date(fiado.date).toLocaleDateString('es-VE')}</div>
-                        <div className="text-[10px] text-teal-700 font-mono">{fiado.invoiceNumber}</div>
+                        <div className="text-[10px] text-blue-700 font-mono-numbers">{fiado.invoiceNumber}</div>
                       </td>
-                      <td className="py-3.5 px-4 text-slate-600 font-mono">
+                      <td className="py-3.5 px-4 text-slate-600 font-mono-numbers">
                         {fiado.clientPhone || 'Sin teléfono'}
                       </td>
-                      <td className="py-3.5 px-4 text-right font-mono text-slate-500">
+                      <td className="py-3.5 px-4 text-right font-mono-numbers text-slate-500">
                         ${formatUSD(fiado.originalDebtUSD)}
                       </td>
-                      <td className="py-3.5 px-4 text-right font-mono font-black text-amber-900 text-sm">
+                      <td className="py-3.5 px-4 text-right font-mono-numbers font-black text-[#D96B27] text-sm">
                         ${formatUSD(fiado.remainingDebtUSD)}
                       </td>
-                      <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900 text-sm">
+                      <td className="py-3.5 px-4 text-right font-mono-numbers font-bold text-[#0B1528] text-sm">
                         Bs. {formatBs(remainingBs)}
                       </td>
                       <td className="py-3.5 px-4 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                        <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-bold uppercase ${
                           fiado.status === 'saldado'
-                            ? 'bg-emerald-100 text-emerald-800'
+                            ? 'bg-[#E7F8EE] border-[#A7E6C4] text-[#065F46]'
                             : fiado.status === 'parcial'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-amber-100 text-amber-800'
+                            ? 'bg-[#EBF3FE] border-[#C5DCFC] text-[#1D4ED8]'
+                            : 'bg-[#FFF3E8] border-[#F5D3B3] text-[#9A4B12]'
                         }`}>
                           {fiado.status}
                         </span>
@@ -311,7 +311,7 @@ Para cancelar mediante Pago Móvil:
                           {fiado.remainingDebtUSD > 0 && (
                             <button
                               onClick={() => handleOpenAbono(fiado)}
-                              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-2xs transition-colors flex items-center gap-1"
+                              className="px-2.5 py-1 bg-[#0B1528] hover:bg-[#152440] text-white rounded-lg text-xs font-bold shadow-2xs transition-colors flex items-center gap-1 cursor-pointer"
                             >
                               <DollarSign className="w-3.5 h-3.5" />
                               <span>Abonar</span>
@@ -321,7 +321,7 @@ Para cancelar mediante Pago Móvil:
                           {/* WhatsApp Reminder Button */}
                           <button
                             onClick={() => handleSendWhatsAppReminder(fiado)}
-                            className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition-colors"
+                            className="p-1.5 rounded-lg bg-[#E7F8EE] hover:bg-emerald-100 text-[#065F46] border border-[#A7E6C4] transition-colors cursor-pointer"
                             title="Enviar / Copiar Recordatorio WhatsApp con tasa BCV"
                           >
                             <MessageCircle className="w-4 h-4" />
@@ -330,7 +330,7 @@ Para cancelar mediante Pago Móvil:
                           {/* Expand Abonos History */}
                           <button
                             onClick={() => setExpandedId(isExpanded ? null : fiado.id)}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors"
+                            className="p-1.5 rounded-lg bg-[#F8FAFC] border border-[#DCE4F0] hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer"
                             title="Historial de Abonos"
                           >
                             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -395,24 +395,24 @@ Para cancelar mediante Pago Móvil:
 
       {/* Registrar Abono Modal */}
       {selectedFiadoForAbono && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95">
-            <div className="bg-amber-600 text-white p-4 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-[#DCE4F0] overflow-hidden animate-in fade-in zoom-in-95">
+            <div className="bg-[#0B1528] text-white p-4 flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-base">Registrar Abono a Cuenta</h3>
-                <p className="text-xs text-amber-100">{selectedFiadoForAbono.clientName} ({selectedFiadoForAbono.clientCI})</p>
+                <p className="text-xs text-blue-200">{selectedFiadoForAbono.clientName} ({selectedFiadoForAbono.clientCI})</p>
               </div>
-              <button onClick={() => setSelectedFiadoForAbono(null)} className="text-white hover:bg-white/10 p-1 rounded-full">
+              <button onClick={() => setSelectedFiadoForAbono(null)} className="text-white/80 hover:text-white hover:bg-white/10 p-1 rounded-full cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form onSubmit={handleConfirmAbono} className="p-5 space-y-4">
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs">
-                <span>Deuda Actual:</span>
-                <div className="text-right font-mono">
-                  <div className="font-black text-amber-900 text-base">${formatUSD(selectedFiadoForAbono.remainingDebtUSD)}</div>
-                  <div className="text-[11px] text-amber-700">Bs. {formatBs(selectedFiadoForAbono.remainingDebtUSD * bcvRate)}</div>
+              <div className="p-3 bg-[#FFF3E8] border border-[#F5D3B3] rounded-xl flex items-center justify-between text-xs">
+                <span className="font-semibold text-[#7C3A0B]">Deuda Actual:</span>
+                <div className="text-right font-mono-numbers">
+                  <div className="font-black text-[#D96B27] text-base">${formatUSD(selectedFiadoForAbono.remainingDebtUSD)}</div>
+                  <div className="text-[11px] text-[#9A4B12]">Bs. {formatBs(selectedFiadoForAbono.remainingDebtUSD * bcvRate)}</div>
                 </div>
               </div>
 
@@ -494,7 +494,7 @@ Para cancelar mediante Pago Móvil:
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs flex items-center gap-1.5"
+                  className="px-5 py-2.5 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white text-xs font-bold rounded-xl shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center gap-1.5 cursor-pointer"
                 >
                   <Check className="w-4 h-4" />
                   <span>Registrar Abono</span>
@@ -507,11 +507,11 @@ Para cancelar mediante Pago Móvil:
 
       {/* Manual Fiado Modal */}
       {isManualModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95">
-            <div className="bg-slate-900 text-white p-4 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-[#DCE4F0] overflow-hidden animate-in fade-in zoom-in-95">
+            <div className="bg-[#0B1528] text-white p-4 flex items-center justify-between">
               <h3 className="font-bold text-base">Registrar Nuevo Fiado Manual</h3>
-              <button onClick={() => setIsManualModalOpen(false)} className="text-white hover:bg-white/10 p-1 rounded-full">
+              <button onClick={() => setIsManualModalOpen(false)} className="text-white/80 hover:text-white hover:bg-white/10 p-1 rounded-full cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>

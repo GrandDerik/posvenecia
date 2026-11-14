@@ -250,21 +250,21 @@ export const ProductsView: React.FC = () => {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div className="max-w-6xl mx-auto px-3 sm:px-6 py-5 space-y-5">
       
       {/* Header Banner */}
-      <div className="bg-white p-5 rounded-3xl border border-slate-200/90 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-white/95 p-5 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="p-2 rounded-2xl bg-blue-100 text-blue-800">
+          <div className="flex items-center gap-2.5">
+            <span className="p-2.5 rounded-2xl bg-[#EBF3FE] border border-[#C5DCFC] text-blue-700">
               <Package className="w-5 h-5" />
             </span>
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+            <h1 className="text-xl sm:text-2xl font-black text-[#0B1528] tracking-tight">
               Catálogo de Productos & Precios Bimonetarios
             </h1>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Precios sincronizados con la tasa oficial BCV: <strong>Bs. {formatBs(bcvRate)}</strong> • Moneda base: <strong>{baseCurrency === 'VED' ? 'Bolívares (VED)' : 'Dólar (USD)'}</strong>
+            Precios sincronizados con la tasa oficial BCV: <strong className="font-mono-numbers text-[#0B1528]">Bs. {formatBs(bcvRate)}</strong> • Moneda base: <strong>{baseCurrency === 'VED' ? 'Bolívares (VED)' : 'Dólar (USD)'}</strong>
           </p>
         </div>
 
@@ -274,16 +274,16 @@ export const ProductsView: React.FC = () => {
               setSelectedProductForDischarge(null);
               setIsDischargeModalOpen(true);
             }}
-            className="px-3.5 py-2.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+            className="px-3.5 py-2.5 rounded-xl border border-[#F5D3B3] bg-[#FFF3E8] hover:bg-[#FFE6CE] text-[#9A4B12] text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
             title="Dar salida a productos por daño, vencimiento, uso interno o merma"
           >
-            <Trash2 className="w-4 h-4 text-amber-700" />
+            <Trash2 className="w-4 h-4 text-[#D96B27]" />
             <span>Desincorporar Stock</span>
           </button>
 
           <button
             onClick={handleExportExcel}
-            className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+            className="px-3.5 py-2.5 rounded-xl border border-[#DCE4F0] bg-white hover:bg-[#F8FAFC] text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
             <span>Exportar Excel</span>
@@ -291,7 +291,7 @@ export const ProductsView: React.FC = () => {
 
           <button
             onClick={handleOpenAdd}
-            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+            className="px-4 py-2.5 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white rounded-xl text-xs font-bold shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
           >
             <Plus className="w-4 h-4" />
             <span>Registrar Producto</span>
@@ -300,7 +300,7 @@ export const ProductsView: React.FC = () => {
       </div>
 
       {/* Search & Categories Bar */}
-      <div className="bg-white p-4 rounded-3xl border border-slate-200/90 shadow-xs space-y-3">
+      <div className="bg-white/95 p-4 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] space-y-3">
         <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
           <input
@@ -308,7 +308,7 @@ export const ProductsView: React.FC = () => {
             placeholder="Buscar por nombre, código de barra o nota de compra..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:border-blue-500 focus:outline-none"
+            className="w-full pl-9 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-medium focus:bg-white focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -317,10 +317,10 @@ export const ProductsView: React.FC = () => {
             <button
               key={c}
               onClick={() => setCategoryFilter(c)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
                 categoryFilter === c
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                  ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_10px_-2px_rgba(37,99,235,0.4)]'
+                  : 'bg-[#F8FAFC] border border-[#DCE4F0] hover:bg-slate-100 text-slate-600'
               }`}
             >
               {c}
@@ -330,10 +330,10 @@ export const ProductsView: React.FC = () => {
       </div>
 
       {/* Products Table */}
-      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xs overflow-hidden">
+      <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider border-b border-slate-200">
+            <thead className="bg-[#F8FAFC] text-slate-500 font-bold uppercase tracking-wider border-b border-[#DCE4F0]">
               <tr>
                 <th className="py-3.5 px-4">Foto</th>
                 <th className="py-3.5 px-4">Código</th>
@@ -357,10 +357,10 @@ export const ProductsView: React.FC = () => {
                 const isLow = !isService && prod.stock <= prod.minStock;
 
                 return (
-                  <tr key={prod.id} className="hover:bg-slate-50/80 transition-colors">
+                  <tr key={prod.id} className="hover:bg-[#F8FAFC]/90 transition-colors">
                     {/* Thumbnail Photo */}
                     <td className="py-3 px-4">
-                      <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                      <div className="w-10 h-10 rounded-xl bg-[#F8FAFC] border border-[#DCE4F0] overflow-hidden flex items-center justify-center shrink-0">
                         {prod.imageUrl ? (
                           <img src={prod.imageUrl} alt={prod.name} className="w-full h-full object-cover" />
                         ) : (
@@ -369,15 +369,15 @@ export const ProductsView: React.FC = () => {
                       </div>
                     </td>
 
-                    <td className="py-3 px-4 font-mono text-slate-500 font-semibold">
+                    <td className="py-3 px-4 font-mono-numbers text-slate-500 font-semibold">
                       {prod.code}
                     </td>
 
                     <td className="py-3 px-4">
-                      <div className="font-bold text-slate-900 leading-tight">
+                      <div className="font-bold text-[#0B1528] leading-tight">
                         {prod.name}
                         {isService && (
-                          <span className="ml-2 text-[9px] bg-indigo-100 text-indigo-800 font-bold px-1.5 py-0.5 rounded uppercase">
+                          <span className="ml-2 text-[9px] bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] font-bold px-1.5 py-0.5 rounded uppercase">
                             Servicio
                           </span>
                         )}
@@ -389,38 +389,38 @@ export const ProductsView: React.FC = () => {
                         </div>
                       )}
                       {prod.batches && prod.batches.length > 0 && (
-                        <div className="text-[10px] text-teal-700 flex items-center gap-1 mt-0.5 font-medium">
-                          <Layers className="w-3 h-3 text-teal-600 shrink-0" />
+                        <div className="text-[10px] text-blue-700 flex items-center gap-1 mt-0.5 font-medium">
+                          <Layers className="w-3 h-3 text-blue-600 shrink-0" />
                           <span>{prod.batches.length} lote(s) FIFO (trazabilidad activa)</span>
                         </div>
                       )}
                     </td>
 
                     <td className="py-3 px-4 text-slate-600">
-                      <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-[11px] font-medium">
+                      <span className="bg-[#F8FAFC] border border-[#DCE4F0] text-slate-700 px-2 py-0.5 rounded-md text-[11px] font-medium">
                         {prod.category}
                       </span>
                     </td>
 
                     <td className="py-3 px-4 text-center">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${
                         prod.isExemptFromIVA 
-                          ? 'bg-emerald-100 text-emerald-800' 
-                          : 'bg-blue-100 text-blue-800'
+                          ? 'bg-[#E7F8EE] border-[#A7E6C4] text-[#065F46]' 
+                          : 'bg-[#EBF3FE] border-[#C5DCFC] text-[#1D4ED8]'
                       }`}>
                         {prod.isExemptFromIVA ? 'Exento (E)' : 'Gravado 16%'}
                       </span>
                     </td>
 
                     {/* Primary Price */}
-                    <td className="py-3 px-4 text-right font-mono font-black text-slate-900 text-sm">
+                    <td className="py-3 px-4 text-right font-mono-numbers font-black text-[#0B1528] text-sm">
                       {baseCurrency === 'VED' 
                         ? `Bs. ${formatBs(priceBsVal)}` 
                         : `$${formatUSD(prod.priceUSD)}`}
                     </td>
 
                     {/* Secondary Converted Price */}
-                    <td className="py-3 px-4 text-right font-mono font-bold text-blue-700 text-sm">
+                    <td className="py-3 px-4 text-right font-mono-numbers font-bold text-blue-700 text-sm">
                       {baseCurrency === 'VED' 
                         ? `$${formatUSD(prod.priceUSD)}` 
                         : `Bs. ${formatBs(priceBsVal)}`}
@@ -429,25 +429,25 @@ export const ProductsView: React.FC = () => {
                     {/* Stock */}
                     <td className="py-3 px-4 text-center">
                       {isService ? (
-                        <span className="bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold px-2 py-0.5 rounded-lg text-[10px] whitespace-nowrap">
+                        <span className="bg-[#EBF3FE] border border-[#C5DCFC] text-[#1D4ED8] font-bold px-2 py-0.5 rounded-lg text-[10px] whitespace-nowrap">
                           ⚡ Servicio
                         </span>
                       ) : (
                         <div className="flex items-center justify-center gap-1.5">
                           <button
                             onClick={() => adjustStock(prod.id, prod.stock - 1)}
-                            className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold cursor-pointer"
+                            className="w-5 h-5 rounded bg-[#F8FAFC] border border-[#DCE4F0] hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold cursor-pointer"
                           >
                             -
                           </button>
-                          <span className={`font-mono font-bold px-2 py-0.5 rounded ${
-                            isLow ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-800'
+                          <span className={`font-mono-numbers font-bold px-2 py-0.5 rounded-lg border ${
+                            isLow ? 'bg-[#FEECEF] border-[#FBC4CD] text-[#BE123C]' : 'bg-[#F8FAFC] border-[#DCE4F0] text-[#0B1528]'
                           }`}>
                             {prod.stock} {prod.unit}
                           </span>
                           <button
                             onClick={() => adjustStock(prod.id, prod.stock + 1)}
-                            className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold cursor-pointer"
+                            className="w-5 h-5 rounded bg-[#F8FAFC] border border-[#DCE4F0] hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold cursor-pointer"
                           >
                             +
                           </button>
@@ -465,7 +465,7 @@ export const ProductsView: React.FC = () => {
                               setSelectedProductForDischarge(prod);
                               setIsDischargeModalOpen(true);
                             }}
-                            className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors cursor-pointer"
+                            className="p-1.5 rounded-lg bg-[#FFF3E8] border border-[#F5D3B3] hover:bg-[#FFE6CE] text-[#D96B27] transition-colors cursor-pointer"
                             title="Desincorporar por Daño / Vencimiento / Merma"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -473,14 +473,14 @@ export const ProductsView: React.FC = () => {
                         )}
                         <button
                           onClick={() => handleOpenEdit(prod)}
-                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
+                          className="p-1.5 rounded-lg bg-[#F8FAFC] border border-[#DCE4F0] hover:bg-[#EBF3FE] text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
                           title="Editar"
                         >
                           <Edit className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => setProductToDelete(prod)}
-                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 transition-colors cursor-pointer"
+                          className="p-1.5 rounded-lg bg-[#FEECEF] border border-[#FBC4CD] hover:bg-rose-100 text-[#BE123C] transition-colors cursor-pointer"
                           title="Eliminar producto"
                         >
                           <X className="w-3.5 h-3.5" />
@@ -520,9 +520,9 @@ export const ProductsView: React.FC = () => {
 
       {/* Add / Edit Product Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 max-h-[90vh] flex flex-col">
-            <div className="bg-slate-900 text-white p-4 flex items-center justify-between shrink-0">
+        <div className="fixed inset-0 z-50 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-[#DCE4F0] overflow-hidden animate-in fade-in zoom-in-95 max-h-[90vh] flex flex-col">
+            <div className="bg-[#0B1528] text-white p-4 flex items-center justify-between shrink-0">
               <h3 className="font-bold text-base">
                 {editingProduct ? 'Editar Producto / Servicio' : 'Nuevo Producto / Servicio'}
               </h3>

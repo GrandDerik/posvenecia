@@ -464,17 +464,17 @@ export const CuentasPorPagarView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-4 max-w-5xl mx-auto px-3 sm:px-6 py-4 pb-12">
+    <div className="space-y-4 max-w-6xl mx-auto px-3 sm:px-6 py-4 pb-12">
       
       {/* Top Main Banner with Dual Tab Selector */}
-      <div className="bg-white rounded-3xl p-5 border border-slate-200/90 shadow-xs space-y-4">
+      <div className="bg-white/95 rounded-3xl p-5 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] space-y-4">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <span className="p-2.5 rounded-2xl bg-blue-50 text-blue-600 border border-blue-200 shrink-0">
+            <span className="p-2.5 rounded-2xl bg-[#0B1528] text-white shrink-0">
               <CreditCard className="w-5 h-5" />
             </span>
             <div>
-              <h1 className="text-xl font-black text-slate-900 tracking-tight">
+              <h1 className="text-xl font-black text-[#0B1528] tracking-tight">
                 Control de Cuentas por Pagar & Gastos del Mes
               </h1>
               <p className="text-xs text-slate-500">
@@ -488,7 +488,7 @@ export const CuentasPorPagarView: React.FC = () => {
               <button
                 type="button"
                 onClick={openNewGastoModal}
-                className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer"
+                className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
                 <span>Registrar Gasto del Mes</span>
@@ -497,7 +497,7 @@ export const CuentasPorPagarView: React.FC = () => {
               <button
                 type="button"
                 onClick={openNewCuentaModal}
-                className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer"
+                className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
                 <span>Registrar Factura Proveedor</span>
@@ -507,23 +507,23 @@ export const CuentasPorPagarView: React.FC = () => {
         </div>
 
         {/* Dual Sub-Navigation Switcher */}
-        <div className="flex flex-col sm:flex-row p-1 bg-slate-100 rounded-2xl border border-slate-200 gap-1">
+        <div className="flex flex-col sm:flex-row p-1 bg-[#EEF2F7] rounded-2xl border border-[#DCE4F0] gap-1">
           <button
             type="button"
             onClick={() => {
               setActiveSubTab('gastos_mes');
               setStatusFilter('todos');
             }}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'gastos_mes'
-                ? 'bg-white text-blue-700 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-white text-[#1D4ED8] shadow-xs border border-[#DCE4F0]'
+                : 'text-slate-600 hover:text-[#0B1528]'
             }`}
           >
             <Home className="w-4 h-4 shrink-0" />
             <span>Gastos del Mes & Insumos (Por Pagar)</span>
             {gastosOperativos.filter(g => g.status !== 'pagado').length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-rose-100 text-rose-700 font-extrabold">
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] font-extrabold font-mono-numbers">
                 {gastosOperativos.filter(g => g.status !== 'pagado').length}
               </span>
             )}
@@ -535,16 +535,16 @@ export const CuentasPorPagarView: React.FC = () => {
               setActiveSubTab('proveedores');
               setStatusFilter('todos');
             }}
-            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'proveedores'
-                ? 'bg-white text-blue-700 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-white text-[#1D4ED8] shadow-xs border border-[#DCE4F0]'
+                : 'text-slate-600 hover:text-[#0B1528]'
             }`}
           >
             <Building2 className="w-4 h-4 shrink-0" />
             <span>Facturas a Proveedores (Compras a Crédito)</span>
             {cuentasPorPagar.filter(c => c.status !== 'pagada').length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-100 text-amber-800 font-extrabold">
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[#FFF3E8] text-[#9A4B12] border border-[#F5D3B3] font-extrabold font-mono-numbers">
                 {cuentasPorPagar.filter(c => c.status !== 'pagada').length}
               </span>
             )}
@@ -555,12 +555,12 @@ export const CuentasPorPagarView: React.FC = () => {
       {/* METRICS ROW */}
       {activeSubTab === 'gastos_mes' ? (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="bg-white rounded-2xl p-4 border border-blue-200 shadow-2xs">
-            <div className="flex items-center justify-between text-blue-600 mb-1">
+          <div className="bg-gradient-to-b from-white to-[#F4F8FF] rounded-2xl p-4 border border-[#93C5FD] shadow-[0_2px_12px_-4px_rgba(37,99,235,0.1)]">
+            <div className="flex items-center justify-between text-[#1D4ED8] mb-1">
               <span className="text-[11px] font-bold uppercase tracking-wider">Total Gastos Mes</span>
               <DollarSign className="w-4 h-4" />
             </div>
-            <div className="text-lg font-black text-slate-900 font-mono-numbers">
+            <div className="text-lg font-black text-[#0B1528] font-mono-numbers">
               ${formatUSD(totalGastosMesUSD)}
             </div>
             <div className="text-[11px] text-slate-500 font-mono-numbers">
@@ -568,25 +568,25 @@ export const CuentasPorPagarView: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-4 border border-rose-200 shadow-2xs">
-            <div className="flex items-center justify-between text-rose-600 mb-1">
+          <div className="bg-[#FFF3E8] rounded-2xl p-4 border border-[#F5D3B3] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.05)]">
+            <div className="flex items-center justify-between text-[#D96B27] mb-1">
               <span className="text-[11px] font-bold uppercase tracking-wider">Saldo Por Pagar</span>
               <AlertTriangle className="w-4 h-4" />
             </div>
-            <div className="text-lg font-black text-rose-600 font-mono-numbers">
+            <div className="text-lg font-black text-[#9A4B12] font-mono-numbers">
               ${formatUSD(totalGastosPendientesUSD)}
             </div>
-            <div className="text-[11px] text-slate-500 font-mono-numbers">
+            <div className="text-[11px] text-[#7C3A0B] font-mono-numbers">
               Bs {formatBs(totalGastosPendientesUSD * bcvRate)}
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-4 border border-emerald-200 shadow-2xs">
-            <div className="flex items-center justify-between text-emerald-600 mb-1">
+          <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
+            <div className="flex items-center justify-between text-[#065F46] mb-1">
               <span className="text-[11px] font-bold uppercase tracking-wider">Abonado / Pagado</span>
               <CheckCircle2 className="w-4 h-4" />
             </div>
-            <div className="text-lg font-black text-emerald-600 font-mono-numbers">
+            <div className="text-lg font-black text-[#065F46] font-mono-numbers">
               ${formatUSD(totalGastosPagadosUSD)}
             </div>
             <div className="text-[11px] text-slate-500 font-mono-numbers">
@@ -594,40 +594,40 @@ export const CuentasPorPagarView: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-4 border border-purple-200 shadow-2xs">
-            <div className="flex items-center justify-between text-purple-600 mb-1">
+          <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
+            <div className="flex items-center justify-between text-[#1D4ED8] mb-1">
               <span className="text-[11px] font-bold uppercase tracking-wider">Gastos Eventuales</span>
               <Sparkles className="w-4 h-4" />
             </div>
-            <div className="text-lg font-black text-purple-700 font-mono-numbers">
+            <div className="text-lg font-black text-[#0B1528] font-mono-numbers">
               ${formatUSD(totalGastosEventualesUSD)}
             </div>
-            <div className="text-[11px] text-slate-500">
+            <div className="text-[11px] text-slate-500 font-mono-numbers">
               {gastosOperativos.filter(g => g.type === 'eventual').length} registro(s)
             </div>
           </div>
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="bg-white rounded-2xl p-4 border border-rose-200 shadow-2xs">
-            <div className="flex items-center justify-between text-rose-600 mb-1">
+          <div className="bg-[#FFF3E8] rounded-2xl p-4 border border-[#F5D3B3] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.05)]">
+            <div className="flex items-center justify-between text-[#D96B27] mb-1">
               <span className="text-[11px] font-bold uppercase tracking-wider">Deuda Proveedores</span>
               <AlertTriangle className="w-4 h-4" />
             </div>
-            <div className="text-lg font-black text-rose-700 font-mono-numbers">
+            <div className="text-lg font-black text-[#9A4B12] font-mono-numbers">
               ${formatUSD(totalCppPendingUSD)}
             </div>
-            <div className="text-[11px] text-slate-500 font-mono-numbers">
+            <div className="text-[11px] text-[#7C3A0B] font-mono-numbers">
               Bs {formatBs(totalCppPendingUSD * bcvRate)}
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-4 border border-emerald-200 shadow-2xs">
-            <div className="flex items-center justify-between text-emerald-600 mb-1">
+          <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
+            <div className="flex items-center justify-between text-[#065F46] mb-1">
               <span className="text-[11px] font-bold uppercase tracking-wider">Total Abonado</span>
               <CheckCircle2 className="w-4 h-4" />
             </div>
-            <div className="text-lg font-black text-emerald-700 font-mono-numbers">
+            <div className="text-lg font-black text-[#065F46] font-mono-numbers">
               ${formatUSD(totalCppPaidUSD)}
             </div>
             <div className="text-[11px] text-slate-500 font-mono-numbers">
@@ -635,12 +635,12 @@ export const CuentasPorPagarView: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-4 border border-amber-200 shadow-2xs">
-            <div className="flex items-center justify-between text-amber-600 mb-1">
+          <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
+            <div className="flex items-center justify-between text-[#BE123C] mb-1">
               <span className="text-[11px] font-bold uppercase tracking-wider">Facturas Vencidas</span>
               <Clock className="w-4 h-4" />
             </div>
-            <div className="text-lg font-black text-amber-700 font-mono-numbers">
+            <div className="text-lg font-black text-[#BE123C] font-mono-numbers">
               {overdueCppCount}
             </div>
             <div className="text-[11px] text-slate-500">
@@ -648,15 +648,15 @@ export const CuentasPorPagarView: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs">
-            <div className="flex items-center justify-between text-slate-600 mb-1">
+          <div className="bg-gradient-to-b from-white to-[#F4F8FF] rounded-2xl p-4 border border-[#93C5FD] shadow-[0_2px_12px_-4px_rgba(37,99,235,0.1)]">
+            <div className="flex items-center justify-between text-[#1D4ED8] mb-1">
               <span className="text-[11px] font-bold uppercase tracking-wider">Total Facturas</span>
               <FileText className="w-4 h-4" />
             </div>
-            <div className="text-lg font-black text-slate-800 font-mono-numbers">
+            <div className="text-lg font-black text-[#0B1528] font-mono-numbers">
               {cuentasPorPagar.length}
             </div>
-            <div className="text-[11px] text-slate-500">
+            <div className="text-[11px] text-slate-500 font-mono-numbers">
               {cuentasPorPagar.filter(c => c.status === 'pagada').length} pagadas
             </div>
           </div>
@@ -664,7 +664,7 @@ export const CuentasPorPagarView: React.FC = () => {
       )}
 
       {/* SEARCH AND FILTERS */}
-      <div className="bg-white rounded-2xl p-3 border border-slate-200 shadow-2xs flex flex-col md:flex-row items-center gap-3">
+      <div className="bg-white/95 rounded-2xl p-3 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col md:flex-row items-center gap-3">
         <div className="relative flex-1 w-full">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -675,7 +675,7 @@ export const CuentasPorPagarView: React.FC = () => {
             }
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:border-blue-500 focus:outline-none transition-all"
+            className="w-full pl-9 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-medium text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none transition-all"
           />
         </div>
 
@@ -686,7 +686,7 @@ export const CuentasPorPagarView: React.FC = () => {
               <select
                 value={gastoTypeFilter}
                 onChange={(e) => setGastoTypeFilter(e.target.value as any)}
-                className="px-2.5 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200 focus:outline-none"
+                className="px-2.5 py-1.5 bg-[#F8FAFC] text-[#0B1528] rounded-xl text-xs font-bold border border-[#DCE4F0] focus:outline-none focus:border-blue-500"
               >
                 <option value="todos">Todos los Tipos</option>
                 <option value="mensual_fijo">Mensuales Fijos</option>
@@ -704,10 +704,10 @@ export const CuentasPorPagarView: React.FC = () => {
                     key={st.id}
                     type="button"
                     onClick={() => setStatusFilter(st.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
                       statusFilter === st.id
-                        ? 'bg-blue-600 text-white shadow-xs'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_10px_-2px_rgba(37,99,235,0.4)]'
+                        : 'bg-[#EEF2F7] text-slate-600 hover:bg-[#E2E8F0]'
                     }`}
                   >
                     {st.label}
@@ -722,10 +722,10 @@ export const CuentasPorPagarView: React.FC = () => {
                   key={st}
                   type="button"
                   onClick={() => setStatusFilter(st)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize whitespace-nowrap transition-colors cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize whitespace-nowrap shrink-0 transition-all cursor-pointer ${
                     statusFilter === st
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_10px_-2px_rgba(37,99,235,0.4)]'
+                      : 'bg-[#EEF2F7] text-slate-600 hover:bg-[#E2E8F0]'
                   }`}
                 >
                   {st}
@@ -740,7 +740,7 @@ export const CuentasPorPagarView: React.FC = () => {
       {activeSubTab === 'gastos_mes' && (
         <div className="space-y-3">
           {filteredGastos.length === 0 ? (
-            <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center space-y-2">
+            <div className="bg-white/95 rounded-3xl p-8 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] text-center space-y-2">
               <Home className="w-12 h-12 text-slate-300 mx-auto" />
               <h3 className="text-sm font-bold text-slate-800">No hay gastos operativos registrados</h3>
               <p className="text-xs text-slate-500 max-w-sm mx-auto">
@@ -767,47 +767,47 @@ export const CuentasPorPagarView: React.FC = () => {
               return (
                 <div
                   key={gasto.id}
-                  className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs hover:border-slate-300 transition-all space-y-3"
+                  className="bg-white/95 rounded-2xl border border-[#DCE4F0] p-4 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] hover:border-[#93C5FD] transition-all space-y-3"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
-                      <div className="p-2.5 rounded-xl bg-slate-100 shrink-0 mt-0.5">
+                      <div className="p-2.5 rounded-xl bg-[#EEF2F7] border border-[#DCE4F0] shrink-0 mt-0.5">
                         {getCategoryIcon(gasto.category)}
                       </div>
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-extrabold text-sm text-slate-900">
+                          <span className="font-extrabold text-sm text-[#0B1528]">
                             {gasto.concept}
                           </span>
                           
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#F8FAFC] text-slate-700 border border-[#DCE4F0]">
                             {gasto.category}
                           </span>
 
                           {gasto.type === 'eventual' ? (
-                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200 flex items-center gap-1">
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] flex items-center gap-1">
                               <Sparkles className="w-3 h-3" /> EVENTUAL
                             </span>
                           ) : (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC]">
                               FIJO MENSUAL
                             </span>
                           )}
 
                           {gasto.status === 'pagado' ? (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-300 flex items-center gap-1">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E7F8EE] text-[#065F46] border border-[#A7E6C4] flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3" /> PAGADO
                             </span>
                           ) : gasto.status === 'parcial' ? (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] flex items-center gap-1">
                               <Coins className="w-3 h-3" /> PARCIALMENTE PAGADO
                             </span>
                           ) : isOverdue ? (
-                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-300 flex items-center gap-1">
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] flex items-center gap-1">
                               <Clock className="w-3 h-3" /> VENCIDO
                             </span>
                           ) : (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FFF3E8] text-[#9A4B12] border border-[#F5D3B3]">
                               PENDIENTE POR PAGAR
                             </span>
                           )}
@@ -817,18 +817,18 @@ export const CuentasPorPagarView: React.FC = () => {
                         {(gasto.supplierName || gasto.supplierRIF || gasto.supplierPhone || gasto.invoiceNumber) && (
                           <div className="text-xs text-slate-600 flex items-center gap-2.5 flex-wrap pt-0.5">
                             {gasto.supplierName && (
-                              <span className="font-semibold text-slate-800 flex items-center gap-1">
+                              <span className="font-semibold text-[#0B1528] flex items-center gap-1">
                                 <Building2 className="w-3.5 h-3.5 text-slate-400" />
                                 {gasto.supplierName}
                               </span>
                             )}
                             {gasto.supplierRIF && (
-                              <span className="font-mono text-[11px] px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200">
+                              <span className="font-mono text-[11px] px-1.5 py-0.5 bg-[#F8FAFC] rounded border border-[#DCE4F0]">
                                 {gasto.supplierRIF}
                               </span>
                             )}
                             {gasto.invoiceNumber && (
-                              <span className="font-mono text-[11px] font-bold text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                              <span className="font-mono text-[11px] font-bold text-[#1D4ED8] bg-[#EBF3FE] px-1.5 py-0.5 rounded border border-[#C5DCFC]">
                                 Doc: {gasto.invoiceNumber}
                               </span>
                             )}
@@ -837,7 +837,7 @@ export const CuentasPorPagarView: React.FC = () => {
                                 href={`https://wa.me/58${gasto.supplierPhone.replace(/\D/g, '').slice(-10)}`}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1 text-[11px]"
+                                className="text-[#065F46] hover:underline font-semibold flex items-center gap-1 text-[11px]"
                               >
                                 <Phone className="w-3 h-3" /> {gasto.supplierPhone}
                               </a>
@@ -848,7 +848,7 @@ export const CuentasPorPagarView: React.FC = () => {
                         <div className="text-xs text-slate-500 flex items-center gap-3 flex-wrap">
                           <span>Mes: <strong>{gasto.month}</strong></span>
                           <span>Emisión: {new Date(gasto.date).toLocaleDateString('es-VE')}</span>
-                          <span>Vence: <strong className={isOverdue ? 'text-rose-600' : ''}>{new Date(gasto.dueDate).toLocaleDateString('es-VE')}</strong></span>
+                          <span>Vence: <strong className={isOverdue ? 'text-[#BE123C]' : ''}>{new Date(gasto.dueDate).toLocaleDateString('es-VE')}</strong></span>
                           {gasto.reference && (
                             <span className="font-mono text-slate-600">Últ. Ref: {gasto.reference}</span>
                           )}
@@ -861,14 +861,14 @@ export const CuentasPorPagarView: React.FC = () => {
                       <div className="text-[11px] text-slate-400 font-semibold">
                         {gasto.status === 'pagado' ? 'Monto pagado' : 'Saldo pendiente'}
                       </div>
-                      <div className={`text-base sm:text-lg font-black font-mono-numbers ${gasto.status === 'pagado' ? 'text-emerald-700' : 'text-rose-600'}`}>
+                      <div className={`text-base sm:text-lg font-black font-mono-numbers ${gasto.status === 'pagado' ? 'text-[#065F46]' : 'text-[#BE123C]'}`}>
                         ${formatUSD(gasto.status === 'pagado' ? gasto.amountUSD : remainingUSD)}
                       </div>
                       <div className="text-[11px] text-slate-500 font-mono-numbers">
                         Bs {formatBs((gasto.status === 'pagado' ? gasto.amountUSD : remainingUSD) * bcvRate)}
                       </div>
                       {gasto.status !== 'pagado' && paidUSD > 0 && (
-                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                        <div className="text-[10px] text-slate-400 font-mono-numbers mt-0.5">
                           Total factura: ${formatUSD(gasto.amountUSD)}
                         </div>
                       )}
@@ -878,11 +878,11 @@ export const CuentasPorPagarView: React.FC = () => {
                   {/* Progress bar if partially paid or pending */}
                   {(paidUSD > 0 || gasto.status !== 'pagado') && (
                     <div>
-                      <div className="flex justify-between text-[11px] font-bold text-slate-500 mb-1">
+                      <div className="flex justify-between text-[11px] font-bold text-slate-500 mb-1 font-mono-numbers">
                         <span>Abonado: ${formatUSD(paidUSD)} de ${formatUSD(gasto.amountUSD)}</span>
                         <span>{Math.round(progress)}%</span>
                       </div>
-                      <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="w-full h-2 bg-[#EEF2F7] rounded-full overflow-hidden">
                         <div 
                           className={`h-full transition-all duration-300 ${
                             gasto.status === 'pagado' ? 'bg-emerald-500' : 'bg-blue-600'
@@ -894,8 +894,8 @@ export const CuentasPorPagarView: React.FC = () => {
                   )}
 
                   {/* Notes & Actions Bar */}
-                  <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="text-xs text-slate-600 italic truncate max-w-md">
+                  <div className="pt-2 border-t border-[#EEF2F7] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="text-xs text-slate-500 italic truncate max-w-md">
                       {gasto.notes ? `Nota: ${gasto.notes}` : 'Sin observaciones adicionales.'}
                     </div>
 
@@ -904,9 +904,9 @@ export const CuentasPorPagarView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => openPagarGastoModal(gasto)}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                          className="px-3 py-1.5 rounded-xl bg-[#0B1528] hover:bg-[#152440] text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap"
                         >
-                          <Coins className="w-3.5 h-3.5" />
+                          <Coins className="w-3.5 h-3.5 text-emerald-300" />
                           <span>{paidUSD > 0 ? 'Abonar / Liquidar' : 'Abonar / Pagar'}</span>
                         </button>
                       )}
@@ -915,7 +915,7 @@ export const CuentasPorPagarView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setExpandedGastoAbonosId(expandedGastoAbonosId === gasto.id ? null : gasto.id)}
-                          className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          className="px-2.5 py-1.5 rounded-xl bg-[#EEF2F7] hover:bg-[#E2E8F0] text-[#0B1528] font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
                         >
                           <Receipt className="w-3.5 h-3.5 text-slate-500" />
                           <span>{abonosList.length} Pago{abonosList.length > 1 ? 's' : ''}</span>
@@ -926,7 +926,7 @@ export const CuentasPorPagarView: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setDetailGasto(gasto)}
-                        className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-800 transition-colors cursor-pointer"
+                        className="p-1.5 rounded-xl bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] hover:bg-blue-100 transition-colors cursor-pointer"
                         title="Ver detalle completo"
                       >
                         <Eye className="w-4 h-4" />
@@ -935,21 +935,21 @@ export const CuentasPorPagarView: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => openEditGastoModal(gasto)}
-                        className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-amber-50 hover:text-amber-700 transition-colors cursor-pointer"
+                        className="p-1.5 rounded-xl bg-[#F8FAFC] text-slate-600 border border-[#DCE4F0] hover:bg-[#FFF3E8] hover:text-[#9A4B12] transition-colors cursor-pointer"
                         title="Editar gasto"
                       >
                         <Edit2 className="w-4 h-4" />
                       </button>
 
                       {confirmDeleteId === gasto.id ? (
-                        <div className="flex items-center gap-1 bg-rose-50 px-2 py-1 rounded-lg border border-rose-200">
+                        <div className="flex items-center gap-1 bg-[#FEECEF] px-2 py-1 rounded-xl border border-[#FBC4CD]">
                           <button
                             type="button"
                             onClick={() => {
                               deleteGastoOperativo(gasto.id);
                               setConfirmDeleteId(null);
                             }}
-                            className="text-[11px] font-bold text-rose-700 hover:underline cursor-pointer"
+                            className="text-[11px] font-bold text-[#BE123C] hover:underline cursor-pointer"
                           >
                             Confirmar
                           </button>
@@ -966,7 +966,7 @@ export const CuentasPorPagarView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteId(gasto.id)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          className="p-1.5 rounded-xl bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] hover:bg-rose-100 transition-colors cursor-pointer"
                           title="Eliminar gasto"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -977,11 +977,11 @@ export const CuentasPorPagarView: React.FC = () => {
 
                   {/* Audit Trail Accordion of Abonos */}
                   {expandedGastoAbonosId === gasto.id && abonosList.length > 0 && (
-                    <div className="mt-2 pt-3 border-t border-slate-100 space-y-2">
-                      <h4 className="text-xs font-extrabold text-slate-700">Historial de Abonos y Pagos (Auditoría)</h4>
-                      <div className="bg-slate-50 rounded-xl overflow-x-auto border border-slate-200/60">
+                    <div className="mt-2 pt-3 border-t border-[#EEF2F7] space-y-2">
+                      <h4 className="text-xs font-extrabold text-[#0B1528]">Historial de Abonos y Pagos (Auditoría)</h4>
+                      <div className="bg-[#F8FAFC] rounded-xl overflow-x-auto border border-[#DCE4F0]">
                         <table className="w-full text-left text-xs">
-                          <thead className="bg-slate-100/80 text-slate-600 text-[10px] uppercase font-bold">
+                          <thead className="bg-[#EEF2F7] text-slate-600 text-[10px] uppercase font-bold">
                             <tr>
                               <th className="p-2">Fecha</th>
                               <th className="p-2">Monto ($)</th>
@@ -990,23 +990,23 @@ export const CuentasPorPagarView: React.FC = () => {
                               <th className="p-2">Ref / Nota</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-slate-100">
+                          <tbody className="divide-y divide-[#EEF2F7]">
                             {abonosList.map(ab => (
                               <tr key={ab.id} className="hover:bg-white/80">
                                 <td className="p-2 font-mono text-slate-600 whitespace-nowrap">
                                   {new Date(ab.date).toLocaleDateString('es-VE')} {new Date(ab.date).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' })}
                                 </td>
-                                <td className="p-2 font-black text-emerald-600 font-mono-numbers">
+                                <td className="p-2 font-black text-[#065F46] font-mono-numbers">
                                   ${formatUSD(ab.amountUSD)}
                                 </td>
                                 <td className="p-2 font-mono-numbers text-slate-600">
                                   Bs {formatBs(ab.amountBs)}
                                 </td>
-                                <td className="p-2 uppercase font-semibold text-[11px] text-slate-700">
+                                <td className="p-2 uppercase font-semibold text-[11px] text-[#0B1528]">
                                   {ab.paymentMethod.replace('_', ' ')}
                                 </td>
                                 <td className="p-2 text-slate-500">
-                                  {ab.reference && <span className="font-mono text-slate-700 mr-1.5">Ref: {ab.reference}</span>}
+                                  {ab.reference && <span className="font-mono text-[#0B1528] mr-1.5">Ref: {ab.reference}</span>}
                                   {ab.notes}
                                 </td>
                               </tr>
@@ -1027,9 +1027,9 @@ export const CuentasPorPagarView: React.FC = () => {
       {activeSubTab === 'proveedores' && (
         <div className="space-y-3">
           {filteredCuentas.length === 0 ? (
-            <div className="bg-white rounded-3xl p-8 border border-slate-200 text-center space-y-2">
+            <div className="bg-white/95 rounded-3xl p-8 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] text-center space-y-2">
               <Building2 className="w-12 h-12 text-slate-300 mx-auto" />
-              <h3 className="text-sm font-bold text-slate-800">No hay cuentas por pagar registradas</h3>
+              <h3 className="text-sm font-bold text-[#0B1528]">No hay cuentas por pagar registradas</h3>
               <p className="text-xs text-slate-500 max-w-sm mx-auto">
                 {searchTerm 
                   ? 'No encontramos facturas que coincidan con los filtros de búsqueda.'
@@ -1038,7 +1038,7 @@ export const CuentasPorPagarView: React.FC = () => {
               <button
                 type="button"
                 onClick={openNewCuentaModal}
-                className="mt-2 px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 font-bold text-xs rounded-xl transition-colors cursor-pointer"
+                className="mt-2 px-4 py-2 bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] hover:bg-blue-100 font-bold text-xs rounded-xl transition-colors cursor-pointer"
               >
                 + Agregar Primera Factura Proveedor
               </button>
@@ -1051,54 +1051,54 @@ export const CuentasPorPagarView: React.FC = () => {
               return (
                 <div 
                   key={cuenta.id}
-                  className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs hover:border-slate-300 transition-all space-y-3"
+                  className="bg-white/95 rounded-2xl border border-[#DCE4F0] p-4 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] hover:border-[#93C5FD] transition-all space-y-3"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="flex items-start gap-3">
-                      <div className="p-2.5 rounded-xl bg-slate-100 text-slate-700 shrink-0 mt-0.5">
-                        <Building2 className="w-5 h-5 text-slate-600" />
+                      <div className="p-2.5 rounded-xl bg-[#EEF2F7] border border-[#DCE4F0] text-[#0B1528] shrink-0 mt-0.5">
+                        <Building2 className="w-5 h-5" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-extrabold text-sm text-slate-900">
+                          <span className="font-extrabold text-sm text-[#0B1528]">
                             {cuenta.supplierName}
                           </span>
                           {cuenta.supplierRIF && (
-                            <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                            <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-[#F8FAFC] text-slate-600 border border-[#DCE4F0]">
                               {cuenta.supplierRIF}
                             </span>
                           )}
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC]">
                             {cuenta.category}
                           </span>
                           {isOverdue ? (
-                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-300 flex items-center gap-1">
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] flex items-center gap-1">
                               <Clock className="w-3 h-3" /> VENCIDA
                             </span>
                           ) : cuenta.status === 'pagada' ? (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-300 flex items-center gap-1">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E7F8EE] text-[#065F46] border border-[#A7E6C4] flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3" /> PAGADA
                             </span>
                           ) : cuenta.status === 'parcial' ? (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FFF3E8] text-[#9A4B12] border border-[#F5D3B3]">
                               ABONO PARCIAL
                             </span>
                           ) : (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-300">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EEF2F7] text-[#0B1528] border border-[#DCE4F0]">
                               PENDIENTE
                             </span>
                           )}
                         </div>
 
                         <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-3 flex-wrap">
-                          <span>Factura: <strong>{cuenta.invoiceNumber}</strong></span>
+                          <span>Factura: <strong className="text-[#0B1528]">{cuenta.invoiceNumber}</strong></span>
                           {cuenta.controlNumber && <span>Control: <strong>{cuenta.controlNumber}</strong></span>}
                           {cuenta.supplierPhone && (
                             <a 
                               href={`https://wa.me/58${cuenta.supplierPhone.replace(/\D/g, '').slice(-10)}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1"
+                              className="text-[#065F46] hover:underline font-semibold flex items-center gap-1"
                             >
                               <Phone className="w-3 h-3" /> {cuenta.supplierPhone}
                             </a>
@@ -1110,7 +1110,7 @@ export const CuentasPorPagarView: React.FC = () => {
                     {/* Amounts */}
                     <div className="text-left sm:text-right">
                       <div className="text-xs text-slate-400 font-medium">Resta por pagar</div>
-                      <div className="text-base sm:text-lg font-black text-rose-600 font-mono-numbers">
+                      <div className="text-base sm:text-lg font-black text-[#BE123C] font-mono-numbers">
                         ${formatUSD(cuenta.remainingUSD)}
                       </div>
                       <div className="text-[11px] text-slate-500 font-mono-numbers">
@@ -1120,13 +1120,13 @@ export const CuentasPorPagarView: React.FC = () => {
                   </div>
 
                   {/* Detail box */}
-                  <div className="bg-slate-50 rounded-xl p-2.5 text-xs text-slate-600 border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="bg-[#F8FAFC] rounded-xl p-2.5 text-xs text-slate-600 border border-[#DCE4F0] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="truncate max-w-md">
-                      <strong>Detalle:</strong> {cuenta.description}
+                      <strong className="text-[#0B1528]">Detalle:</strong> {cuenta.description}
                     </div>
                     <div className="flex items-center gap-4 text-[11px] text-slate-500 shrink-0">
                       <span>Emisión: {new Date(cuenta.date).toLocaleDateString('es-VE')}</span>
-                      <span className={isOverdue ? 'text-rose-600 font-bold' : ''}>
+                      <span className={isOverdue ? 'text-[#BE123C] font-bold' : ''}>
                         Vence: {new Date(cuenta.dueDate).toLocaleDateString('es-VE')}
                       </span>
                     </div>
@@ -1134,11 +1134,11 @@ export const CuentasPorPagarView: React.FC = () => {
 
                   {/* Progress Bar of Payments */}
                   <div>
-                    <div className="flex justify-between text-[11px] font-bold text-slate-500 mb-1">
+                    <div className="flex justify-between text-[11px] font-bold text-slate-500 mb-1 font-mono-numbers">
                       <span>Abonado: ${formatUSD(cuenta.paidAmountUSD)} de ${formatUSD(cuenta.totalAmountUSD)}</span>
                       <span>{Math.round(progress)}%</span>
                     </div>
-                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div className="w-full h-2 bg-[#EEF2F7] rounded-full overflow-hidden">
                       <div 
                         className={`h-full transition-all duration-300 ${
                           cuenta.status === 'pagada' ? 'bg-emerald-500' : 'bg-blue-600'
@@ -1159,9 +1159,9 @@ export const CuentasPorPagarView: React.FC = () => {
                             setAbonoAmountUSD(cuenta.remainingUSD.toString());
                             setIsAbonoModalOpen(true);
                           }}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                          className="px-3 py-1.5 rounded-xl bg-[#0B1528] hover:bg-[#152440] text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
                         >
-                          <Plus className="w-3.5 h-3.5" />
+                          <Plus className="w-3.5 h-3.5 text-emerald-300" />
                           <span>Abonar / Pagar</span>
                         </button>
                       )}
@@ -1170,7 +1170,7 @@ export const CuentasPorPagarView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => setSelectedCuenta(selectedCuenta?.id === cuenta.id ? null : cuenta)}
-                          className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          className="px-3 py-1.5 rounded-xl bg-[#EEF2F7] hover:bg-[#E2E8F0] text-[#0B1528] font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
                         >
                           <Receipt className="w-3.5 h-3.5 text-slate-500" />
                           <span>Ver {cuenta.abonos.length} Abono{cuenta.abonos.length > 1 ? 's' : ''}</span>
@@ -1183,7 +1183,7 @@ export const CuentasPorPagarView: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setDetailCuenta(cuenta)}
-                        className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-800 transition-colors cursor-pointer"
+                        className="p-1.5 rounded-xl bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] hover:bg-blue-100 transition-colors cursor-pointer"
                         title="Ver detalle de factura"
                       >
                         <Eye className="w-4 h-4" />
@@ -1191,7 +1191,7 @@ export const CuentasPorPagarView: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => openEditCuentaModal(cuenta)}
-                        className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-amber-50 hover:text-amber-700 transition-colors cursor-pointer"
+                        className="p-1.5 rounded-xl bg-[#F8FAFC] text-slate-600 border border-[#DCE4F0] hover:bg-[#FFF3E8] hover:text-[#9A4B12] transition-colors cursor-pointer"
                         title="Editar factura"
                       >
                         <Edit2 className="w-4 h-4" />
@@ -1199,7 +1199,7 @@ export const CuentasPorPagarView: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => deleteCuentaPorPagar(cuenta.id)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                        className="p-1.5 rounded-xl bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] hover:bg-rose-100 transition-colors cursor-pointer"
                         title="Eliminar factura"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1257,18 +1257,18 @@ export const CuentasPorPagarView: React.FC = () => {
 
       {/* MODAL: REGISTRAR / EDITAR GASTO OPERATIVO DEL MES */}
       {isAddGastoModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-5 max-h-[92vh] overflow-y-auto space-y-4 shadow-xl border border-slate-100">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <span className="p-2 bg-blue-50 text-blue-600 rounded-xl">
-                  <Home className="w-5 h-5" />
+        <div className="fixed inset-0 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden max-h-[92vh] flex flex-col shadow-2xl border border-[#DCE4F0]">
+            <div className="p-4 bg-[#0B1528] text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 bg-white/10 text-blue-300 rounded-xl">
+                  <Home className="w-4 h-4" />
                 </span>
                 <div>
-                  <h3 className="font-extrabold text-slate-900 text-base">
+                  <h3 className="font-extrabold text-white text-sm">
                     {editingGasto ? 'Editar Gasto del Mes' : 'Registrar Gasto del Mes'}
                   </h3>
-                  <p className="text-[11px] text-slate-500">
+                  <p className="text-[11px] text-slate-300">
                     Insumos (hojas, tinta), alquiler, servicios o gastos por pagar
                   </p>
                 </div>
@@ -1279,13 +1279,13 @@ export const CuentasPorPagarView: React.FC = () => {
                   setIsAddGastoModalOpen(false);
                   setEditingGasto(null);
                 }}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateOrEditGasto} className="space-y-3.5">
+            <form onSubmit={handleCreateOrEditGasto} className="p-5 overflow-y-auto space-y-3.5">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Concepto / Nombre del Gasto *</label>
                 <input
@@ -1563,7 +1563,7 @@ export const CuentasPorPagarView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
                 >
                   {editingGasto ? 'Guardar Cambios' : 'Guardar Gasto'}
                 </button>
@@ -1583,16 +1583,16 @@ export const CuentasPorPagarView: React.FC = () => {
         const willBeFull = afterRemaining <= 0.009;
 
         return (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
-            <div className="bg-white rounded-3xl max-w-md w-full p-5 space-y-4 shadow-xl border border-slate-100 max-h-[92vh] overflow-y-auto">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <span className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
-                    <Coins className="w-5 h-5" />
+          <div className="fixed inset-0 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-[#DCE4F0] max-h-[92vh] flex flex-col">
+              <div className="p-4 bg-[#0B1528] text-white flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <span className="p-2 bg-white/10 text-emerald-300 rounded-xl">
+                    <Coins className="w-4 h-4" />
                   </span>
                   <div>
-                    <h3 className="font-extrabold text-slate-900 text-base">Registrar Abono / Pago de Gasto</h3>
-                    <div className="text-[11px] text-slate-500 truncate max-w-[230px]">
+                    <h3 className="font-extrabold text-white text-sm">Registrar Abono / Pago de Gasto</h3>
+                    <div className="text-[11px] text-slate-300 truncate max-w-[230px]">
                       {gastoForPagar.concept}
                       {gastoForPagar.supplierName ? ` • ${gastoForPagar.supplierName}` : ''}
                     </div>
@@ -1601,34 +1601,35 @@ export const CuentasPorPagarView: React.FC = () => {
                 <button 
                   type="button"
                   onClick={() => setIsPagarGastoModalOpen(false)}
-                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center cursor-pointer"
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
+              <div className="p-5 overflow-y-auto space-y-4">
 
               {/* Balance Summary */}
-              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2 text-xs">
+              <div className="bg-[#F8FAFC] p-3.5 rounded-2xl border border-[#DCE4F0] space-y-2 text-xs">
                 <div className="flex justify-between items-center text-slate-500">
                   <span>Total Original del Gasto:</span>
-                  <span className="font-mono font-bold text-slate-700">${formatUSD(gastoForPagar.amountUSD)}</span>
+                  <span className="font-mono-numbers font-bold text-[#0B1528]">${formatUSD(gastoForPagar.amountUSD)}</span>
                 </div>
                 {paidSoFar > 0 && (
-                  <div className="flex justify-between items-center text-emerald-700">
+                  <div className="flex justify-between items-center text-[#065F46]">
                     <span>Abonado Previamente:</span>
-                    <span className="font-mono font-bold">- ${formatUSD(paidSoFar)}</span>
+                    <span className="font-mono-numbers font-bold">- ${formatUSD(paidSoFar)}</span>
                   </div>
                 )}
-                <div className="pt-1.5 border-t border-slate-200 flex justify-between items-center">
+                <div className="pt-1.5 border-t border-[#DCE4F0] flex justify-between items-center">
                   <div>
                     <span className="text-slate-600 font-bold">Saldo Pendiente Restante:</span>
-                    <div className="font-mono font-black text-rose-600 text-base">
+                    <div className="font-mono-numbers font-black text-[#BE123C] text-base">
                       ${formatUSD(remaining)}
                     </div>
                   </div>
                   <div className="text-right">
                     <span className="text-slate-500">Equivalente BCV:</span>
-                    <div className="font-mono font-bold text-slate-700">
+                    <div className="font-mono-numbers font-bold text-[#0B1528]">
                       Bs {formatBs(remaining * bcvRate)}
                     </div>
                   </div>
@@ -1642,7 +1643,7 @@ export const CuentasPorPagarView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setPagarAmountUSD(remaining.toFixed(2))}
-                      className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
+                      className="text-[11px] font-bold text-[#1D4ED8] hover:underline cursor-pointer"
                     >
                       Pagar Total (${formatUSD(remaining)})
                     </button>
@@ -1657,13 +1658,13 @@ export const CuentasPorPagarView: React.FC = () => {
                       required
                       value={pagarAmountUSD}
                       onChange={(e) => setPagarAmountUSD(e.target.value)}
-                      className="w-full pl-7 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono font-black text-slate-900 focus:bg-white focus:border-emerald-500 focus:outline-none"
+                      className="w-full pl-7 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-sm font-mono-numbers font-black text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
                     />
                   </div>
                   {enteredAmount > 0 && (
-                    <div className="mt-1.5 flex items-center justify-between text-[11px] font-mono">
+                    <div className="mt-1.5 flex items-center justify-between text-[11px] font-mono-numbers">
                       <span className="text-slate-500">Salida en Bs: Bs {formatBs(clampedAmount * bcvRate)}</span>
-                      <span className={`font-bold ${willBeFull ? 'text-emerald-700' : 'text-blue-700'}`}>
+                      <span className={`font-bold ${willBeFull ? 'text-[#065F46]' : 'text-[#1D4ED8]'}`}>
                         {willBeFull ? '✓ Saldará por completo' : `Restará: $${formatUSD(afterRemaining)} (Parcial)`}
                       </span>
                     </div>
@@ -1675,7 +1676,7 @@ export const CuentasPorPagarView: React.FC = () => {
                   <select
                     value={pagarMethod}
                     onChange={(e) => setPagarMethod(e.target.value as any)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:bg-white focus:border-emerald-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-semibold text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
                   >
                     <option value="pago_movil">Pago Móvil</option>
                     <option value="transferencia">Transferencia Bancaria</option>
@@ -1692,7 +1693,7 @@ export const CuentasPorPagarView: React.FC = () => {
                     placeholder="Ej: 789123 o TR-449102"
                     value={pagarRef}
                     onChange={(e) => setPagarRef(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:bg-white focus:border-emerald-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-mono focus:bg-white focus:border-blue-500 focus:outline-none"
                   />
                 </div>
 
@@ -1703,7 +1704,7 @@ export const CuentasPorPagarView: React.FC = () => {
                     placeholder="Ej: Primer abono por compra de resmas y tinta"
                     value={pagarNotes}
                     onChange={(e) => setPagarNotes(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:border-emerald-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs focus:bg-white focus:border-blue-500 focus:outline-none"
                   />
                 </div>
 
@@ -1711,19 +1712,20 @@ export const CuentasPorPagarView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setIsPagarGastoModalOpen(false)}
-                    className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer"
+                    className="px-4 py-2 rounded-xl text-slate-600 hover:bg-[#EEF2F7] font-bold text-xs cursor-pointer"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
                     disabled={enteredAmount <= 0 || enteredAmount > remaining + 0.01}
-                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-emerald-500/20 cursor-pointer"
+                    className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-50 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
                   >
                     {willBeFull ? 'Confirmar Pago Total' : 'Confirmar Abono Parcial'}
                   </button>
                 </div>
               </form>
+              </div>
             </div>
           </div>
         );
@@ -1731,17 +1733,17 @@ export const CuentasPorPagarView: React.FC = () => {
 
       {/* MODAL: DETALLE COMPLETO DE GASTO (EL OJITO) */}
       {detailGasto && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col">
-            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+        <div className="fixed inset-0 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-[#DCE4F0] max-h-[90vh] flex flex-col">
+            <div className="p-4 bg-[#0B1528] text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-blue-400" />
+                <FileText className="w-4 h-4 text-blue-300" />
                 <span className="font-bold text-sm">Detalle del Gasto / Insumo</span>
               </div>
               <button
                 type="button"
                 onClick={() => setDetailGasto(null)}
-                className="p-1 rounded-full hover:bg-slate-800 text-slate-300 cursor-pointer"
+                className="p-1 rounded-full hover:bg-white/15 text-slate-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1749,10 +1751,10 @@ export const CuentasPorPagarView: React.FC = () => {
 
             <div className="p-5 overflow-y-auto space-y-4 text-xs">
               <div>
-                <span className="text-[10px] font-bold uppercase text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                <span className="text-[10px] font-bold uppercase text-[#1D4ED8] bg-[#EBF3FE] px-2.5 py-0.5 rounded-full border border-[#C5DCFC]">
                   {detailGasto.category} • {detailGasto.type === 'eventual' ? 'Eventual' : 'Fijo Mensual'}
                 </span>
-                <h3 className="text-lg font-black text-slate-900 mt-1.5">{detailGasto.concept}</h3>
+                <h3 className="text-lg font-black text-[#0B1528] mt-1.5">{detailGasto.concept}</h3>
                 <p className="text-slate-500">Mes: <strong>{detailGasto.month}</strong> | Emisión: {new Date(detailGasto.date).toLocaleDateString('es-VE')} | Vence: {new Date(detailGasto.dueDate).toLocaleDateString('es-VE')}</p>
               </div>
 
@@ -1776,7 +1778,7 @@ export const CuentasPorPagarView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-slate-900 text-white rounded-2xl p-4 space-y-1.5 font-mono">
+              <div className="bg-[#0B1528] text-white rounded-2xl p-4 space-y-1.5 font-mono-numbers">
                 <div className="flex justify-between text-slate-300">
                   <span>Monto Total:</span>
                   <span>${formatUSD(detailGasto.amountUSD)} (Bs. {formatBs(detailGasto.amountBs)})</span>
@@ -1785,14 +1787,14 @@ export const CuentasPorPagarView: React.FC = () => {
                   <span>Total Abonado:</span>
                   <span>${formatUSD(getGastoPaidUSD(detailGasto))}</span>
                 </div>
-                <div className="flex justify-between text-rose-400 font-bold pt-1 border-t border-slate-700 text-sm">
+                <div className="flex justify-between text-rose-300 font-bold pt-1 border-t border-white/15 text-sm">
                   <span>Saldo Pendiente:</span>
                   <span>${formatUSD(getGastoRemainingUSD(detailGasto))}</span>
                 </div>
               </div>
 
               {detailGasto.notes && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900">
+                <div className="p-3 bg-[#FFF3E8] border border-[#F5D3B3] rounded-xl text-[#7C3A0B]">
                   <strong>Observaciones:</strong> {detailGasto.notes}
                 </div>
               )}
@@ -1800,16 +1802,16 @@ export const CuentasPorPagarView: React.FC = () => {
               {detailGasto.abonos && detailGasto.abonos.length > 0 && (
                 <div className="space-y-1.5">
                   <div className="font-bold text-slate-700 uppercase text-[10px]">Auditoría de Pagos y Abonos ({detailGasto.abonos.length})</div>
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="border border-[#DCE4F0] rounded-xl overflow-hidden">
                     {detailGasto.abonos.map(ab => (
-                      <div key={ab.id} className="p-2.5 border-b border-slate-100 last:border-0 flex justify-between items-center">
+                      <div key={ab.id} className="p-2.5 border-b border-[#EEF2F7] last:border-0 flex justify-between items-center">
                         <div>
-                          <div className="font-bold text-slate-800 uppercase text-[11px]">{ab.paymentMethod.replace('_', ' ')} {ab.reference ? `• Ref: ${ab.reference}` : ''}</div>
+                          <div className="font-bold text-[#0B1528] uppercase text-[11px]">{ab.paymentMethod.replace('_', ' ')} {ab.reference ? `• Ref: ${ab.reference}` : ''}</div>
                           <div className="text-[10px] text-slate-500">{new Date(ab.date).toLocaleString('es-VE')}</div>
                           {ab.notes && <div className="text-[11px] text-slate-600 italic">{ab.notes}</div>}
                         </div>
-                        <div className="text-right font-mono">
-                          <div className="font-bold text-emerald-700">${formatUSD(ab.amountUSD)}</div>
+                        <div className="text-right font-mono-numbers">
+                          <div className="font-bold text-[#065F46]">${formatUSD(ab.amountUSD)}</div>
                           <div className="text-[10px] text-slate-500">Bs. {formatBs(ab.amountBs)}</div>
                         </div>
                       </div>
@@ -1819,7 +1821,7 @@ export const CuentasPorPagarView: React.FC = () => {
               )}
             </div>
 
-            <div className="p-3 bg-slate-100 border-t border-slate-200 flex items-center justify-between gap-2">
+            <div className="p-3 bg-[#F8FAFC] border-t border-[#DCE4F0] flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1828,7 +1830,7 @@ export const CuentasPorPagarView: React.FC = () => {
                     setDetailGasto(null);
                     openEditGastoModal(g);
                   }}
-                  className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  className="px-3 py-1.5 bg-white border border-[#DCE4F0] hover:bg-[#EEF2F7] text-[#0B1528] rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                 >
                   <Edit2 className="w-3.5 h-3.5" /> Editar
                 </button>
@@ -1838,7 +1840,7 @@ export const CuentasPorPagarView: React.FC = () => {
                     deleteGastoOperativo(detailGasto.id);
                     setDetailGasto(null);
                   }}
-                  className="px-3 py-1.5 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  className="px-3 py-1.5 bg-[#FEECEF] border border-[#FBC4CD] hover:bg-rose-100 text-[#BE123C] rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Eliminar
                 </button>
@@ -1846,7 +1848,7 @@ export const CuentasPorPagarView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setDetailGasto(null)}
-                className="px-4 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold cursor-pointer"
+                className="px-4 py-1.5 bg-[#0B1528] text-white rounded-xl text-xs font-bold cursor-pointer"
               >
                 Cerrar
               </button>
@@ -1857,17 +1859,17 @@ export const CuentasPorPagarView: React.FC = () => {
 
       {/* MODAL: DETALLE DE CUENTA POR PAGAR A PROVEEDOR (EL OJITO) */}
       {detailCuenta && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col">
-            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+        <div className="fixed inset-0 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-[#DCE4F0] max-h-[90vh] flex flex-col">
+            <div className="p-4 bg-[#0B1528] text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-rose-400" />
+                <Building2 className="w-4 h-4 text-blue-300" />
                 <span className="font-bold text-sm">Detalle Cuenta por Pagar: {detailCuenta.invoiceNumber}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setDetailCuenta(null)}
-                className="p-1 rounded-full hover:bg-slate-800 text-slate-300 cursor-pointer"
+                className="p-1 rounded-full hover:bg-white/15 text-slate-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1875,21 +1877,21 @@ export const CuentasPorPagarView: React.FC = () => {
 
             <div className="p-5 overflow-y-auto space-y-4 text-xs">
               <div>
-                <h3 className="text-lg font-black text-slate-900">{detailCuenta.supplierName}</h3>
+                <h3 className="text-lg font-black text-[#0B1528]">{detailCuenta.supplierName}</h3>
                 <p className="text-slate-500 font-mono">RIF: {detailCuenta.supplierRIF || 'N/A'} {detailCuenta.supplierPhone ? `• Tel: ${detailCuenta.supplierPhone}` : ''}</p>
               </div>
 
-              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-1.5">
+              <div className="bg-[#F8FAFC] p-3.5 rounded-2xl border border-[#DCE4F0] space-y-1.5">
                 <div className="flex justify-between"><span className="text-slate-500">Factura / Control:</span><span className="font-mono font-bold">{detailCuenta.invoiceNumber} / {detailCuenta.controlNumber || 'N/A'}</span></div>
                 <div className="flex justify-between"><span className="text-slate-500">Emisión:</span><span>{new Date(detailCuenta.date).toLocaleDateString('es-VE')}</span></div>
                 <div className="flex justify-between"><span className="text-slate-500">Vencimiento:</span><span className="font-bold">{new Date(detailCuenta.dueDate).toLocaleDateString('es-VE')}</span></div>
-                <div className="pt-1 border-t border-slate-200"><span className="text-slate-500 block">Descripción:</span><span className="font-semibold text-slate-800">{detailCuenta.description}</span></div>
+                <div className="pt-1 border-t border-[#DCE4F0]"><span className="text-slate-500 block">Descripción:</span><span className="font-semibold text-[#0B1528]">{detailCuenta.description}</span></div>
               </div>
 
-              <div className="bg-slate-900 text-white rounded-2xl p-4 space-y-1 font-mono">
+              <div className="bg-[#0B1528] text-white rounded-2xl p-4 space-y-1 font-mono-numbers">
                 <div className="flex justify-between"><span>Total Factura:</span><span>${formatUSD(detailCuenta.totalAmountUSD)}</span></div>
                 <div className="flex justify-between text-emerald-400"><span>Abonado:</span><span>${formatUSD(detailCuenta.paidAmountUSD)}</span></div>
-                <div className="flex justify-between text-rose-400 font-bold pt-1 border-t border-slate-700 text-sm"><span>Saldo Restante:</span><span>${formatUSD(detailCuenta.remainingUSD)}</span></div>
+                <div className="flex justify-between text-rose-300 font-bold pt-1 border-t border-white/15 text-sm"><span>Saldo Restante:</span><span>${formatUSD(detailCuenta.remainingUSD)}</span></div>
               </div>
 
               {detailCuenta.abonos.length > 0 && (
@@ -1914,7 +1916,7 @@ export const CuentasPorPagarView: React.FC = () => {
               )}
             </div>
 
-            <div className="p-3 bg-slate-100 border-t border-slate-200 flex items-center justify-between">
+            <div className="p-3 bg-[#F8FAFC] border-t border-[#DCE4F0] flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1923,7 +1925,7 @@ export const CuentasPorPagarView: React.FC = () => {
                     setDetailCuenta(null);
                     openEditCuentaModal(c);
                   }}
-                  className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  className="px-3 py-1.5 bg-white border border-[#DCE4F0] hover:bg-[#EEF2F7] text-[#0B1528] rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                 >
                   <Edit2 className="w-3.5 h-3.5" /> Editar
                 </button>
@@ -1933,7 +1935,7 @@ export const CuentasPorPagarView: React.FC = () => {
                     deleteCuentaPorPagar(detailCuenta.id);
                     setDetailCuenta(null);
                   }}
-                  className="px-3 py-1.5 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  className="px-3 py-1.5 bg-[#FEECEF] border border-[#FBC4CD] hover:bg-rose-100 text-[#BE123C] rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Eliminar
                 </button>
@@ -1941,7 +1943,7 @@ export const CuentasPorPagarView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setDetailCuenta(null)}
-                className="px-4 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold cursor-pointer"
+                className="px-4 py-1.5 bg-[#0B1528] text-white rounded-xl text-xs font-bold cursor-pointer"
               >
                 Cerrar
               </button>
@@ -1952,14 +1954,14 @@ export const CuentasPorPagarView: React.FC = () => {
 
       {/* MODAL: REGISTRAR / EDITAR FACTURA PROVEEDOR */}
       {isAddCuentaModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-5 max-h-[90vh] overflow-y-auto space-y-4 shadow-xl border border-slate-100">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+        <div className="fixed inset-0 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden max-h-[90vh] flex flex-col shadow-2xl border border-[#DCE4F0]">
+            <div className="p-4 bg-[#0B1528] text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="p-2 bg-blue-50 text-blue-600 rounded-xl">
-                  <Building2 className="w-5 h-5" />
+                <span className="p-2 bg-white/10 text-blue-300 rounded-xl">
+                  <Building2 className="w-4 h-4" />
                 </span>
-                <h3 className="font-extrabold text-slate-900 text-base">
+                <h3 className="font-extrabold text-white text-sm">
                   {editingCuenta ? 'Editar Factura de Proveedor' : 'Registrar Factura de Proveedor'}
                 </h3>
               </div>
@@ -1969,11 +1971,12 @@ export const CuentasPorPagarView: React.FC = () => {
                   setIsAddCuentaModalOpen(false);
                   setEditingCuenta(null);
                 }}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+            <div className="p-5 overflow-y-auto space-y-4">
 
             <form onSubmit={handleCreateOrEditCuenta} className="space-y-3.5">
               <div>
@@ -2131,28 +2134,29 @@ export const CuentasPorPagarView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
                 >
                   {editingCuenta ? 'Guardar Cambios' : 'Guardar Factura'}
                 </button>
               </div>
             </form>
+            </div>
           </div>
         </div>
       )}
 
       {/* MODAL: REGISTRAR ABONO A PROVEEDOR */}
       {isAbonoModalOpen && cuentaForAbono && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full p-5 space-y-4 shadow-xl border border-slate-100">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <span className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
-                  <Coins className="w-5 h-5" />
+        <div className="fixed inset-0 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-[#DCE4F0]">
+            <div className="p-4 bg-[#0B1528] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 bg-white/10 text-emerald-300 rounded-xl">
+                  <Coins className="w-4 h-4" />
                 </span>
                 <div>
-                  <h3 className="font-extrabold text-slate-900 text-base">Registrar Abono a Proveedor</h3>
-                  <div className="text-[11px] text-slate-500 truncate max-w-[220px]">
+                  <h3 className="font-extrabold text-white text-sm">Registrar Abono a Proveedor</h3>
+                  <div className="text-[11px] text-slate-300 truncate max-w-[220px]">
                     {cuentaForAbono.supplierName} (Factura {cuentaForAbono.invoiceNumber})
                   </div>
                 </div>
@@ -2160,22 +2164,23 @@ export const CuentasPorPagarView: React.FC = () => {
               <button 
                 type="button"
                 onClick={() => setIsAbonoModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+            <div className="p-5 space-y-4">
 
-            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 flex justify-between items-center text-xs">
+            <div className="bg-[#F8FAFC] p-3 rounded-2xl border border-[#DCE4F0] flex justify-between items-center text-xs">
               <div>
                 <span className="text-slate-500">Deuda Restante:</span>
-                <div className="font-mono font-black text-rose-600 text-base">
+                <div className="font-mono-numbers font-black text-[#BE123C] text-base">
                   ${formatUSD(cuentaForAbono.remainingUSD)}
                 </div>
               </div>
               <div className="text-right">
                 <span className="text-slate-500">En Bolívares (BCV):</span>
-                <div className="font-mono font-bold text-slate-700">
+                <div className="font-mono-numbers font-bold text-[#0B1528]">
                   Bs {formatBs(cuentaForAbono.remainingUSD * bcvRate)}
                 </div>
               </div>
@@ -2194,11 +2199,11 @@ export const CuentasPorPagarView: React.FC = () => {
                     required
                     value={abonoAmountUSD}
                     onChange={(e) => setAbonoAmountUSD(e.target.value)}
-                    className="w-full pl-7 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-black text-slate-900 focus:bg-white focus:border-emerald-500 focus:outline-none"
+                    className="w-full pl-7 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-mono-numbers font-black text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
                   />
                 </div>
                 {abonoAmountUSD && !isNaN(parseFloat(abonoAmountUSD)) && (
-                  <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                  <div className="text-[10px] text-slate-500 font-mono-numbers mt-0.5">
                     Equivalente: Bs {formatBs(parseFloat(abonoAmountUSD) * bcvRate)}
                   </div>
                 )}
@@ -2209,7 +2214,7 @@ export const CuentasPorPagarView: React.FC = () => {
                 <select
                   value={abonoMethod}
                   onChange={(e) => setAbonoMethod(e.target.value as any)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:bg-white focus:border-emerald-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-semibold text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
                 >
                   <option value="transferencia">Transferencia Bancaria</option>
                   <option value="pago_movil">Pago Móvil</option>
@@ -2226,7 +2231,7 @@ export const CuentasPorPagarView: React.FC = () => {
                   placeholder="Ej: 789123 o TR-449102"
                   value={abonoRef}
                   onChange={(e) => setAbonoRef(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:bg-white focus:border-emerald-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-mono focus:bg-white focus:border-blue-500 focus:outline-none"
                 />
               </div>
 
@@ -2237,7 +2242,7 @@ export const CuentasPorPagarView: React.FC = () => {
                   placeholder="Ej: Pago parcial desde cuenta Banesco comercial"
                   value={abonoNotes}
                   onChange={(e) => setAbonoNotes(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:border-emerald-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs focus:bg-white focus:border-blue-500 focus:outline-none"
                 />
               </div>
 
@@ -2245,18 +2250,19 @@ export const CuentasPorPagarView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsAbonoModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer"
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-[#EEF2F7] font-bold text-xs cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-500/20 cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
                 >
                   Confirmar Abono
                 </button>
               </div>
             </form>
+            </div>
           </div>
         </div>
       )}

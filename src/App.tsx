@@ -41,9 +41,9 @@ const AppContent: React.FC = () => {
 
   if (isAuthLoading) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col items-center justify-center gap-3">
-        <div className="w-9 h-9 border-3 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-        <p className="text-xs font-bold tracking-wide text-slate-300">
+      <div className="min-h-screen bg-[#EEF2F7] text-slate-700 flex flex-col items-center justify-center gap-3">
+        <div className="w-10 h-10 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <p className="text-xs font-bold tracking-wide text-slate-600">
           Conectando con tu cuenta y Cloud Firestore...
         </p>
       </div>
@@ -62,7 +62,7 @@ const AppContent: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col relative bg-slate-100 text-slate-800">
+    <div className="min-h-screen flex flex-col relative bg-[#EEF2F7] text-slate-900">
       {/* Top Navbar with BCV ticker and tabs */}
       <Navbar />
 
@@ -112,18 +112,18 @@ const AppContent: React.FC = () => {
       <DesincorporarStockModal />
 
       {/* Footer */}
-      <footer className="border-t py-4 px-4 sm:px-8 text-xs bg-white border-slate-200 text-slate-500">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+      <footer className="border-t py-4 px-4 sm:px-8 text-xs bg-white/85 backdrop-blur-xs border-[#DCE4F0] text-slate-500">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="font-extrabold text-blue-900">PosVenecia</span>
+            <span className="font-extrabold text-[#0B1528]">PosVenecia</span>
             <span>•</span>
             <span>Sistema POS & Comercio Retail</span>
             <span>•</span>
-            <span className="text-blue-500 font-mono font-bold">Tasa BCV: Bs. {formatBs(bcvRate)}</span>
+            <span className="text-blue-600 font-mono-numbers font-bold">Tasa BCV: Bs. {formatBs(bcvRate)}</span>
           </div>
 
           <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-            <ShieldCheck className="w-3.5 h-3.5 text-blue-500" />
+            <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
             <span>Adaptado a Normativa SENIAT Venezuela (IVA 16%, IGTF 3%)</span>
           </div>
         </div>

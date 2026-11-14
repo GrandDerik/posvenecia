@@ -2,14 +2,356 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Denegar cualquier acceso fuera de las rutas aisladas por usuario
+    // Denegar cualquier acceso por defecto fuera de las colecciones explícitas por usuario
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Aislamiento estricto por UID del usuario autenticado
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    // Funciones de ayuda para autenticación, verificación de correo e integridad de tipos
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isSignedIn()
+        && request.auth.uid == userId
+        && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string
+        && id.size() > 0
+        && id.size() <= 128
+        && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isOptString(data, key, maxLen) {
+      return !(key in data) || data[key] == null || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isOptNumber(data, key) {
+      return !(key in data) || data[key] == null || (data[key] is number);
+    }
+
+    function isOptBool(data, key) {
+      return !(key in data) || data[key] == null || (data[key] is bool);
+    }
+
+    function isOptList(data, key, maxLen) {
+      return !(key in data) || data[key] == null || (data[key] is list && data[key].size() <= maxLen);
+    }
+
+    // Validadores por entidad (compatibles con merge: true e increment() atómicos)
+    function isValidProduct(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'code', 100)
+        && isOptString(data, 'name', 200)
+        && isOptString(data, 'category', 100)
+        && isOptNumber(data, 'costUSD')
+        && isOptNumber(data, 'priceUSD')
+        && isOptNumber(data, 'priceBsFixed')
+        && isOptNumber(data, 'stock')
+        && isOptNumber(data, 'minStock')
+        && isOptBool(data, 'isExemptFromIVA')
+        && isOptString(data, 'unit', 50)
+        && isOptString(data, 'itemType', 50)
+        && isOptBool(data, 'isService')
+        && isOptString(data, 'purchaseNote', 500)
+        && isOptNumber(data, 'profitMarginPercent')
+        && isOptList(data, 'batches', 500);
+    }
+
+    function isValidSale(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'date', 100)
+        && isOptString(data, 'invoiceNumber', 100)
+        && isOptString(data, 'controlNumber', 100)
+        && isOptString(data, 'clientName', 200)
+        && isOptString(data, 'clientRIF', 50)
+        && isOptString(data, 'clientPhone', 50)
+        && isOptString(data, 'clientAddress', 500)
+        && isOptNumber(data, 'subtotalUSD')
+        && isOptNumber(data, 'exemptUSD')
+        && isOptNumber(data, 'taxableUSD')
+        && isOptNumber(data, 'ivaUSD')
+        && isOptNumber(data, 'igtfUSD')
+        && isOptNumber(data, 'totalUSD')
+        && isOptNumber(data, 'bcvRate')
+        && isOptNumber(data, 'totalBs')
+        && isOptString(data, 'paymentMethod', 50)
+        && isOptString(data, 'status', 50)
+        && isOptString(data, 'creditNoteId', 128)
+        && isOptNumber(data, 'refundedUSD')
+        && isOptString(data, 'cashierName', 100)
+        && isOptString(data, 'syncStatus', 50)
+        && isOptList(data, 'items', 500);
+    }
+
+    function isValidExpense(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'date', 100)
+        && isOptString(data, 'invoiceNumber', 100)
+        && isOptString(data, 'controlNumber', 100)
+        && isOptString(data, 'supplierName', 200)
+        && isOptString(data, 'supplierRIF', 50)
+        && isOptString(data, 'supplierPhone', 50)
+        && isOptString(data, 'description', 500)
+        && isOptString(data, 'category', 100)
+        && isOptNumber(data, 'amountUSD')
+        && isOptNumber(data, 'amountBs')
+        && isOptNumber(data, 'baseImponibleBs')
+        && isOptNumber(data, 'ivaBs')
+        && isOptNumber(data, 'retencionIVABs')
+        && isOptNumber(data, 'retencionISLRBs')
+        && isOptNumber(data, 'bcvRate')
+        && isOptString(data, 'paymentMethod', 50)
+        && isOptString(data, 'reference', 100)
+        && isOptString(data, 'costStrategy', 50)
+        && isOptString(data, 'linkedGastoId', 128)
+        && isOptString(data, 'linkedCuentaId', 128)
+        && isOptList(data, 'items', 500);
+    }
+
+    function isValidFiado(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'saleId', 128)
+        && isOptString(data, 'invoiceNumber', 100)
+        && isOptString(data, 'clientName', 200)
+        && isOptString(data, 'clientCI', 50)
+        && isOptString(data, 'clientPhone', 50)
+        && isOptString(data, 'clientAddress', 500)
+        && isOptString(data, 'date', 100)
+        && isOptNumber(data, 'originalDebtUSD')
+        && isOptNumber(data, 'remainingDebtUSD')
+        && isOptString(data, 'notes', 1000)
+        && isOptString(data, 'status', 50)
+        && isOptList(data, 'abonos', 500);
+    }
+
+    function isValidClient(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'name', 200)
+        && isOptString(data, 'rif', 50)
+        && isOptString(data, 'phone', 50)
+        && isOptString(data, 'address', 500)
+        && isOptString(data, 'email', 200)
+        && isOptNumber(data, 'creditLimitUSD')
+        && isOptString(data, 'notes', 1000)
+        && isOptString(data, 'createdAt', 100);
+    }
+
+    function isValidCuentaPorPagar(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'supplierName', 200)
+        && isOptString(data, 'supplierRIF', 50)
+        && isOptString(data, 'supplierPhone', 50)
+        && isOptString(data, 'invoiceNumber', 100)
+        && isOptString(data, 'controlNumber', 100)
+        && isOptString(data, 'date', 100)
+        && isOptString(data, 'dueDate', 100)
+        && isOptString(data, 'category', 100)
+        && isOptString(data, 'description', 500)
+        && isOptNumber(data, 'totalAmountUSD')
+        && isOptNumber(data, 'paidAmountUSD')
+        && isOptNumber(data, 'remainingUSD')
+        && isOptString(data, 'status', 50)
+        && isOptString(data, 'notes', 1000)
+        && isOptList(data, 'abonos', 500);
+    }
+
+    function isValidGastoOperativo(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'concept', 200)
+        && isOptString(data, 'category', 100)
+        && isOptString(data, 'type', 50)
+        && isOptString(data, 'month', 50)
+        && isOptString(data, 'date', 100)
+        && isOptString(data, 'dueDate', 100)
+        && isOptString(data, 'supplierName', 200)
+        && isOptString(data, 'supplierRIF', 50)
+        && isOptString(data, 'supplierPhone', 50)
+        && isOptString(data, 'invoiceNumber', 100)
+        && isOptNumber(data, 'amountUSD')
+        && isOptNumber(data, 'amountBs')
+        && isOptNumber(data, 'bcvRate')
+        && isOptNumber(data, 'paidAmountUSD')
+        && isOptNumber(data, 'remainingUSD')
+        && isOptString(data, 'status', 50)
+        && isOptString(data, 'paymentDate', 100)
+        && isOptString(data, 'paymentMethod', 50)
+        && isOptString(data, 'reference', 100)
+        && isOptString(data, 'notes', 1000)
+        && isOptList(data, 'abonos', 500);
+    }
+
+    function isValidCashShift(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptBool(data, 'isOpen')
+        && isOptString(data, 'openedAt', 100)
+        && isOptString(data, 'openedDateFormatted', 100)
+        && isOptString(data, 'closedAt', 100)
+        && isOptString(data, 'closedDateFormatted', 100)
+        && isOptNumber(data, 'initialCashUSD')
+        && isOptNumber(data, 'initialCashBs')
+        && isOptNumber(data, 'expectedCashUSD')
+        && isOptNumber(data, 'expectedCashBs')
+        && isOptNumber(data, 'countedCashUSD')
+        && isOptNumber(data, 'countedCashBs')
+        && isOptNumber(data, 'differenceUSD')
+        && isOptNumber(data, 'differenceBs')
+        && isOptString(data, 'closedNotes', 1000)
+        && isOptString(data, 'openedBy', 100)
+        && isOptString(data, 'closedBy', 100)
+        && isOptList(data, 'initialBanks', 100);
+    }
+
+    function isValidBusinessProfile(data) {
+      return data is map
+        && isOptString(data, 'updatedAt', 100)
+        && isOptNumber(data, 'bcvRate')
+        && isOptNumber(data, 'bcvEuroRate')
+        && isOptString(data, 'baseCurrency', 10)
+        && isOptString(data, 'managerPin', 32)
+        && isOptString(data, 'lastUpdatedBy', 200)
+        && isOptList(data, 'customCategories', 200)
+        && isOptList(data, 'rateHistory', 1000);
+    }
+
+    function isValidCashRegister(data) {
+      return data is map
+        && isOptBool(data, 'isOpen')
+        && isOptString(data, 'updatedAt', 100)
+        && isOptString(data, 'updatedBy', 200)
+        && isOptString(data, 'terminalId', 128)
+        && isOptString(data, 'openedAt', 100);
+    }
+
+    function isValidCreditNote(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'creditNoteNumber', 100)
+        && isOptString(data, 'controlNumber', 100)
+        && isOptString(data, 'saleId', 128)
+        && isOptString(data, 'originalInvoiceNumber', 100)
+        && isOptString(data, 'date', 100)
+        && isOptString(data, 'clientName', 200)
+        && isOptString(data, 'clientRIF', 50)
+        && isOptNumber(data, 'subtotalUSD')
+        && isOptNumber(data, 'totalUSD')
+        && isOptNumber(data, 'totalBs')
+        && isOptNumber(data, 'bcvRate')
+        && isOptString(data, 'reason', 500)
+        && isOptString(data, 'refundMethod', 50)
+        && isOptString(data, 'cashierName', 100)
+        && isOptList(data, 'items', 500);
+    }
+
+    function isValidInventoryDischarge(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'dischargeNumber', 100)
+        && isOptString(data, 'date', 100)
+        && isOptString(data, 'productId', 128)
+        && isOptString(data, 'productName', 200)
+        && isOptString(data, 'productCode', 100)
+        && isOptString(data, 'category', 100)
+        && isOptNumber(data, 'quantity')
+        && isOptNumber(data, 'unitCostUSD')
+        && isOptNumber(data, 'totalLossUSD')
+        && isOptNumber(data, 'totalLossBs')
+        && isOptNumber(data, 'bcvRate')
+        && isOptString(data, 'reason', 100)
+        && isOptString(data, 'notes', 1000)
+        && isOptString(data, 'responsibleName', 100);
+    }
+
+    // Reglas explícitas por cada colección aislada bajo users/{userId}
+    match /users/{userId} {
+      allow read, write: if false;
+
+      match /products/{productId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(productId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(productId) && isValidProduct(incoming());
+      }
+
+      match /sales/{saleId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(saleId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(saleId) && isValidSale(incoming());
+      }
+
+      match /expenses/{expenseId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(expenseId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(expenseId) && isValidExpense(incoming());
+      }
+
+      match /fiados/{fiadoId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(fiadoId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(fiadoId) && isValidFiado(incoming());
+      }
+
+      match /clients/{clientId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(clientId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(clientId) && isValidClient(incoming());
+      }
+
+      match /cuentasPorPagar/{cuentaId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(cuentaId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(cuentaId) && isValidCuentaPorPagar(incoming());
+      }
+
+      match /gastosOperativos/{gastoId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(gastoId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(gastoId) && isValidGastoOperativo(incoming());
+      }
+
+      match /cashShiftHistory/{shiftId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(shiftId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(shiftId) && isValidCashShift(incoming());
+      }
+
+      match /businessProfile/{docId} {
+        allow get: if isVerifiedOwner(userId) && docId == 'profile';
+        allow list, delete: if false;
+        allow create, update: if isVerifiedOwner(userId) && docId == 'profile' && isValidBusinessProfile(incoming());
+      }
+
+      match /cashRegister/{docId} {
+        allow get: if isVerifiedOwner(userId) && docId == 'status';
+        allow list, delete: if false;
+        allow create, update: if isVerifiedOwner(userId) && docId == 'status' && isValidCashRegister(incoming());
+      }
+
+      match /creditNotes/{noteId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(noteId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(noteId) && isValidCreditNote(incoming());
+      }
+
+      match /inventoryDischarges/{dischargeId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(dischargeId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(dischargeId) && isValidInventoryDischarge(incoming());
+      }
     }
   }
 }

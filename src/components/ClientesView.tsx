@@ -145,16 +145,16 @@ export const ClientesView: React.FC = () => {
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 space-y-4">
+    <div className="max-w-6xl mx-auto px-3 sm:px-6 py-5 space-y-5">
       
       {/* Top Banner */}
-      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xs p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center text-white shadow-md shadow-blue-500/20 shrink-0">
+          <div className="w-11 h-11 rounded-2xl bg-[#0B1528] flex items-center justify-center text-white shadow-sm shrink-0">
             <Users className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight leading-tight">
+            <h1 className="text-lg sm:text-xl font-black text-[#0B1528] tracking-tight leading-tight">
               Clientes Habituales & Cuentas
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -165,52 +165,52 @@ export const ClientesView: React.FC = () => {
 
         <button
           onClick={handleOpenAdd}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-2xl text-xs font-bold shadow-md shadow-blue-500/25 transition-all cursor-pointer whitespace-nowrap"
+          className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 active:scale-95 text-white rounded-2xl text-xs font-bold shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] transition-all cursor-pointer whitespace-nowrap"
         >
           <Plus className="w-4 h-4" />
-          <span>+ Nuevo Cliente</span>
+          <span>Nuevo Cliente</span>
         </button>
       </div>
 
       {/* Metrics Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
+        <div className="bg-white/95 rounded-2xl border border-[#DCE4F0] p-4 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
             Total Clientes Registrados
           </span>
-          <div className="text-xl font-black text-slate-900 mt-1">
-            {clients.length} <span className="text-xs font-semibold text-slate-500">clientes</span>
+          <div className="text-xl font-black text-[#0B1528] mt-1 font-mono-numbers">
+            {clients.length} <span className="text-xs font-sans font-semibold text-slate-500">clientes</span>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block">
+        <div className="bg-[#FFF3E8] rounded-2xl border border-[#F5D3B3] p-4 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.04)]">
+          <span className="text-[10px] font-bold text-[#9A4B12] uppercase tracking-wider block">
             Con Saldo Fiado Activo
           </span>
-          <div className="text-xl font-black text-amber-600 mt-1">
-            {clients.filter(c => getClientPendingFiado(c.rif) > 0).length} <span className="text-xs font-semibold text-slate-500">con deuda</span>
+          <div className="text-xl font-black text-[#D96B27] mt-1 font-mono-numbers">
+            {clients.filter(c => getClientPendingFiado(c.rif) > 0).length} <span className="text-xs font-sans font-semibold text-[#9A4B12]">con deuda</span>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 shadow-2xs col-span-2 sm:col-span-1">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block">
+        <div className="bg-gradient-to-b from-white to-[#F4F8FF] rounded-2xl border border-[#93C5FD] p-4 shadow-[0_2px_12px_-4px_rgba(37,99,235,0.08)] col-span-2 sm:col-span-1">
+          <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
             Límite de Fiado Asignado
           </span>
-          <div className="text-xl font-black text-indigo-700 mt-1 font-mono-numbers">
+          <div className="text-xl font-black text-[#0B1528] mt-1 font-mono-numbers">
             ${formatUSD(clients.reduce((acc, c) => acc + (c.creditLimitUSD || 0), 0))}
           </div>
         </div>
       </div>
 
       {/* Search Bar */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-3 flex items-center gap-2">
+      <div className="bg-white/95 rounded-2xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] p-3 flex items-center gap-2">
         <Search className="w-4 h-4 text-slate-400 ml-1 shrink-0" />
         <input 
           type="text"
           placeholder="Buscar cliente por nombre, cédula (V-...), RIF o teléfono..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full text-xs font-medium text-slate-800 placeholder-slate-400 bg-transparent focus:outline-none"
+          className="w-full text-xs font-medium text-[#0B1528] placeholder-slate-400 bg-transparent focus:outline-none"
         />
         {searchTerm && (
           <button onClick={() => setSearchTerm('')} className="text-slate-400 hover:text-slate-600 p-1">
@@ -220,13 +220,13 @@ export const ClientesView: React.FC = () => {
       </div>
 
       {/* Clients List */}
-      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xs overflow-hidden">
+      <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] overflow-hidden">
         {filteredClients.length === 0 ? (
           <div className="py-12 px-4 text-center">
-            <div className="w-12 h-12 mx-auto rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 mb-3">
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-[#EBF3FE] border border-[#C5DCFC] flex items-center justify-center text-blue-600 mb-3">
               <Users className="w-6 h-6" />
             </div>
-            <h4 className="text-sm font-bold text-slate-800">
+            <h4 className="text-sm font-bold text-[#0B1528]">
               {clients.length === 0 ? 'Sin clientes registrados' : 'No se encontraron clientes'}
             </h4>
             <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
@@ -236,10 +236,10 @@ export const ClientesView: React.FC = () => {
             </p>
             <button
               onClick={handleOpenAdd}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white rounded-xl text-xs font-bold shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>+ Registrar Primer Cliente</span>
+              <span>Registrar Primer Cliente</span>
             </button>
           </div>
         ) : (
@@ -252,23 +252,23 @@ export const ClientesView: React.FC = () => {
               return (
                 <div 
                   key={client.id}
-                  className="p-3.5 sm:p-4 hover:bg-slate-50/70 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  className="p-3.5 sm:p-4 hover:bg-[#F8FAFC] transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                 >
                   <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700 font-black text-sm shrink-0">
+                    <div className="w-10 h-10 rounded-2xl bg-[#EBF3FE] border border-[#C5DCFC] flex items-center justify-center text-[#1D4ED8] font-black text-sm shrink-0">
                       {client.name.charAt(0).toUpperCase()}
                     </div>
 
                     <div className="space-y-0.5">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-bold text-sm text-slate-900 leading-tight">
+                        <h3 className="font-bold text-sm text-[#0B1528] leading-tight">
                           {client.name}
                         </h3>
-                        <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 border border-blue-200/70">
+                        <span className="font-mono-numbers text-[11px] font-bold px-2 py-0.5 rounded-md bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC]">
                           {client.rif}
                         </span>
                         {hasDebt && (
-                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+                          <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-[#FFF3E8] text-[#9A4B12] border border-[#F5D3B3] flex items-center gap-1 font-mono-numbers">
                             Debe: ${formatUSD(pendingDebt)} (Bs. {formatBs(pendingDebtBs)})
                           </span>
                         )}
@@ -303,7 +303,7 @@ export const ClientesView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleStartSale(client)}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
+                      className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 cursor-pointer"
                       title="Seleccionar en caja y facturar"
                     >
                       <ShoppingCart className="w-3.5 h-3.5" />
@@ -313,7 +313,7 @@ export const ClientesView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleWhatsApp(client)}
-                      className="p-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80 transition-colors cursor-pointer"
+                      className="p-2 rounded-xl bg-[#E7F8EE] hover:bg-emerald-100 text-[#065F46] border border-[#A7E6C4] transition-colors cursor-pointer"
                       title="Abrir chat de WhatsApp"
                     >
                       <MessageCircle className="w-3.5 h-3.5" />
@@ -322,7 +322,7 @@ export const ClientesView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleOpenEdit(client)}
-                      className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+                      className="p-2 rounded-xl bg-[#F8FAFC] border border-[#DCE4F0] hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
                       title="Editar datos del cliente"
                     >
                       <Edit className="w-3.5 h-3.5" />
@@ -331,7 +331,7 @@ export const ClientesView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setClientToDelete(client)}
-                      className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 transition-colors cursor-pointer"
+                      className="p-2 rounded-xl bg-[#FEECEF] border border-[#FBC4CD] hover:bg-rose-100 text-[#BE123C] transition-colors cursor-pointer"
                       title="Eliminar cliente"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -346,13 +346,13 @@ export const ClientesView: React.FC = () => {
 
       {/* Modal: Add or Edit Client */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 my-auto">
+        <div className="fixed inset-0 z-50 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-[#DCE4F0] overflow-hidden animate-in fade-in zoom-in-95 my-auto">
             
-            <div className="p-4 sm:p-5 bg-gradient-to-r from-blue-700 to-indigo-800 text-white flex items-center justify-between">
+            <div className="p-4 sm:p-5 bg-[#0B1528] text-white flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center">
-                  <UserCheck className="w-4 h-4 text-blue-200" />
+                <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center">
+                  <UserCheck className="w-4 h-4 text-blue-300" />
                 </div>
                 <h3 className="font-extrabold text-base">
                   {editingClient ? 'Editar Cliente Habitual' : 'Nuevo Cliente Habitual'}
@@ -360,7 +360,7 @@ export const ClientesView: React.FC = () => {
               </div>
               <button 
                 onClick={() => setIsModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
