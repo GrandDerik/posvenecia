@@ -17,11 +17,15 @@ import {
   FileText,
   DollarSign,
   Coins,
-  Layers
+  Layers,
+  History,
+  TrendingUp,
+  ArrowUpRight,
+  ArrowDownRight
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { Product } from '../types';
-import { formatBs, formatUSD } from '../utils/exportUtils';
+import { Product, KardexMovementType } from '../types';
+import { formatBs, formatUSD, getLocalDateStr, round2 } from '../utils/exportUtils';
 
 export const ProductsView: React.FC = () => {
   const { 
@@ -35,8 +39,14 @@ export const ProductsView: React.FC = () => {
     addCategory,
     baseCurrency,
     setIsDischargeModalOpen,
-    setSelectedProductForDischarge
+    setSelectedProductForDischarge,
+    kardex
   } = useApp();
+
+  const [activeSection, setActiveSection] = useState<'catalogo' | 'kardex' | 'valoracion'>('catalogo');
+  const [kardexProductId, setKardexProductId] = useState<string>('todos');
+  const [kardexTypeFilter, setKardexTypeFilter] = useState<'todos' | KardexMovementType>('todos');
+  const [kardexSearch, setKardexSearch] = useState('');
 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('Todos');
@@ -246,7 +256,89 @@ export const ProductsView: React.FC = () => {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Catálogo');
-    XLSX.writeFile(wb, `PosVenecia_Productos_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.writeFile(wb, `PosVenecia_Productos_${getLocalDateStr()}.xlsx`);
+  };
+
+  const physicalProducts = products.filter(p => !p.isService && p.itemType !== 'servicio');
+
+  const filteredKardex = kardex.filter(entry => {
+    if (kardexProductId !== 'todos' && entry.productId !== kardexProductId) return false;
+    if (kardexTypeFilter !== 'todos' && entry.type !== kardexTypeFilter) return false;
+    if (kardexSearch.trim()) {
+      const q = kardexSearch.toLowerCase();
+      return (
+        (entry.productName || '').toLowerCase().includes(q) ||
+        (entry.productCode || '').toLowerCase().includes(q) ||
+        (entry.reference || '').toLowerCase().includes(q) ||
+        (entry.notes || '').toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
+
+  const handleExportKardexExcel = () => {
+    const rows = filteredKardex.map((k, idx) => ({
+      'N°': idx + 1,
+      'Fecha y Hora': new Date(k.date).toLocaleString('es-VE'),
+      'Tipo Movimiento': k.type,
+      'Código': k.productCode,
+      'Producto': k.productName,
+      'Categoría': k.category,
+      'Cantidad': k.quantityChange,
+      'Stock Anterior': k.previousStock,
+      'Stock Nuevo': k.newStock,
+      'Costo Unit. USD': k.unitCostUSD,
+      'Costo Total USD': k.totalCostUSD,
+      'Método': k.valuationMethod === 'fifo' ? 'FIFO (Lotes)' : 'Costo Promedio',
+      'Balance FIFO USD': k.fifoBalanceUSD ?? '',
+      'Balance Prom. USD': k.avgBalanceUSD ?? '',
+      'Referencia': k.reference || '',
+      'Notas': k.notes || '',
+      'Usuario': k.userName || ''
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Kardex');
+    XLSX.writeFile(wb, `PosVenecia_Kardex_${getLocalDateStr()}.xlsx`);
+  };
+
+  const valuationRows = physicalProducts.map(p => {
+    const batches = p.batches || [];
+    const fifoUnits = batches.reduce((s, b) => s + (b.quantity || 0), 0);
+    const fifoUSD = batches.length > 0
+      ? round2(batches.reduce((s, b) => s + ((b.quantity || 0) * (b.costUSD || 0)), 0))
+      : round2((p.stock || 0) * (p.costUSD || 0));
+    const avgCost = p.costUSD || 0;
+    const avgUSD = round2((p.stock || 0) * avgCost);
+    const retailUSD = round2((p.stock || 0) * (p.priceUSD || 0));
+    return {
+      product: p,
+      batchesCount: batches.length,
+      fifoUnits,
+      fifoUSD,
+      avgCost,
+      avgUSD,
+      retailUSD
+    };
+  });
+
+  const totalFifoValuationUSD = round2(valuationRows.reduce((s, r) => s + r.fifoUSD, 0));
+  const totalAvgValuationUSD = round2(valuationRows.reduce((s, r) => s + r.avgUSD, 0));
+  const totalRetailValuationUSD = round2(valuationRows.reduce((s, r) => s + r.retailUSD, 0));
+
+  const getMovementMeta = (type: KardexMovementType) => {
+    switch (type) {
+      case 'entrada_compra':
+        return { label: 'Entrada Compra', badge: 'bg-[#E7F8EE] text-[#065F46] border-[#A7E6C4]' };
+      case 'venta':
+        return { label: 'Venta POS', badge: 'bg-[#EBF3FE] text-[#1D4ED8] border-[#C5DCFC]' };
+      case 'nota_credito':
+        return { label: 'Nota Crédito', badge: 'bg-teal-50 text-teal-800 border-teal-200' };
+      case 'merma':
+        return { label: 'Merma / Salida', badge: 'bg-[#FFF3E8] text-[#9A4B12] border-[#F5D3B3]' };
+      default:
+        return { label: 'Ajuste Manual', badge: 'bg-slate-100 text-slate-700 border-slate-300' };
+    }
   };
 
   return (
@@ -299,6 +391,50 @@ export const ProductsView: React.FC = () => {
         </div>
       </div>
 
+      {/* Sub-Navigation Bar: Catálogo vs Kardex vs Valoración */}
+      <div className="flex flex-col sm:flex-row p-1 bg-white/95 rounded-2xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] gap-1">
+        <button
+          type="button"
+          onClick={() => setActiveSection('catalogo')}
+          className={`flex-1 py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            activeSection === 'catalogo'
+              ? 'bg-[#0B1528] text-white shadow-xs'
+              : 'text-slate-600 hover:bg-[#F8FAFC] hover:text-[#0B1528]'
+          }`}
+        >
+          <Package className="w-4 h-4" />
+          <span>Catálogo de Productos ({products.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('kardex')}
+          className={`flex-1 py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            activeSection === 'kardex'
+              ? 'bg-[#0B1528] text-white shadow-xs'
+              : 'text-slate-600 hover:bg-[#F8FAFC] hover:text-[#0B1528]'
+          }`}
+        >
+          <History className="w-4 h-4" />
+          <span>Kardex & Trazabilidad ({kardex.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('valoracion')}
+          className={`flex-1 py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            activeSection === 'valoracion'
+              ? 'bg-[#0B1528] text-white shadow-xs'
+              : 'text-slate-600 hover:bg-[#F8FAFC] hover:text-[#0B1528]'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4" />
+          <span>Valoración FIFO / Promedio</span>
+        </button>
+      </div>
+
+      {activeSection === 'catalogo' && (
+        <>
       {/* Search & Categories Bar */}
       <div className="bg-white/95 p-4 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] space-y-3">
         <div className="relative">
@@ -459,17 +595,30 @@ export const ProductsView: React.FC = () => {
                     <td className="py-3 px-4 text-center">
                       <div className="flex items-center justify-center gap-1">
                         {!isService && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedProductForDischarge(prod);
-                              setIsDischargeModalOpen(true);
-                            }}
-                            className="p-1.5 rounded-lg bg-[#FFF3E8] border border-[#F5D3B3] hover:bg-[#FFE6CE] text-[#D96B27] transition-colors cursor-pointer"
-                            title="Desincorporar por Daño / Vencimiento / Merma"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setKardexProductId(prod.id);
+                                setActiveSection('kardex');
+                              }}
+                              className="p-1.5 rounded-lg bg-[#EBF3FE] border border-[#C5DCFC] hover:bg-blue-100 text-[#1D4ED8] transition-colors cursor-pointer"
+                              title="Ver Kardex e historial de movimientos"
+                            >
+                              <History className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedProductForDischarge(prod);
+                                setIsDischargeModalOpen(true);
+                              }}
+                              className="p-1.5 rounded-lg bg-[#FFF3E8] border border-[#F5D3B3] hover:bg-[#FFE6CE] text-[#D96B27] transition-colors cursor-pointer"
+                              title="Desincorporar por Daño / Vencimiento / Merma"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
                         )}
                         <button
                           onClick={() => handleOpenEdit(prod)}
@@ -517,6 +666,278 @@ export const ProductsView: React.FC = () => {
           )}
         </div>
       </div>
+        </>
+      )}
+
+      {/* VIEW: KARDEX DE INVENTARIO (HISTORIAL INMUTABLE) */}
+      {activeSection === 'kardex' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-[#E7F8EE] border border-[#A7E6C4] rounded-2xl p-4">
+              <div className="flex items-center justify-between text-[#065F46] text-[11px] font-bold uppercase tracking-wider">
+                <span>Entradas Auditadas</span>
+                <ArrowUpRight className="w-4 h-4" />
+              </div>
+              <div className="text-xl font-black text-[#065F46] font-mono-numbers mt-1">
+                +{filteredKardex.filter(k => k.quantityChange > 0).reduce((s, k) => s + k.quantityChange, 0)} unids
+              </div>
+              <div className="text-xs text-[#047857] font-mono-numbers">
+                Costo entradas: ${formatUSD(filteredKardex.filter(k => k.quantityChange > 0).reduce((s, k) => s + k.totalCostUSD, 0))}
+              </div>
+            </div>
+
+            <div className="bg-[#FFF3E8] border border-[#F5D3B3] rounded-2xl p-4">
+              <div className="flex items-center justify-between text-[#9A4B12] text-[11px] font-bold uppercase tracking-wider">
+                <span>Salidas Auditadas</span>
+                <ArrowDownRight className="w-4 h-4" />
+              </div>
+              <div className="text-xl font-black text-[#9A4B12] font-mono-numbers mt-1">
+                -{filteredKardex.filter(k => k.quantityChange < 0).reduce((s, k) => s + Math.abs(k.quantityChange), 0)} unids
+              </div>
+              <div className="text-xs text-[#7C3A0B] font-mono-numbers">
+                Costo salidas: ${formatUSD(filteredKardex.filter(k => k.quantityChange < 0).reduce((s, k) => s + k.totalCostUSD, 0))}
+              </div>
+            </div>
+
+            <div className="bg-white/95 border border-[#DCE4F0] rounded-2xl p-4 flex flex-col justify-between">
+              <div className="flex items-center justify-between text-[#1D4ED8] text-[11px] font-bold uppercase tracking-wider">
+                <span>Registro Inmutable Firestore</span>
+                <History className="w-4 h-4" />
+              </div>
+              <div className="text-xl font-black text-[#0B1528] font-mono-numbers mt-1">
+                {filteredKardex.length} movimientos
+              </div>
+              <button
+                type="button"
+                onClick={handleExportKardexExcel}
+                className="mt-1 self-start text-[11px] font-bold text-emerald-700 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Exportar Kardex a Excel</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white/95 p-4 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Buscar referencia (FAC, NC, SAL), producto o nota..."
+                value={kardexSearch}
+                onChange={(e) => setKardexSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-medium focus:bg-white focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+
+            <select
+              value={kardexProductId}
+              onChange={(e) => setKardexProductId(e.target.value)}
+              className="px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-semibold text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
+            >
+              <option value="todos">Todos los Productos ({physicalProducts.length})</option>
+              {physicalProducts.map(p => (
+                <option key={p.id} value={p.id}>
+                  [{p.code}] {p.name} (Stock: {p.stock})
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={kardexTypeFilter}
+              onChange={(e) => setKardexTypeFilter(e.target.value as any)}
+              className="px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-semibold text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
+            >
+              <option value="todos">Todos los Tipos de Movimiento</option>
+              <option value="entrada_compra">Entrada por Compra (Libro de Compras)</option>
+              <option value="venta">Salida por Venta POS</option>
+              <option value="nota_credito">Reintegro por Nota de Crédito</option>
+              <option value="merma">Desincorporación / Merma / Uso Interno</option>
+              <option value="ajuste_manual">Ajuste Manual / Anulación</option>
+            </select>
+          </div>
+
+          <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#F8FAFC] text-slate-500 font-bold uppercase tracking-wider border-b border-[#DCE4F0] text-[10px]">
+                  <tr>
+                    <th className="py-3 px-3">Fecha / Hora</th>
+                    <th className="py-3 px-3">Movimiento</th>
+                    <th className="py-3 px-3">Producto</th>
+                    <th className="py-3 px-3 text-right">Cantidad</th>
+                    <th className="py-3 px-3 text-center">Stock Ant. → Nuevo</th>
+                    <th className="py-3 px-3 text-right">Costo Unit.</th>
+                    <th className="py-3 px-3 text-right">Total Mov.</th>
+                    <th className="py-3 px-3 text-center">Valoración</th>
+                    <th className="py-3 px-3">Referencia / Detalle</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredKardex.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-10 text-center text-slate-400">
+                        No hay movimientos de Kardex registrados para los filtros seleccionados.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredKardex.map(k => {
+                      const meta = getMovementMeta(k.type);
+                      const isPositive = k.quantityChange >= 0;
+                      return (
+                        <tr key={k.id} className="hover:bg-[#F8FAFC] transition-colors">
+                          <td className="py-2.5 px-3 font-mono-numbers text-slate-600 whitespace-nowrap">
+                            <div>{new Date(k.date).toLocaleDateString('es-VE')}</div>
+                            <div className="text-[10px] text-slate-400">
+                              {new Date(k.date).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${meta.badge}`}>
+                              {meta.label}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="font-bold text-[#0B1528]">{k.productName}</div>
+                            <div className="text-[10px] font-mono text-slate-400">{k.productCode} • {k.category}</div>
+                          </td>
+                          <td className={`py-2.5 px-3 text-right font-mono-numbers font-black ${
+                            isPositive ? 'text-[#065F46]' : 'text-[#BE123C]'
+                          }`}>
+                            {isPositive ? `+${k.quantityChange}` : k.quantityChange}
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono-numbers text-slate-700">
+                            <span>{k.previousStock}</span>
+                            <span className="mx-1 text-slate-400">→</span>
+                            <strong className="text-[#0B1528]">{k.newStock}</strong>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono-numbers text-slate-700">
+                            ${formatUSD(k.unitCostUSD)}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono-numbers font-bold text-[#0B1528]">
+                            ${formatUSD(k.totalCostUSD)}
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                              k.valuationMethod === 'fifo'
+                                ? 'bg-[#EBF3FE] text-[#1D4ED8] border-[#C5DCFC]'
+                                : 'bg-[#EEF2F7] text-slate-700 border-[#DCE4F0]'
+                            }`}>
+                              {k.valuationMethod === 'fifo' ? 'FIFO' : 'Promedio'}
+                            </span>
+                            {k.fifoBalanceUSD !== undefined && (
+                              <div className="text-[10px] font-mono-numbers text-slate-500 mt-0.5">
+                                Bal: ${formatUSD(k.valuationMethod === 'fifo' ? k.fifoBalanceUSD : (k.avgBalanceUSD ?? k.fifoBalanceUSD))}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 max-w-xs">
+                            {k.reference && (
+                              <div className="font-mono font-bold text-[#0B1528] text-[11px]">{k.reference}</div>
+                            )}
+                            {k.notes && (
+                              <div className="text-[11px] text-slate-500 truncate" title={k.notes}>{k.notes}</div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW: VALORACIÓN DE INVENTARIO (FIFO vs COSTO PROMEDIO) */}
+      {activeSection === 'valoracion' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="bg-gradient-to-b from-white to-[#F4F8FF] border border-[#93C5FD] rounded-2xl p-4">
+              <div className="text-[11px] font-bold text-[#1D4ED8] uppercase tracking-wider">Valoración FIFO (Lotes Activos)</div>
+              <div className="text-2xl font-black text-[#0B1528] font-mono-numbers mt-1">
+                ${formatUSD(totalFifoValuationUSD)}
+              </div>
+              <div className="text-xs text-slate-500 font-mono-numbers">
+                Bs {formatBs(totalFifoValuationUSD * bcvRate)}
+              </div>
+            </div>
+
+            <div className="bg-white/95 border border-[#DCE4F0] rounded-2xl p-4">
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Valoración Costo Promedio</div>
+              <div className="text-2xl font-black text-[#0B1528] font-mono-numbers mt-1">
+                ${formatUSD(totalAvgValuationUSD)}
+              </div>
+              <div className="text-xs text-slate-500 font-mono-numbers">
+                Bs {formatBs(totalAvgValuationUSD * bcvRate)}
+              </div>
+            </div>
+
+            <div className="bg-[#E7F8EE] border border-[#A7E6C4] rounded-2xl p-4">
+              <div className="text-[11px] font-bold text-[#065F46] uppercase tracking-wider">Valor Venta Proyectado</div>
+              <div className="text-2xl font-black text-[#065F46] font-mono-numbers mt-1">
+                ${formatUSD(totalRetailValuationUSD)}
+              </div>
+              <div className="text-xs text-[#047857] font-mono-numbers">
+                Margen FIFO est.: ${formatUSD(Math.max(0, totalRetailValuationUSD - totalFifoValuationUSD))}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#F8FAFC] text-slate-500 font-bold uppercase tracking-wider border-b border-[#DCE4F0] text-[10px]">
+                  <tr>
+                    <th className="py-3 px-4">Producto</th>
+                    <th className="py-3 px-3 text-center">Stock</th>
+                    <th className="py-3 px-3 text-right">Costo Prom. Unit.</th>
+                    <th className="py-3 px-3 text-right">Valor Costo Prom.</th>
+                    <th className="py-3 px-3 text-center">Lotes FIFO</th>
+                    <th className="py-3 px-3 text-right">Valor FIFO</th>
+                    <th className="py-3 px-3 text-right">Valor Venta Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {valuationRows.map(({ product, batchesCount, fifoUSD, avgCost, avgUSD, retailUSD }) => (
+                    <tr key={product.id} className="hover:bg-[#F8FAFC]">
+                      <td className="py-2.5 px-4">
+                        <div className="font-bold text-[#0B1528]">{product.name}</div>
+                        <div className="text-[10px] font-mono text-slate-400">{product.code} • {product.category}</div>
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono-numbers font-bold text-[#0B1528]">
+                        {product.stock} {product.unit}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono-numbers text-slate-600">
+                        ${formatUSD(avgCost)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono-numbers font-bold text-[#0B1528]">
+                        ${formatUSD(avgUSD)}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        {batchesCount > 0 ? (
+                          <span className="px-2 py-0.5 rounded-full bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] text-[10px] font-bold">
+                            {batchesCount} lote{batchesCount > 1 ? 's' : ''}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400">Sin lotes</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono-numbers font-bold text-[#1D4ED8]">
+                        ${formatUSD(fifoUSD)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono-numbers font-bold text-[#065F46]">
+                        ${formatUSD(retailUSD)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add / Edit Product Modal */}
       {isModalOpen && (

@@ -14,8 +14,11 @@ import {
   Building2,
   CreditCard,
   KeyRound,
+  ShoppingCart,
+  ArrowRight,
+  RefreshCw
 } from 'lucide-react';
-import { formatBs, formatUSD } from '../utils/exportUtils';
+import { formatBs, formatUSD, round2, getLocalDateStr, isSameLocalDate } from '../utils/exportUtils';
 import { Sale } from '../types';
 import { ComprobanteTicketModal } from './Modals/ComprobanteTicketModal';
 import { HourlySalesChart } from './HourlySalesChart';
@@ -29,6 +32,7 @@ export const DashboardView: React.FC = () => {
     fiados,
     cuentasPorPagar,
     gastosOperativos,
+    creditNotes,
     setActiveTab,
     setIsCuadreModalOpen,
     setIsProfileModalOpen,
@@ -40,6 +44,11 @@ export const DashboardView: React.FC = () => {
     setIsAperturaModalOpen,
     setIsCierreModalOpen,
     checkRemoteChangesForMultiDevice,
+    isBcvRateUpdatedToday,
+    fetchLiveRate,
+    fetchLiveEuroRate,
+    isFetchingLiveRate,
+    isOnline,
   } = useApp();
 
   const [selectedTicketSale, setSelectedTicketSale] = useState<Sale | null>(null);
@@ -49,16 +58,31 @@ export const DashboardView: React.FC = () => {
   const [pinSuccessMsg, setPinSuccessMsg] = useState(false);
   const [pinErrorMsg, setPinErrorMsg] = useState('');
   const [isRefreshingSales, setIsRefreshingSales] = useState(false);
+  const [fiadoDaysThreshold, setFiadoDaysThreshold] = useState<15 | 30 | 60>(30);
 
-  // Calculations for today
-  const todayStr = new Date().toISOString().split('T')[0];
-  const todaySales = sales.filter((s) => s.date.startsWith(todayStr) && s.status === 'completada');
-  const todayExpenses = expenses.filter((e) => e.date.startsWith(todayStr));
+  // Calculations for today (local timezone) & active cash shift
+  const todayStr = getLocalDateStr();
+  const todaySales = sales.filter((s) => isSameLocalDate(s.date, todayStr) && s.status !== 'anulada');
+  const todayCreditNotes = creditNotes.filter((cn) => isSameLocalDate(cn.date, todayStr));
 
-  // 1. Efectivo en caja (Neto de efectivo USD + efectivo Bs convertido a USD, incluyendo pagos combinados)
+  // Cash-in-register metrics match active shift window when open (or today if closed)
+  const shiftSales = isCashRegisterOpen && cashShift?.openedAt
+    ? sales.filter((s) => s.date >= cashShift.openedAt && s.status !== 'anulada')
+    : todaySales;
+  const shiftExpenses = isCashRegisterOpen && cashShift?.openedAt
+    ? expenses.filter((e) => e.date >= cashShift.openedAt && e.paymentMethod !== 'credito')
+    : expenses.filter((e) => isSameLocalDate(e.date, todayStr) && e.paymentMethod !== 'credito');
+  const shiftCreditNotes = isCashRegisterOpen && cashShift?.openedAt
+    ? creditNotes.filter((cn) => cn.date >= cashShift.openedAt)
+    : todayCreditNotes;
+  const shiftFiadoAbonos = isCashRegisterOpen && cashShift?.openedAt
+    ? fiados.flatMap((f) => f.abonos || []).filter((a) => a.date >= cashShift.openedAt)
+    : fiados.flatMap((f) => f.abonos || []).filter((a) => isSameLocalDate(a.date, todayStr));
+
+  // 1. Efectivo en caja (Neto de efectivo USD + efectivo Bs convertido a USD, incluyendo pagos combinados, abonos de fiados y reembolsos NC)
   let cashUsdSales = 0;
   let cashBsSales = 0;
-  todaySales.forEach((s) => {
+  shiftSales.forEach((s) => {
     if (s.paymentMethod === 'efectivo_usd') {
       cashUsdSales += s.totalUSD;
     } else if (s.paymentMethod === 'efectivo_bs') {
@@ -69,19 +93,37 @@ export const DashboardView: React.FC = () => {
     }
   });
 
-  const cashUsdExp = todayExpenses
+  shiftFiadoAbonos.forEach((a) => {
+    if (a.paymentMethod === 'efectivo_usd') {
+      cashUsdSales += a.amountUSD;
+    } else if (a.paymentMethod === 'efectivo_bs') {
+      cashBsSales += a.amountBs;
+    }
+  });
+
+  const cashUsdExp = shiftExpenses
     .filter((e) => e.paymentMethod === 'efectivo_usd')
     .reduce((a, e) => a + e.amountUSD, 0);
-  const cashBsExp = todayExpenses
+  const cashBsExp = shiftExpenses
     .filter((e) => e.paymentMethod === 'efectivo_bs')
     .reduce((a, e) => a + e.amountBs, 0);
 
-  const cashNetUSD = cashUsdSales - cashUsdExp + (bcvRate > 0 ? (cashBsSales - cashBsExp) / bcvRate : 0);
-  const cashNetBs = cashNetUSD * bcvRate;
+  const cashUsdRefund = shiftCreditNotes
+    .filter((cn) => cn.refundMethod === 'efectivo_usd')
+    .reduce((a, cn) => a + cn.totalUSD, 0);
+  const cashBsRefund = shiftCreditNotes
+    .filter((cn) => cn.refundMethod === 'efectivo_bs')
+    .reduce((a, cn) => a + cn.totalBs, 0);
 
-  // 2. Ventas Brutas
-  const grossSalesUSD = todaySales.reduce((a, s) => a + s.totalUSD, 0);
-  const grossSalesBs = grossSalesUSD * bcvRate;
+  const cashNetUSD = round2(
+    cashUsdSales - cashUsdExp - cashUsdRefund + (bcvRate > 0 ? (cashBsSales - cashBsExp - cashBsRefund) / bcvRate : 0)
+  );
+  const cashNetBs = round2(cashNetUSD * bcvRate);
+
+  // 2. Ventas Brutas (Netas de devoluciones/notas de crédito del día)
+  const todayRefundedUSD = todayCreditNotes.reduce((a, cn) => a + cn.totalUSD, 0);
+  const grossSalesUSD = round2(todaySales.reduce((a, s) => a + s.totalUSD, 0) - todayRefundedUSD);
+  const grossSalesBs = round2(grossSalesUSD * bcvRate);
 
   // Mini sparkline points from today's hourly totals
   const sparklinePath = useMemo(() => {
@@ -145,6 +187,84 @@ export const DashboardView: React.FC = () => {
   const totalCombinedDebtUSD = totalCPPUSD + totalPendingGastosUSD;
   const totalCombinedDebtBs = totalCombinedDebtUSD * bcvRate;
   const overdueCPPCount = activeCPP.filter((c) => new Date(c.dueDate) < new Date()).length;
+
+  // 6. Phase 2: Alertas Activas y Reposición
+  const upcomingOrOverduePayables = useMemo(() => {
+    const nowMs = Date.now();
+    const dayMs = 1000 * 60 * 60 * 24;
+    const list: Array<{
+      id: string;
+      title: string;
+      subtitle: string;
+      dueDate: string;
+      daysDiff: number;
+      remainingUSD: number;
+    }> = [];
+
+    activeCPP.forEach((c) => {
+      const daysDiff = Math.ceil((new Date(c.dueDate).getTime() - nowMs) / dayMs);
+      if (daysDiff <= 7) {
+        list.push({
+          id: c.id,
+          title: c.supplierName,
+          subtitle: `Factura ${c.invoiceNumber}`,
+          dueDate: c.dueDate,
+          daysDiff,
+          remainingUSD: c.remainingUSD
+        });
+      }
+    });
+
+    pendingGastos.forEach((g) => {
+      if (!g.dueDate) return;
+      const daysDiff = Math.ceil((new Date(g.dueDate).getTime() - nowMs) / dayMs);
+      if (daysDiff <= 7) {
+        list.push({
+          id: g.id,
+          title: g.supplierName || g.concept,
+          subtitle: g.invoiceNumber ? `Recibo ${g.invoiceNumber}` : g.concept,
+          dueDate: g.dueDate,
+          daysDiff,
+          remainingUSD: g.remainingUSD ?? g.amountUSD
+        });
+      }
+    });
+
+    return list.sort((a, b) => a.daysDiff - b.daysDiff);
+  }, [activeCPP, pendingGastos]);
+
+  const overdueFiadosByThreshold = useMemo(() => {
+    const nowMs = Date.now();
+    const dayMs = 1000 * 60 * 60 * 24;
+    return activeFiados
+      .map((f) => ({
+        ...f,
+        ageDays: Math.max(0, Math.floor((nowMs - new Date(f.date).getTime()) / dayMs))
+      }))
+      .filter((f) => f.ageDays >= fiadoDaysThreshold)
+      .sort((a, b) => b.ageDays - a.ageDays);
+  }, [activeFiados, fiadoDaysThreshold]);
+
+  const restockSuggestions = useMemo(() => {
+    return physicalProducts
+      .filter((p) => p.stock <= p.minStock)
+      .map((p) => {
+        const targetStock = Math.max(p.minStock * 2, p.minStock + 5);
+        const suggestedQty = Math.max(1, Math.ceil(targetStock - p.stock));
+        const estUnitCost = p.costUSD > 0 ? p.costUSD : round2(p.priceUSD * 0.7);
+        return {
+          product: p,
+          suggestedQty,
+          estUnitCost,
+          estTotalUSD: round2(suggestedQty * estUnitCost)
+        };
+      })
+      .sort((a, b) => a.product.stock - b.product.stock);
+  }, [physicalProducts]);
+
+  const totalSuggestedRestockUSD = round2(
+    restockSuggestions.reduce((s, r) => s + r.estTotalUSD, 0)
+  );
 
   const handleSavePin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -232,6 +352,50 @@ export const DashboardView: React.FC = () => {
         </div>
       )}
 
+      {/* Tasa BCV Desactualizada Alert Banner */}
+      {!isBcvRateUpdatedToday && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-amber-500 text-white shadow-xs shrink-0">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-amber-950 text-xs sm:text-sm">
+                Tasa oficial BCV de hoy pendiente por actualizar
+              </h3>
+              <p className="text-xs text-amber-800">
+                Actualmente estás operando con <strong className="font-mono-numbers">Bs. {formatBs(bcvRate)}</strong>. Sincroniza la tasa BCV del día antes de facturar.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+            <button
+              type="button"
+              disabled={!isOnline || isFetchingLiveRate}
+              onClick={async () => {
+                try {
+                  await fetchLiveRate();
+                  fetchLiveEuroRate().catch(() => {});
+                } catch {
+                  setActiveTab('tasa');
+                }
+              }}
+              className="flex-1 sm:flex-none px-3.5 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-extrabold rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isFetchingLiveRate ? 'animate-spin' : ''}`} />
+              <span>{isFetchingLiveRate ? 'Sincronizando...' : 'Sincronizar BCV Hoy'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('tasa')}
+              className="px-3 py-2 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold rounded-xl transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Editar Manual
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ROW 1: HERO TOP CARDS (Efectivo en Caja + Ventas Brutas del Día) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* CARD 1: EFECTIVO EN CAJA (Focused Soft-Ice Highlight) */}
@@ -296,10 +460,11 @@ export const DashboardView: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsCuadreModalOpen(true)}
-              className="flex items-center justify-center gap-1.5 py-2.5 px-3 border border-[#93C5FD] bg-white hover:bg-[#EBF3FE] text-[#0B1528] rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 border border-[#93C5FD] bg-white hover:bg-[#EBF3FE] text-[#0B1528] rounded-xl text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
+              title="Emitir corte parcial de caja (Cierre X) sin cerrar la jornada"
             >
               <Clock className="w-3.5 h-3.5 text-[#2563EB]" />
-              <span>Ver cuadre de caja</span>
+              <span>Corte Parcial (X)</span>
             </button>
           </div>
         </div>
@@ -501,6 +666,217 @@ export const DashboardView: React.FC = () => {
                 {overdueCPPCount} vencida{overdueCPPCount > 1 ? 's' : ''}
               </span>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* ROW 3.5: CENTRO DE ALERTAS ACTIVAS Y REPOSICIÓN */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Alerta 1: Facturas de Proveedores Próximas a Vencer */}
+        <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col justify-between space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <span className="text-[11px] font-extrabold text-[#0B1528] uppercase tracking-wider flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-[#D97706]" />
+                <span>Facturas por Vencer (≤ 7d)</span>
+              </span>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Proveedores y gastos próximos a vencimiento
+              </p>
+            </div>
+            <span className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold font-mono-numbers border ${
+              upcomingOrOverduePayables.length > 0
+                ? 'bg-[#FEECEF] text-[#BE123C] border-[#FBC4CD]'
+                : 'bg-[#E7F8EE] text-[#065F46] border-[#A7E6C4]'
+            }`}>
+              {upcomingOrOverduePayables.length}
+            </span>
+          </div>
+
+          <div className="space-y-2 max-h-48 overflow-y-auto pr-0.5">
+            {upcomingOrOverduePayables.length === 0 ? (
+              <div className="py-5 text-center text-xs text-slate-400 bg-[#F8FAFC] rounded-xl border border-[#EEF2F7]">
+                Sin facturas próximas a vencer esta semana
+              </div>
+            ) : (
+              upcomingOrOverduePayables.slice(0, 5).map((item) => (
+                <div
+                  key={item.id}
+                  onClick={() => setActiveTab('cuentas_por_pagar')}
+                  className="p-2.5 rounded-xl bg-[#F8FAFC] hover:bg-[#FFF3E8] border border-[#DCE4F0] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-xs text-[#0B1528] truncate">{item.title}</div>
+                    <div className="text-[10px] text-slate-500 truncate">
+                      {item.subtitle} • {new Date(item.dueDate).toLocaleDateString('es-VE')}
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="font-mono-numbers font-black text-xs text-[#0B1528]">
+                      ${formatUSD(item.remainingUSD)}
+                    </div>
+                    <span className={`text-[10px] font-extrabold ${
+                      item.daysDiff < 0 ? 'text-[#BE123C]' : 'text-[#D97706]'
+                    }`}>
+                      {item.daysDiff < 0
+                        ? `Vencida (${Math.abs(item.daysDiff)}d)`
+                        : item.daysDiff === 0
+                          ? 'Vence hoy'
+                          : `En ${item.daysDiff}d`}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('cuentas_por_pagar')}
+            className="text-xs font-bold text-[#2563EB] hover:underline flex items-center justify-end gap-1 cursor-pointer"
+          >
+            <span>Ir a Cuentas por Pagar</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Alerta 2: Fiados con +X Días de Antigüedad */}
+        <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col justify-between space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <span className="text-[11px] font-extrabold text-[#0B1528] uppercase tracking-wider flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-[#BE123C]" />
+                <span>Fiados Vencidos (+{fiadoDaysThreshold}d)</span>
+              </span>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Clientes con deuda antigua pendiente
+              </p>
+            </div>
+            <div className="flex items-center bg-[#EEF2F7] p-0.5 rounded-lg border border-[#DCE4F0] text-[10px] font-bold">
+              {([15, 30, 60] as const).map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setFiadoDaysThreshold(days)}
+                  className={`px-1.5 py-0.5 rounded-md cursor-pointer transition-colors ${
+                    fiadoDaysThreshold === days
+                      ? 'bg-[#0B1528] text-white'
+                      : 'text-slate-600 hover:text-[#0B1528]'
+                  }`}
+                >
+                  {days}d
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2 max-h-48 overflow-y-auto pr-0.5">
+            {overdueFiadosByThreshold.length === 0 ? (
+              <div className="py-5 text-center text-xs text-slate-400 bg-[#F8FAFC] rounded-xl border border-[#EEF2F7]">
+                No hay clientes con fiados mayores a {fiadoDaysThreshold} días
+              </div>
+            ) : (
+              overdueFiadosByThreshold.slice(0, 5).map((f) => (
+                <div
+                  key={f.id}
+                  onClick={() => setActiveTab('fiados')}
+                  className="p-2.5 rounded-xl bg-[#F8FAFC] hover:bg-[#FEECEF]/60 border border-[#DCE4F0] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-xs text-[#0B1528] truncate">{f.clientName}</div>
+                    <div className="text-[10px] text-slate-500 truncate">
+                      {f.invoiceNumber} • {f.clientPhone}
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="font-mono-numbers font-black text-xs text-[#BE123C]">
+                      ${formatUSD(f.remainingDebtUSD)}
+                    </div>
+                    <span className="text-[10px] font-bold text-amber-700">
+                      Hace {f.ageDays} días
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('fiados')}
+            className="text-xs font-bold text-[#2563EB] hover:underline flex items-center justify-end gap-1 cursor-pointer"
+          >
+            <span>Gestionar Fiados</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Alerta 3: Sugerencia Automática de Compra (Reposición Stock Bajo) */}
+        <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col justify-between space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <span className="text-[11px] font-extrabold text-[#0B1528] uppercase tracking-wider flex items-center gap-1.5">
+                <ShoppingCart className="w-3.5 h-3.5 text-[#1D4ED8]" />
+                <span>Sugerencia de Reposición</span>
+              </span>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Productos por debajo o igual a stock mínimo
+              </p>
+            </div>
+            {restockSuggestions.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold font-mono-numbers bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC]">
+                Est. ${formatUSD(totalSuggestedRestockUSD)}
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-2 max-h-48 overflow-y-auto pr-0.5">
+            {restockSuggestions.length === 0 ? (
+              <div className="py-5 text-center text-xs text-[#065F46] bg-[#E7F8EE] rounded-xl border border-[#A7E6C4] font-semibold">
+                Inventario óptimo: todos los productos sobre el mínimo
+              </div>
+            ) : (
+              restockSuggestions.slice(0, 5).map(({ product, suggestedQty, estTotalUSD }) => (
+                <div
+                  key={product.id}
+                  onClick={() => setActiveTab('contabilidad')}
+                  className="p-2.5 rounded-xl bg-[#F8FAFC] hover:bg-[#EBF3FE] border border-[#DCE4F0] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-xs text-[#0B1528] truncate">{product.name}</div>
+                    <div className="text-[10px] text-slate-500">
+                      Actual: <strong className="text-[#BE123C]">{product.stock}</strong> / Mín: {product.minStock}
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="font-mono-numbers font-extrabold text-xs text-[#1D4ED8]">
+                      +{suggestedQty} {product.unit}
+                    </div>
+                    <span className="text-[10px] font-mono-numbers text-slate-500">
+                      ≈ ${formatUSD(estTotalUSD)}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="flex items-center justify-between text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => setActiveTab('productos')}
+              className="text-slate-600 hover:text-[#0B1528] cursor-pointer"
+            >
+              Ver Productos ({restockSuggestions.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('contabilidad')}
+              className="text-[#2563EB] hover:underline flex items-center gap-1 cursor-pointer"
+            >
+              <span>Registrar Compra</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </div>

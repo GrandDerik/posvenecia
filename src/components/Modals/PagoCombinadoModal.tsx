@@ -15,7 +15,7 @@ import {
   HelpCircle,
   PlusCircle
 } from 'lucide-react';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs, formatUSD, round2, safeDiv } from '../../utils/exportUtils';
 
 interface PagoCombinadoModalProps {
   isOpen: boolean;
@@ -90,17 +90,18 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
   const numTransferencia = useTransferencia ? (parseFloat(transferencia) || 0) : 0;
 
   // Convert all Bs parts to USD for consolidated comparison
-  const totalCoveredUSD = 
+  const totalCoveredUSD = round2(
     numUsdCash + 
-    (numBsCash / bcvRate) + 
-    (numPagoMovil / bcvRate) + 
-    (numDebito / bcvRate) + 
+    safeDiv(numBsCash, bcvRate) + 
+    safeDiv(numPagoMovil, bcvRate) + 
+    safeDiv(numDebito, bcvRate) + 
     numFiado + 
-    (numTransferencia / bcvRate);
+    safeDiv(numTransferencia, bcvRate)
+  );
 
-  const remainingUSD = totalUSD - totalCoveredUSD;
+  const remainingUSD = round2(totalUSD - totalCoveredUSD);
   const isComplete = Math.abs(remainingUSD) < 0.05;
-  const remainingBs = remainingUSD * bcvRate;
+  const remainingBs = round2(remainingUSD * bcvRate);
 
   const handleSetExactRemaining = (field: 'usd' | 'bs' | 'pm' | 'deb' | 'fiao' | 'trans') => {
     const neededUSD = Math.max(0, remainingUSD);
@@ -325,7 +326,7 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
                 </div>
 
                 <div className="flex items-center justify-between sm:justify-end text-xs text-slate-500 sm:pt-4">
-                  <span>Equiv: <strong>${formatUSD(numBsCash / bcvRate)}</strong></span>
+                  <span>Equiv: <strong>${formatUSD(safeDiv(numBsCash, bcvRate))}</strong></span>
                 </div>
               </div>
             )}

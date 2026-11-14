@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Sale } from '../types';
-import { formatBs, formatUSD } from '../utils/exportUtils';
+import { formatBs, formatUSD, getLocalDateStr, isSameLocalDate } from '../utils/exportUtils';
 import { TrendingUp, Clock, Zap } from 'lucide-react';
 
 interface HourlySalesChartProps {
@@ -46,10 +46,10 @@ export const HourlySalesChart: React.FC<HourlySalesChartProps> = ({ sales, bcvRa
   const [currency, setCurrency] = useState<'USD' | 'Bs'>('USD');
   const [selectedHour, setSelectedHour] = useState<number | null>(null);
 
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayStr = getLocalDateStr();
 
   const todaySales = useMemo(() => {
-    return sales.filter((s) => s.status === 'completada' && s.date.startsWith(todayStr));
+    return sales.filter((s) => s.status !== 'anulada' && isSameLocalDate(s.date, todayStr));
   }, [sales, todayStr]);
 
   // Aggregate by business hours (07:00 to 21:00, expanding if out-of-range sales exist)

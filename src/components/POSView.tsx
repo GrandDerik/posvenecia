@@ -28,10 +28,12 @@ import {
   LayoutGrid,
   List,
   ShieldCheck,
-  FileText
+  FileText,
+  RefreshCw,
+  TrendingUp
 } from 'lucide-react';
 import { Product, PaymentMethod, PaymentDetails, Sale, Client } from '../types';
-import { formatBs, formatUSD } from '../utils/exportUtils';
+import { formatBs, formatUSD, round2, safeDiv } from '../utils/exportUtils';
 import { PagoMovilModal } from './Modals/PagoMovilModal';
 import { VentaFiadaModal } from './Modals/VentaFiadaModal';
 import { PagoCombinadoModal } from './Modals/PagoCombinadoModal';
@@ -54,6 +56,7 @@ export const POSView: React.FC = () => {
     setApplyIVA,
     applyIGTF,
     setApplyIGTF,
+    sales,
     completeSale,
     fiados,
     businessInfo,
@@ -65,7 +68,12 @@ export const POSView: React.FC = () => {
     isCashRegisterOpen,
     setIsAperturaModalOpen,
     managerPin,
-    setIsCreditNoteModalOpen
+    setIsCreditNoteModalOpen,
+    isBcvRateUpdatedToday,
+    fetchLiveRate,
+    fetchLiveEuroRate,
+    isFetchingLiveRate,
+    isOnline
   } = useApp();
 
   // Search & Filters
@@ -74,9 +82,7 @@ export const POSView: React.FC = () => {
   const [barcodeInput, setBarcodeInput] = useState('');
 
   // View Mode: Grid (tarjetas con foto) vs List (filas compactas)
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
-    return (localStorage.getItem('posvenecia_pos_view_mode') as 'grid' | 'list') || 'grid';
-  });
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   // Modal Producto Inexistente
   const [isNotFoundModalOpen, setIsNotFoundModalOpen] = useState(false);
@@ -115,11 +121,34 @@ export const POSView: React.FC = () => {
   // Stored details before finalizing
   const [pagoMovilData, setPagoMovilData] = useState<{ bank: string; ref: string; phone: string; ci: string } | null>(null);
   const [combinedData, setCombinedData] = useState<any>(null);
-  const [fiadoData, setFiadoData] = useState<any>(null);
+  const [fiadoData, setFiadoData] = useState<{
+    clientName: string;
+    clientCI: string;
+    clientPhone: string;
+    clientAddress?: string;
+    initialAbonoUSD: number;
+    initialAbonoBs: number;
+    abonoCurrency?: 'USD' | 'Bs';
+    remainingUSD: number;
+  } | null>(null);
 
   // Double-submit protection
   const [isProcessingCheckout, setIsProcessingCheckout] = useState(false);
   const isProcessingCheckoutRef = useRef(false);
+
+  // Mandatory manual SENIAT fiscal correlatives
+  const [invoiceNumberInput, setInvoiceNumberInput] = useState('');
+  const [controlNumberInput, setControlNumberInput] = useState('');
+  const [fiscalError, setFiscalError] = useState<string | null>(null);
+
+  const cleanInvoiceInput = invoiceNumberInput.trim().toUpperCase();
+  const cleanControlInput = controlNumberInput.trim().toUpperCase();
+  const isDuplicateInvoice = Boolean(
+    cleanInvoiceInput && sales.some(s => (s.invoiceNumber || '').trim().toUpperCase() === cleanInvoiceInput)
+  );
+  const isDuplicateControl = Boolean(
+    cleanControlInput && sales.some(s => (s.controlNumber || '').trim().toUpperCase() === cleanControlInput)
+  );
 
   // Manager PIN modal state to authorize disabling fiscal IVA
   const [isManagerPinModalOpen, setIsManagerPinModalOpen] = useState(false);
@@ -196,26 +225,28 @@ export const POSView: React.FC = () => {
     }
   });
 
-  const subtotalUSD = exemptUSD + taxableUSD;
-  const ivaUSD = taxableUSD * 0.16;
+  exemptUSD = round2(exemptUSD);
+  taxableUSD = round2(taxableUSD);
+  const subtotalUSD = round2(exemptUSD + taxableUSD);
+  const ivaUSD = round2(taxableUSD * 0.16);
 
   let igtfUSD = 0;
   if (applyIGTF) {
     if (selectedMethod === 'efectivo_usd') {
-      igtfUSD = Number(((subtotalUSD + ivaUSD) * 0.03).toFixed(2));
+      igtfUSD = round2((subtotalUSD + ivaUSD) * 0.03);
     } else if (selectedMethod === 'pago_combinado' && combinedData?.usdCash) {
-      igtfUSD = Number((combinedData.usdCash * 0.03).toFixed(2));
+      igtfUSD = round2(combinedData.usdCash * 0.03);
     }
   }
 
-  const totalUSD = Number((subtotalUSD + ivaUSD + igtfUSD).toFixed(2));
+  const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
 
-  const subtotalBs = subtotalUSD * bcvRate;
-  const exemptBs = exemptUSD * bcvRate;
-  const taxableBs = taxableUSD * bcvRate;
-  const ivaBs = ivaUSD * bcvRate;
-  const igtfBs = igtfUSD * bcvRate;
-  const totalBs = totalUSD * bcvRate;
+  const subtotalBs = round2(subtotalUSD * bcvRate);
+  const exemptBs = round2(exemptUSD * bcvRate);
+  const taxableBs = round2(taxableUSD * bcvRate);
+  const ivaBs = round2(ivaUSD * bcvRate);
+  const igtfBs = round2(igtfUSD * bcvRate);
+  const totalBs = round2(totalUSD * bcvRate);
 
   // Handle Payment Method Selection
   const handleSelectPaymentMethod = (method: PaymentMethod) => {
@@ -265,6 +296,28 @@ export const POSView: React.FC = () => {
       return;
     }
 
+    if (!cleanInvoiceInput) {
+      setFiscalError('Ingrese manualmente el N° de Factura físico antes de procesar la venta.');
+      return;
+    }
+
+    if (!cleanControlInput) {
+      setFiscalError('Ingrese manualmente el N° de Control SENIAT físico antes de procesar la venta.');
+      return;
+    }
+
+    if (isDuplicateInvoice) {
+      setFiscalError(`El N° de Factura "${cleanInvoiceInput}" ya está registrado en el sistema.`);
+      return;
+    }
+
+    if (isDuplicateControl) {
+      setFiscalError(`El N° de Control SENIAT "${cleanControlInput}" ya está registrado en el sistema.`);
+      return;
+    }
+
+    setFiscalError(null);
+
     // Lock immediate submission
     isProcessingCheckoutRef.current = true;
     setIsProcessingCheckout(true);
@@ -282,6 +335,7 @@ export const POSView: React.FC = () => {
         fiaoClientCI: fiadoData?.clientCI,
         fiaoInitialAbonoUSD: fiadoData?.initialAbonoUSD,
         fiaoInitialAbonoBs: fiadoData?.initialAbonoBs,
+        fiaoInitialAbonoCurrency: fiadoData?.abonoCurrency,
         fiaoRemainingUSD: fiadoData?.remainingUSD,
         combinedBreakdown: combinedData
       };
@@ -293,16 +347,23 @@ export const POSView: React.FC = () => {
         address: fiadoData?.clientAddress || clientAddress
       };
 
-      const createdSale = completeSale(finalClient, paymentDetails);
+      const createdSale = completeSale(finalClient, paymentDetails, {
+        invoiceNumber: cleanInvoiceInput,
+        controlNumber: cleanControlInput
+      });
 
       // Reset flow states
       setPagoMovilData(null);
       setFiadoData(null);
       setCombinedData(null);
       setTransferenciaRef('');
+      setInvoiceNumberInput('');
+      setControlNumberInput('');
+      setFiscalError(null);
       setSuccessSale(createdSale);
     } catch (err: any) {
       console.error('[POSView] Error al procesar venta:', err);
+      setFiscalError(err?.message || 'No se pudo procesar la venta. Verifique los datos fiscales.');
     } finally {
       // Cooldown timer to prevent accidental double clicks
       setTimeout(() => {
@@ -345,6 +406,50 @@ export const POSView: React.FC = () => {
             <KeyRound className="w-4 h-4" />
             <span>Abrir Caja Ahora</span>
           </button>
+        </div>
+      )}
+
+      {/* Tasa BCV Desactualizada Alert Banner (Pre-facturación) */}
+      {isCashRegisterOpen && !isBcvRateUpdatedToday && (
+        <div className="mb-5 bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-amber-500 text-white rounded-xl shrink-0">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-amber-950 text-xs sm:text-sm">
+                Tasa BCV del día aún no actualizada antes de facturar
+              </h3>
+              <p className="text-[11px] text-amber-800">
+                Facturando con tasa previa: <strong className="font-mono-numbers">Bs. {formatBs(bcvRate)}</strong>. Sincroniza la tasa BCV de hoy para evitar desfases cambiarios.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+            <button
+              type="button"
+              disabled={!isOnline || isFetchingLiveRate}
+              onClick={async () => {
+                try {
+                  await fetchLiveRate();
+                  fetchLiveEuroRate().catch(() => {});
+                } catch {
+                  setActiveTab('tasa');
+                }
+              }}
+              className="flex-1 sm:flex-none px-3.5 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isFetchingLiveRate ? 'animate-spin' : ''}`} />
+              <span>{isFetchingLiveRate ? 'Sincronizando...' : 'Actualizar BCV Hoy'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('tasa')}
+              className="px-3 py-2 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
+            >
+              Editar tasa
+            </button>
+          </div>
         </div>
       )}
 
@@ -414,10 +519,7 @@ export const POSView: React.FC = () => {
                 <div className="flex items-center bg-[#EEF2F7] p-0.5 rounded-xl border border-[#DCE4F0]">
                   <button
                     type="button"
-                    onClick={() => {
-                      setViewMode('grid');
-                      localStorage.setItem('posvenecia_pos_view_mode', 'grid');
-                    }}
+                    onClick={() => setViewMode('grid')}
                     className={`p-1.5 rounded-lg transition-all cursor-pointer ${
                       viewMode === 'grid'
                         ? 'bg-white text-blue-700 shadow-2xs font-bold'
@@ -429,10 +531,7 @@ export const POSView: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setViewMode('list');
-                      localStorage.setItem('posvenecia_pos_view_mode', 'list');
-                    }}
+                    onClick={() => setViewMode('list')}
                     className={`p-1.5 rounded-lg transition-all cursor-pointer ${
                       viewMode === 'list'
                         ? 'bg-white text-blue-700 shadow-2xs font-bold'
@@ -495,17 +594,17 @@ export const POSView: React.FC = () => {
                         addToCart(prod, 1);
                       }
                     }}
-                    className={`bg-white/95 rounded-2xl border p-3.5 flex flex-col justify-between transition-all group relative ${
+                    className={`rounded-2xl border p-3.5 flex flex-col justify-between transition-all group relative ${
                       isOutOfStock 
-                        ? 'opacity-50 border-[#DCE4F0] bg-[#F8FAFC] cursor-not-allowed'
+                        ? 'border-[#CBD5E1] bg-[#F1F5F9] cursor-not-allowed'
                         : inCartItem
                           ? 'border-[#93C5FD] bg-gradient-to-b from-white to-[#F4F8FF] shadow-[0_2px_12px_-4px_rgba(37,99,235,0.18)] ring-1 ring-blue-500/20 cursor-pointer'
-                          : 'border-[#DCE4F0] hover:border-[#93C5FD] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] cursor-pointer'
+                          : 'bg-white/95 border-[#DCE4F0] hover:border-[#93C5FD] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] cursor-pointer'
                     }`}
                   >
                     {/* Image & Category Badges */}
                     <div className="relative mb-2">
-                      <div className="w-full h-24 rounded-xl bg-[#F8FAFC] overflow-hidden flex items-center justify-center border border-[#DCE4F0]/70">
+                      <div className={`w-full h-24 rounded-xl bg-[#F8FAFC] overflow-hidden flex items-center justify-center border border-[#DCE4F0]/70 ${isOutOfStock ? 'grayscale opacity-75' : ''}`}>
                         {prod.imageUrl ? (
                           <img src={prod.imageUrl} alt={prod.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                         ) : (
@@ -528,19 +627,32 @@ export const POSView: React.FC = () => {
 
                     {/* Product Details */}
                     <div className="mb-2">
-                      <h4 className="font-bold text-xs text-[#0B1528] line-clamp-2 leading-snug group-hover:text-blue-700">
+                      <h4 className={`font-bold text-xs line-clamp-2 leading-snug ${isOutOfStock ? 'text-slate-600' : 'text-[#0B1528] group-hover:text-blue-700'}`}>
                         {prod.name}
                       </h4>
-                      <span className="text-[10px] text-slate-400 font-mono-numbers">{prod.code}</span>
+                      <div className="flex items-center justify-between gap-1 mt-0.5">
+                        <span className="text-[10px] text-slate-400 font-mono-numbers truncate">{prod.code}</span>
+                        {!isService && (
+                          <span className={`text-[10px] font-mono-numbers font-bold shrink-0 ${
+                            isOutOfStock
+                              ? 'text-[#BE123C]'
+                              : prod.stock <= (prod.minStock || 5)
+                              ? 'text-[#D96B27]'
+                              : 'text-slate-500'
+                          }`}>
+                            Stock: {prod.stock} {prod.unit}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Bimonetary Prices & Controls */}
                     <div className="pt-2 border-t border-slate-100 flex items-end justify-between">
                       <div>
-                        <div className="text-sm font-black text-[#0B1528] font-mono-numbers">
+                        <div className={`text-sm font-black font-mono-numbers ${isOutOfStock ? 'text-slate-600' : 'text-[#0B1528]'}`}>
                           {baseCurrency === 'VED' ? `Bs ${formatBs(priceBs)}` : `$${formatUSD(prod.priceUSD)}`}
                         </div>
-                        <div className="text-[10px] font-bold text-blue-700 font-mono-numbers">
+                        <div className={`text-[10px] font-bold font-mono-numbers ${isOutOfStock ? 'text-slate-500' : 'text-blue-700'}`}>
                           {baseCurrency === 'VED' ? `$${formatUSD(prod.priceUSD)}` : `Bs ${formatBs(priceBs)}`}
                         </div>
                       </div>
@@ -620,17 +732,17 @@ export const POSView: React.FC = () => {
                         addToCart(prod, 1);
                       }
                     }}
-                    className={`bg-white/95 rounded-2xl border p-2.5 sm:p-3 flex items-center justify-between gap-3 transition-all ${
+                    className={`rounded-2xl border p-2.5 sm:p-3 flex items-center justify-between gap-3 transition-all ${
                       isOutOfStock
-                        ? 'opacity-50 border-[#DCE4F0] bg-[#F8FAFC] cursor-not-allowed'
+                        ? 'border-[#CBD5E1] bg-[#F1F5F9] cursor-not-allowed'
                         : inCartItem
                           ? 'border-[#93C5FD] bg-gradient-to-b from-white to-[#F4F8FF] shadow-xs ring-1 ring-blue-500/20 cursor-pointer'
-                          : 'border-[#DCE4F0] hover:border-[#93C5FD] shadow-[0_2px_10px_-4px_rgba(15,23,42,0.05)] cursor-pointer'
+                          : 'bg-white/95 border-[#DCE4F0] hover:border-[#93C5FD] shadow-[0_2px_10px_-4px_rgba(15,23,42,0.05)] cursor-pointer'
                     }`}
                   >
                     {/* Thumbnail & Info */}
                     <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <div className="w-12 h-12 rounded-xl bg-[#F8FAFC] overflow-hidden flex items-center justify-center border border-[#DCE4F0] shrink-0">
+                      <div className={`w-12 h-12 rounded-xl bg-[#F8FAFC] overflow-hidden flex items-center justify-center border border-[#DCE4F0] shrink-0 ${isOutOfStock ? 'grayscale opacity-75' : ''}`}>
                         {prod.imageUrl ? (
                           <img src={prod.imageUrl} alt={prod.name} className="w-full h-full object-cover" />
                         ) : (
@@ -639,7 +751,7 @@ export const POSView: React.FC = () => {
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="font-bold text-xs sm:text-sm text-[#0B1528] truncate">
+                          <h4 className={`font-bold text-xs sm:text-sm truncate ${isOutOfStock ? 'text-slate-600' : 'text-[#0B1528]'}`}>
                             {prod.name}
                           </h4>
                           <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-[#F8FAFC] border border-[#DCE4F0] text-slate-600">
@@ -654,7 +766,13 @@ export const POSView: React.FC = () => {
                         <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono-numbers mt-0.5">
                           <span>{prod.code}</span>
                           {!isService && (
-                            <span className={prod.stock <= (prod.minStock || 5) ? 'text-[#D96B27] font-bold' : 'text-slate-500'}>
+                            <span className={
+                              isOutOfStock
+                                ? 'text-[#BE123C] font-bold'
+                                : prod.stock <= (prod.minStock || 5)
+                                ? 'text-[#D96B27] font-bold'
+                                : 'text-slate-500'
+                            }>
                               Stock: {prod.stock} {prod.unit}
                             </span>
                           )}
@@ -1146,9 +1264,79 @@ export const POSView: React.FC = () => {
                     </div>
                   </div>
                   <span className="text-[10px] font-mono text-slate-500">
-                    3x ${formatUSD(totalUSD / 3)}
+                    3x ${formatUSD(round2(safeDiv(totalUSD, 3, 0)))}
                   </span>
                 </button>
+              </div>
+
+              {/* Mandatory Manual Fiscal Correlatives (SENIAT) */}
+              <div className="p-3 bg-[#F8FAFC] border border-[#DCE4F0] rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#0B1528] flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Correlativos Fiscales SENIAT *</span>
+                  </span>
+                  <span className="text-[10px] font-medium text-slate-500">Ingreso manual obligatorio</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                      N° de Factura *
+                    </label>
+                    <input
+                      type="text"
+                      value={invoiceNumberInput}
+                      onChange={(e) => {
+                        setInvoiceNumberInput(e.target.value);
+                        if (fiscalError) setFiscalError(null);
+                      }}
+                      placeholder="Ej: 00000125"
+                      className={`w-full px-2.5 py-1.5 bg-white border rounded-xl text-xs font-mono font-bold uppercase focus:outline-hidden focus:ring-2 ${
+                        isDuplicateInvoice
+                          ? 'border-rose-500 text-rose-700 focus:ring-rose-500'
+                          : 'border-[#DCE4F0] text-[#0B1528] focus:ring-blue-500'
+                      }`}
+                    />
+                    {isDuplicateInvoice && (
+                      <p className="text-[10px] font-bold text-rose-600 mt-0.5">
+                        N° de factura ya registrado
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                      N° de Control SENIAT *
+                    </label>
+                    <input
+                      type="text"
+                      value={controlNumberInput}
+                      onChange={(e) => {
+                        setControlNumberInput(e.target.value);
+                        if (fiscalError) setFiscalError(null);
+                      }}
+                      placeholder="Ej: 00-001254"
+                      className={`w-full px-2.5 py-1.5 bg-white border rounded-xl text-xs font-mono font-bold uppercase focus:outline-hidden focus:ring-2 ${
+                        isDuplicateControl
+                          ? 'border-rose-500 text-rose-700 focus:ring-rose-500'
+                          : 'border-[#DCE4F0] text-[#0B1528] focus:ring-blue-500'
+                      }`}
+                    />
+                    {isDuplicateControl && (
+                      <p className="text-[10px] font-bold text-rose-600 mt-0.5">
+                        N° de control ya registrado
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {fiscalError && (
+                  <div className="p-2 bg-rose-50 border border-rose-200 rounded-xl text-[11px] font-semibold text-rose-700 flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                    <span>{fiscalError}</span>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons: Checkout and Cancel Sale */}
@@ -1157,9 +1345,11 @@ export const POSView: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleCheckout}
-                    disabled={isProcessingCheckout || cart.length === 0}
+                    disabled={isProcessingCheckout || cart.length === 0 || isDuplicateInvoice || isDuplicateControl}
                     className={`w-full py-3.5 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white rounded-xl text-sm font-bold shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] transition-all active:scale-98 flex items-center justify-center gap-2 ${
-                      isProcessingCheckout || cart.length === 0 ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+                      isProcessingCheckout || cart.length === 0 || isDuplicateInvoice || isDuplicateControl
+                        ? 'opacity-60 cursor-not-allowed'
+                        : 'cursor-pointer'
                     }`}
                   >
                     {isProcessingCheckout ? (
@@ -1193,6 +1383,9 @@ export const POSView: React.FC = () => {
                     setFiadoData(null);
                     setCombinedData(null);
                     setTransferenciaRef('');
+                    setInvoiceNumberInput('');
+                    setControlNumberInput('');
+                    setFiscalError(null);
                   }}
                   className="w-full py-2 bg-[#F8FAFC] border border-[#DCE4F0] hover:bg-[#FEECEF] text-slate-600 hover:text-[#BE123C] hover:border-[#FBC4CD] rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer"
                 >

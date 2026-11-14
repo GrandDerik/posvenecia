@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { Product, Sale, Expense, FiadoRecord, CuentaPorPagar, Client, BusinessInfo, GastoOperativo, GoogleAccount, CashShift } from '../types';
-import { formatBs, formatUSD } from './exportUtils';
+import { formatBs, formatUSD, getLocalDateStr } from './exportUtils';
 
 export interface BackupDataPayload {
   version: string;
@@ -35,7 +35,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
   businessInfo: BusinessInfo;
 }) => {
   const wb = XLSX.utils.book_new();
-  const dateStr = new Date().toISOString().split('T')[0];
+  const dateStr = getLocalDateStr();
 
   // 1. Sheet: Histórico de Ventas
   const salesSheetData = data.sales.map((s, idx) => ({
@@ -235,7 +235,7 @@ export const uploadBackupToGoogleDrive = async (
   accessToken: string,
   backupPayload: BackupDataPayload
 ): Promise<{ fileId: string; fileName: string; webViewLink?: string }> => {
-  const dateStr = new Date().toISOString().split('T')[0];
+  const dateStr = getLocalDateStr();
   const fileName = `PosVenecia_Backup_${backupPayload.businessInfo.name.replace(/\s+/g, '_')}_${dateStr}.json`;
   const fileContent = JSON.stringify(backupPayload, null, 2);
 

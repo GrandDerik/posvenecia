@@ -3,6 +3,36 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Sale, Expense, CashShift, CuentaPorPagar, GastoOperativo } from '../types';
 
+export const round2 = (n: number): number => {
+  if (!Number.isFinite(n)) return 0;
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+};
+
+export const safeDiv = (numerator: number, denominator: number, fallback = 0): number => {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+    return fallback;
+  }
+  return numerator / denominator;
+};
+
+export const getLocalDateStr = (d: Date | string = new Date()): string => {
+  const dateObj = typeof d === 'string' ? new Date(d) : d;
+  if (isNaN(dateObj.getTime())) {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+  return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+};
+
+export const isSameLocalDate = (isoOrDateStr: string | undefined, targetLocalYMD: string = getLocalDateStr()): boolean => {
+  if (!isoOrDateStr) return false;
+  // If already plain YYYY-MM-DD, compare directly without UTC shift
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoOrDateStr)) {
+    return isoOrDateStr === targetLocalYMD;
+  }
+  return getLocalDateStr(isoOrDateStr) === targetLocalYMD;
+};
+
 // Helper to format currency
 export const formatBs = (val: number) => {
   return new Intl.NumberFormat('es-VE', {
@@ -44,7 +74,7 @@ export const exportLibroVentasExcel = (sales: Sale[], businessInfo: { name: stri
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Libro de Ventas');
   
   // Header title in sheet
-  XLSX.writeFile(workbook, `Libro_de_Ventas_SENIAT_${new Date().toISOString().split('T')[0]}.xlsx`);
+  XLSX.writeFile(workbook, `Libro_de_Ventas_SENIAT_${getLocalDateStr()}.xlsx`);
 };
 
 // 2. Export Libro de Ventas to PDF - Formato Oficial SENIAT
@@ -117,7 +147,7 @@ export const exportLibroVentasPDF = (sales: Sale[], businessInfo: { name: string
     }
   });
 
-  doc.save(`Libro_de_Ventas_SENIAT_${new Date().toISOString().split('T')[0]}.pdf`);
+  doc.save(`Libro_de_Ventas_SENIAT_${getLocalDateStr()}.pdf`);
 };
 
 // 3. Export Libro de Compras to Excel (.xlsx)
@@ -143,7 +173,7 @@ export const exportLibroComprasExcel = (expenses: Expense[], businessInfo: { nam
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Libro de Compras');
-  XLSX.writeFile(workbook, `Libro_de_Compras_SENIAT_${new Date().toISOString().split('T')[0]}.xlsx`);
+  XLSX.writeFile(workbook, `Libro_de_Compras_SENIAT_${getLocalDateStr()}.xlsx`);
 };
 
 // 4. Export Libro de Compras to PDF
@@ -211,7 +241,7 @@ export const exportLibroComprasPDF = (expenses: Expense[], businessInfo: { name:
     }
   });
 
-  doc.save(`Libro_de_Compras_SENIAT_${new Date().toISOString().split('T')[0]}.pdf`);
+  doc.save(`Libro_de_Compras_SENIAT_${getLocalDateStr()}.pdf`);
 };
 
 // 5. Export Estado de Cuenta y Balance to Excel
@@ -249,7 +279,7 @@ export const exportEstadoCuentaExcel = (
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Balance General');
-  XLSX.writeFile(wb, `Estado_de_Cuenta_${new Date().toISOString().split('T')[0]}.xlsx`);
+  XLSX.writeFile(wb, `Estado_de_Cuenta_${getLocalDateStr()}.xlsx`);
 };
 
 // 6. Export Estado de Cuenta y Balance to PDF
@@ -310,7 +340,7 @@ export const exportEstadoCuentaPDF = (
     styles: { fontSize: 9.5, cellPadding: 2.5 },
   });
 
-  doc.save(`Estado_de_Cuenta_${new Date().toISOString().split('T')[0]}.pdf`);
+  doc.save(`Estado_de_Cuenta_${getLocalDateStr()}.pdf`);
 };
 
 // 7. Export Individual Cierre de Caja to Excel (.xlsx)
@@ -518,7 +548,7 @@ export const exportHistorialCierresExcel = (
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Historial de Cierres');
-  XLSX.writeFile(wb, `Historial_Cierres_Caja_${new Date().toISOString().split('T')[0]}.xlsx`);
+  XLSX.writeFile(wb, `Historial_Cierres_Caja_${getLocalDateStr()}.xlsx`);
 };
 
 // 10. Export Historial de Cierres de Caja to PDF
@@ -556,7 +586,7 @@ export const exportHistorialCierresPDF = (
     styles: { fontSize: 8.5, cellPadding: 2 },
   });
 
-  doc.save(`Historial_Cierres_Caja_${new Date().toISOString().split('T')[0]}.pdf`);
+  doc.save(`Historial_Cierres_Caja_${getLocalDateStr()}.pdf`);
 };
 
 // 11. Export Cuentas por Pagar to Excel (.xlsx)
@@ -585,7 +615,7 @@ export const exportCuentasPorPagarExcel = (
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Cuentas Por Pagar');
-  XLSX.writeFile(wb, `Cuentas_Por_Pagar_Proveedores_${new Date().toISOString().split('T')[0]}.xlsx`);
+  XLSX.writeFile(wb, `Cuentas_Por_Pagar_Proveedores_${getLocalDateStr()}.xlsx`);
 };
 
 // 12. Export Cuentas por Pagar to PDF
@@ -630,5 +660,5 @@ export const exportCuentasPorPagarPDF = (
     styles: { fontSize: 8.5, cellPadding: 2 },
   });
 
-  doc.save(`Cuentas_Por_Pagar_Proveedores_${new Date().toISOString().split('T')[0]}.pdf`);
+  doc.save(`Cuentas_Por_Pagar_Proveedores_${getLocalDateStr()}.pdf`);
 };

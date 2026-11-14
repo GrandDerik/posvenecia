@@ -7,9 +7,13 @@ import {
   getDocs,
   writeBatch,
   increment,
+  query,
+  where,
+  orderBy,
   Unsubscribe
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, auth } from '../config/firebaseConfig';
+import { getLocalDateStr } from '../utils/exportUtils';
 import {
   Product,
   Sale,
@@ -22,14 +26,32 @@ import {
   BusinessInfo,
   CreditNote,
   InventoryDischarge,
-  BaseCurrency
+  BaseCurrency,
+  ProductBatch,
+  KardexEntry,
+  Supplier
 } from '../types';
+
+export type TransactionsDatePreset =
+  | 'current_month'
+  | 'today'
+  | 'last_30_days'
+  | 'previous_month'
+  | 'custom'
+  | 'all_history';
+
+export interface TransactionsDateRange {
+  startDate: string; // Local YYYY-MM-DD
+  endDate: string;   // Local YYYY-MM-DD
+}
 
 export interface UserBusinessProfileDoc {
   updatedAt: string;
   businessInfo?: BusinessInfo;
   bcvRate?: number;
   bcvEuroRate?: number;
+  bcvLastUpdatedDate?: string;
+  bcvLastUpdatedAt?: string;
   baseCurrency?: BaseCurrency;
   rateHistory?: { date: string; rate: number }[];
   customCategories?: string[];
@@ -48,8 +70,6 @@ export interface CashRegisterStatusDoc {
 
 export interface FirestoreStoreListeners {
   onProducts: (products: Product[]) => void;
-  onSales: (sales: Sale[]) => void;
-  onExpenses: (expenses: Expense[]) => void;
   onFiados: (fiados: FiadoRecord[]) => void;
   onClients: (clients: Client[]) => void;
   onCuentasPorPagar: (cuentas: CuentaPorPagar[]) => void;
@@ -59,6 +79,14 @@ export interface FirestoreStoreListeners {
   onCashRegisterStatus?: (status: CashRegisterStatusDoc) => void;
   onCreditNotes?: (creditNotes: CreditNote[]) => void;
   onInventoryDischarges?: (discharges: InventoryDischarge[]) => void;
+  onKardex?: (entries: KardexEntry[]) => void;
+  onSuppliers?: (suppliers: Supplier[]) => void;
+  onError?: (error: Error) => void;
+}
+
+export interface FirestoreTransactionsListeners {
+  onSales: (sales: Sale[]) => void;
+  onExpenses: (expenses: Expense[]) => void;
   onError?: (error: Error) => void;
 }
 
@@ -158,40 +186,6 @@ export const subscribeToStoreRealtime = (
         callbacks.onProducts(products);
       },
       (err) => handleErr(OperationType.GET, productsPath, err)
-    )
-  );
-
-  // 2. Sales
-  const salesPath = `users/${userId}/sales`;
-  unsubscribers.push(
-    onSnapshot(
-      collection(db, 'users', userId, 'sales'),
-      (snapshot) => {
-        const sales: Sale[] = [];
-        snapshot.forEach((d) => {
-          sales.push(d.data() as Sale);
-        });
-        sales.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        callbacks.onSales(sales);
-      },
-      (err) => handleErr(OperationType.GET, salesPath, err)
-    )
-  );
-
-  // 3. Expenses / Compras
-  const expensesPath = `users/${userId}/expenses`;
-  unsubscribers.push(
-    onSnapshot(
-      collection(db, 'users', userId, 'expenses'),
-      (snapshot) => {
-        const expenses: Expense[] = [];
-        snapshot.forEach((d) => {
-          expenses.push(d.data() as Expense);
-        });
-        expenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        callbacks.onExpenses(expenses);
-      },
-      (err) => handleErr(OperationType.GET, expensesPath, err)
     )
   );
 
@@ -353,6 +347,191 @@ export const subscribeToStoreRealtime = (
     )
   );
 
+  // 13. Kardex (Historial inmutable de movimientos de inventario)
+  const kardexPath = `users/${userId}/kardex`;
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, 'users', userId, 'kardex'),
+      (snapshot) => {
+        const entries: KardexEntry[] = [];
+        snapshot.forEach((d) => {
+          entries.push(d.data() as KardexEntry);
+        });
+        entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        if (callbacks.onKardex) {
+          callbacks.onKardex(entries);
+        }
+      },
+      (err) => handleErr(OperationType.GET, kardexPath, err)
+    )
+  );
+
+  // 14. Maestro de Proveedores
+  const suppliersPath = `users/${userId}/suppliers`;
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, 'users', userId, 'suppliers'),
+      (snapshot) => {
+        const suppliers: Supplier[] = [];
+        snapshot.forEach((d) => {
+          suppliers.push(d.data() as Supplier);
+        });
+        suppliers.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        if (callbacks.onSuppliers) {
+          callbacks.onSuppliers(suppliers);
+        }
+      },
+      (err) => handleErr(OperationType.GET, suppliersPath, err)
+    )
+  );
+
+  return () => {
+    unsubscribers.forEach((unsub) => unsub());
+  };
+};
+
+/**
+ * Computes YYYY-MM-DD local bounds for date-filter presets.
+ */
+export const computeTransactionsDateRange = (
+  preset: TransactionsDatePreset,
+  customStart?: string,
+  customEnd?: string
+): TransactionsDateRange | null => {
+  if (preset === 'all_history') return null;
+
+  const now = new Date();
+  const todayStr = getLocalDateStr(now);
+
+  if (preset === 'today') {
+    return { startDate: todayStr, endDate: todayStr };
+  }
+
+  if (preset === 'last_30_days') {
+    const startObj = new Date(now);
+    startObj.setDate(startObj.getDate() - 29);
+    return { startDate: getLocalDateStr(startObj), endDate: todayStr };
+  }
+
+  if (preset === 'previous_month') {
+    const firstPrev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastPrev = new Date(now.getFullYear(), now.getMonth(), 0);
+    return { startDate: getLocalDateStr(firstPrev), endDate: getLocalDateStr(lastPrev) };
+  }
+
+  if (preset === 'custom' && customStart && customEnd) {
+    const [startDate, endDate] = customStart <= customEnd ? [customStart, customEnd] : [customEnd, customStart];
+    return { startDate, endDate };
+  }
+
+  // Default: current_month (from 1st of current month through last day of current month)
+  const firstCurrent = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastCurrent = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return { startDate: getLocalDateStr(firstCurrent), endDate: getLocalDateStr(lastCurrent) };
+};
+
+const buildFirestoreDateBounds = (range: TransactionsDateRange): { startBound: string; endBound: string } => {
+  const [sy, sm, sd] = range.startDate.split('-').map(Number);
+  const [ey, em, ed] = range.endDate.split('-').map(Number);
+  const localStartIso = new Date(sy, (sm || 1) - 1, sd || 1, 0, 0, 0, 0).toISOString();
+  const localEndIso = new Date(ey, (em || 1) - 1, ed || 1, 23, 59, 59, 999).toISOString();
+  const plainEnd = `${range.endDate}\uf8ff`;
+  const startBound = range.startDate < localStartIso ? range.startDate : localStartIso;
+  const endBound = plainEnd > localEndIso ? plainEnd : localEndIso;
+  return { startBound, endBound };
+};
+
+const isWithinLocalDateRange = (dateStr: string | undefined, range: TransactionsDateRange): boolean => {
+  if (!dateStr) return false;
+  const localYmd = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : getLocalDateStr(dateStr);
+  return localYmd >= range.startDate && localYmd <= range.endDate;
+};
+
+/**
+ * Subscribe to high-volume transaction collections (`sales` and `expenses`) scoped to a date range
+ * so mobile clients don't stream unbounded months on boot. Passes `range = null` only when the
+ * user explicitly requests full historical loading on demand.
+ */
+export const subscribeToTransactionsRealtime = (
+  uid: string,
+  range: TransactionsDateRange | null,
+  callbacks: FirestoreTransactionsListeners
+): (() => void) => {
+  const userId = getCanonicalUserId(uid);
+  const unsubscribers: Unsubscribe[] = [];
+
+  const handleErr = (opType: OperationType, path: string, err: unknown) => {
+    try {
+      handleFirestoreError(err, opType, path);
+    } catch (e: any) {
+      if (callbacks.onError) callbacks.onError(e);
+    }
+  };
+
+  const bounds = range ? buildFirestoreDateBounds(range) : null;
+
+  const salesCol = collection(db, 'users', userId, 'sales');
+  const salesQuery = bounds
+    ? query(
+        salesCol,
+        where('date', '>=', bounds.startBound),
+        where('date', '<=', bounds.endBound),
+        orderBy('date', 'desc')
+      )
+    : salesCol;
+
+  unsubscribers.push(
+    onSnapshot(
+      salesQuery,
+      (snapshot) => {
+        const sales: Sale[] = [];
+        snapshot.forEach((d) => {
+          const item = d.data() as Sale;
+          if (!range || isWithinLocalDateRange(item.date, range)) {
+            sales.push(item);
+          }
+        });
+        sales.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        devLog(
+          `[PosVenecia Firestore] onSnapshot sales (${range ? `${range.startDate}..${range.endDate}` : 'HISTÓRICO'}): ${sales.length}`
+        );
+        callbacks.onSales(sales);
+      },
+      (err) => handleErr(OperationType.GET, `users/${userId}/sales`, err)
+    )
+  );
+
+  const expensesCol = collection(db, 'users', userId, 'expenses');
+  const expensesQuery = bounds
+    ? query(
+        expensesCol,
+        where('date', '>=', bounds.startBound),
+        where('date', '<=', bounds.endBound),
+        orderBy('date', 'desc')
+      )
+    : expensesCol;
+
+  unsubscribers.push(
+    onSnapshot(
+      expensesQuery,
+      (snapshot) => {
+        const expenses: Expense[] = [];
+        snapshot.forEach((d) => {
+          const item = d.data() as Expense;
+          if (!range || isWithinLocalDateRange(item.date, range)) {
+            expenses.push(item);
+          }
+        });
+        expenses.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        devLog(
+          `[PosVenecia Firestore] onSnapshot expenses (${range ? `${range.startDate}..${range.endDate}` : 'HISTÓRICO'}): ${expenses.length}`
+        );
+        callbacks.onExpenses(expenses);
+      },
+      (err) => handleErr(OperationType.GET, `users/${userId}/expenses`, err)
+    )
+  );
+
   return () => {
     unsubscribers.forEach((unsub) => unsub());
   };
@@ -413,7 +592,9 @@ export const saveSaleAtomic = async (
   uid: string,
   sale: Sale,
   stockDeductions: Array<{ productId: string; quantity: number }>,
-  newFiado?: FiadoRecord
+  newFiado?: FiadoRecord,
+  productBatchUpdates?: Array<{ productId: string; batches?: ProductBatch[]; priceUSD?: number; costUSD?: number; priceBsFixed?: number }>,
+  kardexEntries?: KardexEntry[]
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/sales/${sale.id}`;
@@ -433,17 +614,44 @@ export const saveSaleAtomic = async (
         }
       }
 
+      const batchUpdateMap = new Map(
+        (productBatchUpdates || []).map(u => [u.productId, u])
+      );
+
       for (const [productId, quantity] of consolidatedDeductions.entries()) {
         const prodRef = doc(db, 'users', userId, 'products', productId);
-        batch.update(prodRef, {
+        const batchPatch = batchUpdateMap.get(productId);
+        const updatePayload: Record<string, unknown> = {
           stock: increment(-quantity)
-        });
+        };
+        if (batchPatch) {
+          if (batchPatch.batches !== undefined) {
+            updatePayload.batches = cleanForFirestore(batchPatch.batches);
+          }
+          if (batchPatch.priceUSD !== undefined) {
+            updatePayload.priceUSD = batchPatch.priceUSD;
+          }
+          if (batchPatch.costUSD !== undefined) {
+            updatePayload.costUSD = batchPatch.costUSD;
+          }
+          if (batchPatch.priceBsFixed !== undefined) {
+            updatePayload.priceBsFixed = batchPatch.priceBsFixed;
+          }
+        }
+        batch.update(prodRef, updatePayload);
       }
 
       if (newFiado) {
         const cleanedFiado = cleanForFirestore(newFiado);
         const fiadoRef = doc(db, 'users', userId, 'fiados', newFiado.id);
         batch.set(fiadoRef, cleanedFiado);
+      }
+
+      if (kardexEntries && kardexEntries.length > 0) {
+        for (const entry of kardexEntries) {
+          const kRef = doc(db, 'users', userId, 'kardex', entry.id);
+          batch.set(kRef, cleanForFirestore(entry));
+        }
       }
 
       await batch.commit();
@@ -457,13 +665,15 @@ export const saveSaleAtomic = async (
 
 /**
  * Atomic write for cancelSale:
- * Marks sale as 'anulada' and restores stock for physical products
+ * Marks sale as 'anulada' and restores stock + FIFO batches for physical products
  */
 export const cancelSaleAtomic = async (
   uid: string,
   sale: Sale,
   stockRestorations: Array<{ productId: string; quantity: number }>,
-  associatedFiadoId?: string
+  associatedFiadoId?: string,
+  productBatchUpdates?: Array<{ productId: string; batches?: ProductBatch[] }>,
+  kardexEntries?: KardexEntry[]
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/sales/${sale.id}`;
@@ -482,19 +692,36 @@ export const cancelSaleAtomic = async (
         }
       }
 
+      const batchUpdateMap = new Map(
+        (productBatchUpdates || []).map(u => [u.productId, u])
+      );
+
       for (const [productId, quantity] of consolidatedRestorations.entries()) {
         const prodRef = doc(db, 'users', userId, 'products', productId);
-        batch.update(prodRef, {
+        const batchPatch = batchUpdateMap.get(productId);
+        const updatePayload: Record<string, unknown> = {
           stock: increment(quantity)
-        });
+        };
+        if (batchPatch?.batches !== undefined) {
+          updatePayload.batches = cleanForFirestore(batchPatch.batches);
+        }
+        batch.update(prodRef, updatePayload);
       }
 
       if (associatedFiadoId) {
         const fiadoRef = doc(db, 'users', userId, 'fiados', associatedFiadoId);
         batch.update(fiadoRef, {
           status: 'saldado',
+          remainingDebtUSD: 0,
           notes: '[VENTA ANULADA EN POS] Fiado cancelado automáticamente por anulación de factura.'
         });
+      }
+
+      if (kardexEntries && kardexEntries.length > 0) {
+        for (const entry of kardexEntries) {
+          const kRef = doc(db, 'users', userId, 'kardex', entry.id);
+          batch.set(kRef, cleanForFirestore(entry));
+        }
       }
 
       await batch.commit();
@@ -509,14 +736,18 @@ export const cancelSaleAtomic = async (
 /**
  * Atomic write for saveCreditNoteAtomic:
  * 1. Saves Credit Note doc
- * 2. Reincorporates returned products into stock (increment)
+ * 2. Reincorporates returned products into stock (increment) + FIFO batches
  * 3. Updates original sale status to 'devuelta'
+ * 4. Updates linked FiadoRecord if applicable
  */
 export const saveCreditNoteAtomic = async (
   uid: string,
   creditNote: CreditNote,
   stockRestorations: Array<{ productId: string; quantity: number }>,
-  updatedSale?: Sale
+  updatedSale?: Sale,
+  updatedFiado?: FiadoRecord,
+  productBatchUpdates?: Array<{ productId: string; batches?: ProductBatch[] }>,
+  kardexEntries?: KardexEntry[]
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/creditNotes/${creditNote.id}`;
@@ -536,17 +767,39 @@ export const saveCreditNoteAtomic = async (
         }
       }
 
+      const batchUpdateMap = new Map(
+        (productBatchUpdates || []).map(u => [u.productId, u])
+      );
+
       for (const [productId, quantity] of consolidatedRestorations.entries()) {
         const prodRef = doc(db, 'users', userId, 'products', productId);
-        batch.update(prodRef, {
+        const batchPatch = batchUpdateMap.get(productId);
+        const updatePayload: Record<string, unknown> = {
           stock: increment(quantity)
-        });
+        };
+        if (batchPatch?.batches !== undefined) {
+          updatePayload.batches = cleanForFirestore(batchPatch.batches);
+        }
+        batch.update(prodRef, updatePayload);
       }
 
       if (updatedSale) {
         const cleanedSale = cleanForFirestore(updatedSale);
         const saleRef = doc(db, 'users', userId, 'sales', updatedSale.id);
         batch.set(saleRef, cleanedSale, { merge: true });
+      }
+
+      if (updatedFiado) {
+        const cleanedFiado = cleanForFirestore(updatedFiado);
+        const fiadoRef = doc(db, 'users', userId, 'fiados', updatedFiado.id);
+        batch.set(fiadoRef, cleanedFiado, { merge: true });
+      }
+
+      if (kardexEntries && kardexEntries.length > 0) {
+        for (const entry of kardexEntries) {
+          const kRef = doc(db, 'users', userId, 'kardex', entry.id);
+          batch.set(kRef, cleanForFirestore(entry));
+        }
       }
 
       await batch.commit();
@@ -561,14 +814,16 @@ export const saveCreditNoteAtomic = async (
 /**
  * Atomic write for saveInventoryDischargeAtomic:
  * 1. Saves Inventory Discharge record
- * 2. Deducts product stock in Firestore (increment(-quantity))
+ * 2. Deducts product stock in Firestore (increment(-quantity)) + updates FIFO batches
  * 3. Registers GastoOperativo (pérdida contable)
  */
 export const saveInventoryDischargeAtomic = async (
   uid: string,
   discharge: InventoryDischarge,
   associatedGastoOperativo: GastoOperativo,
-  associatedExpense?: Expense
+  associatedExpense?: Expense,
+  updatedProductBatches?: ProductBatch[],
+  kardexEntry?: KardexEntry
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/inventoryDischarges/${discharge.id}`;
@@ -582,9 +837,13 @@ export const saveInventoryDischargeAtomic = async (
 
       if (discharge.productId && discharge.quantity > 0) {
         const prodRef = doc(db, 'users', userId, 'products', discharge.productId);
-        batch.update(prodRef, {
+        const updatePayload: Record<string, unknown> = {
           stock: increment(-discharge.quantity)
-        });
+        };
+        if (updatedProductBatches !== undefined) {
+          updatePayload.batches = cleanForFirestore(updatedProductBatches);
+        }
+        batch.update(prodRef, updatePayload);
       }
 
       const cleanedGasto = cleanForFirestore(associatedGastoOperativo);
@@ -595,6 +854,11 @@ export const saveInventoryDischargeAtomic = async (
         const cleanedExpense = cleanForFirestore(associatedExpense);
         const expRef = doc(db, 'users', userId, 'expenses', associatedExpense.id);
         batch.set(expRef, cleanedExpense);
+      }
+
+      if (kardexEntry) {
+        const kRef = doc(db, 'users', userId, 'kardex', kardexEntry.id);
+        batch.set(kRef, cleanForFirestore(kardexEntry));
       }
 
       await batch.commit();
@@ -646,6 +910,29 @@ export const saveProductToFirestore = async (uid: string, product: Product): Pro
   return trackFirestoreWrite(op);
 };
 
+export const saveProductWithKardexAtomic = async (
+  uid: string,
+  product: Product,
+  kardexEntry?: KardexEntry
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/products/${product.id}`;
+  const op = (async () => {
+    try {
+      const batch = writeBatch(db);
+      const cleaned = cleanForFirestore(product);
+      batch.set(doc(db, 'users', userId, 'products', product.id), cleaned, { merge: true });
+      if (kardexEntry) {
+        batch.set(doc(db, 'users', userId, 'kardex', kardexEntry.id), cleanForFirestore(kardexEntry));
+      }
+      await batch.commit();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
 export const deleteProductFromFirestore = async (uid: string, productId: string): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/products/${productId}`;
@@ -659,13 +946,23 @@ export const deleteProductFromFirestore = async (uid: string, productId: string)
   return trackFirestoreWrite(op);
 };
 
-export const adjustProductStockInFirestore = async (uid: string, productId: string, newStock: number): Promise<void> => {
+export const adjustProductStockInFirestore = async (
+  uid: string,
+  productId: string,
+  newStock: number,
+  kardexEntry?: KardexEntry
+): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/products/${productId}`;
   const op = (async () => {
     try {
+      const batch = writeBatch(db);
       const prodRef = doc(db, 'users', userId, 'products', productId);
-      await setDoc(prodRef, { stock: newStock }, { merge: true });
+      batch.set(prodRef, { stock: newStock }, { merge: true });
+      if (kardexEntry) {
+        batch.set(doc(db, 'users', userId, 'kardex', kardexEntry.id), cleanForFirestore(kardexEntry));
+      }
+      await batch.commit();
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
     }
@@ -690,7 +987,10 @@ export const saveExpenseToFirestore = async (uid: string, expense: Expense): Pro
 export const saveExpenseWithInventoryAtomic = async (
   uid: string,
   expense: Expense,
-  updatedProducts: Product[]
+  updatedProducts: Product[],
+  linkedCuenta?: CuentaPorPagar,
+  kardexEntries?: KardexEntry[],
+  updatedSupplier?: Supplier
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/expenses/${expense.id}`;
@@ -706,6 +1006,24 @@ export const saveExpenseWithInventoryAtomic = async (
         const prodRef = doc(db, 'users', userId, 'products', prod.id);
         const cleanedProduct = cleanForFirestore(prod);
         batch.set(prodRef, cleanedProduct, { merge: true });
+      }
+
+      if (linkedCuenta) {
+        const cleanedCuenta = cleanForFirestore(linkedCuenta);
+        const cuentaRef = doc(db, 'users', userId, 'cuentasPorPagar', linkedCuenta.id);
+        batch.set(cuentaRef, cleanedCuenta, { merge: true });
+      }
+
+      if (kardexEntries && kardexEntries.length > 0) {
+        for (const entry of kardexEntries) {
+          const kRef = doc(db, 'users', userId, 'kardex', entry.id);
+          batch.set(kRef, cleanForFirestore(entry));
+        }
+      }
+
+      if (updatedSupplier) {
+        const supRef = doc(db, 'users', userId, 'suppliers', updatedSupplier.id);
+        batch.set(supRef, cleanForFirestore(updatedSupplier), { merge: true });
       }
 
       await batch.commit();
@@ -771,13 +1089,49 @@ export const deleteClientFromFirestore = async (uid: string, clientId: string): 
   return trackFirestoreWrite(op);
 };
 
-export const saveCuentaPorPagarToFirestore = async (uid: string, cuenta: CuentaPorPagar): Promise<void> => {
+export const saveSupplierToFirestore = async (uid: string, supplier: Supplier): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/suppliers/${supplier.id}`;
+  const op = (async () => {
+    try {
+      const cleaned = cleanForFirestore(supplier);
+      await setDoc(doc(db, 'users', userId, 'suppliers', supplier.id), cleaned, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const deleteSupplierFromFirestore = async (uid: string, supplierId: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/suppliers/${supplierId}`;
+  const op = (async () => {
+    try {
+      await deleteDoc(doc(db, 'users', userId, 'suppliers', supplierId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const saveCuentaPorPagarToFirestore = async (
+  uid: string,
+  cuenta: CuentaPorPagar,
+  updatedSupplier?: Supplier
+): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/cuentasPorPagar/${cuenta.id}`;
   const op = (async () => {
     try {
+      const batch = writeBatch(db);
       const cleaned = cleanForFirestore(cuenta);
-      await setDoc(doc(db, 'users', userId, 'cuentasPorPagar', cuenta.id), cleaned, { merge: true });
+      batch.set(doc(db, 'users', userId, 'cuentasPorPagar', cuenta.id), cleaned, { merge: true });
+      if (updatedSupplier) {
+        batch.set(doc(db, 'users', userId, 'suppliers', updatedSupplier.id), cleanForFirestore(updatedSupplier), { merge: true });
+      }
+      await batch.commit();
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -788,7 +1142,8 @@ export const saveCuentaPorPagarToFirestore = async (uid: string, cuenta: CuentaP
 export const saveCuentaWithCashOutflowAtomic = async (
   uid: string,
   cuenta: CuentaPorPagar,
-  cashExpense: Expense
+  cashExpense: Expense,
+  updatedSupplier?: Supplier
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/cuentasPorPagar/${cuenta.id}`;
@@ -803,6 +1158,10 @@ export const saveCuentaWithCashOutflowAtomic = async (
       const expRef = doc(db, 'users', userId, 'expenses', cashExpense.id);
       batch.set(expRef, cleanedExp, { merge: true });
 
+      if (updatedSupplier) {
+        batch.set(doc(db, 'users', userId, 'suppliers', updatedSupplier.id), cleanForFirestore(updatedSupplier), { merge: true });
+      }
+
       await batch.commit();
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
@@ -811,12 +1170,21 @@ export const saveCuentaWithCashOutflowAtomic = async (
   return trackFirestoreWrite(op);
 };
 
-export const deleteCuentaPorPagarFromFirestore = async (uid: string, cuentaId: string): Promise<void> => {
+export const deleteCuentaPorPagarFromFirestore = async (
+  uid: string,
+  cuentaId: string,
+  updatedSupplier?: Supplier
+): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/cuentasPorPagar/${cuentaId}`;
   const op = (async () => {
     try {
-      await deleteDoc(doc(db, 'users', userId, 'cuentasPorPagar', cuentaId));
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'users', userId, 'cuentasPorPagar', cuentaId));
+      if (updatedSupplier) {
+        batch.set(doc(db, 'users', userId, 'suppliers', updatedSupplier.id), cleanForFirestore(updatedSupplier), { merge: true });
+      }
+      await batch.commit();
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
     }
@@ -919,6 +1287,7 @@ export const restoreStoreDataToFirestore = async (
     clients: Client[];
     cuentasPorPagar: CuentaPorPagar[];
     gastosOperativos: GastoOperativo[];
+    suppliers?: Supplier[];
     cashShiftHistory: CashShift[];
     businessInfo: BusinessInfo;
     bcvRate: number;
@@ -948,6 +1317,7 @@ export const restoreStoreDataToFirestore = async (
   await writeCollection('clients', data.clients || []);
   await writeCollection('cuentasPorPagar', data.cuentasPorPagar || []);
   await writeCollection('gastosOperativos', data.gastosOperativos || []);
+  await writeCollection('suppliers', data.suppliers || []);
   await writeCollection('cashShiftHistory', data.cashShiftHistory || []);
 
   await saveBusinessProfileToFirestore(userId, {
@@ -966,8 +1336,9 @@ export const restoreStoreDataToFirestore = async (
 };
 
 /**
- * Deletes all transactional collections under users/{uid}/... for Factory Reset (Arrancar de 0).
+ * Deletes all mutable transactional collections under users/{uid}/... for Factory Reset (Arrancar de 0).
  * Preserves businessProfile (nombre, RIF, logo) unless overwritten.
+ * Note: 'kardex' is immutable by Firestore security rules (allow update, delete: if false).
  */
 export const clearUserFirestoreCollections = async (uid: string): Promise<void> => {
   const userId = getCanonicalUserId(uid);
@@ -979,6 +1350,7 @@ export const clearUserFirestoreCollections = async (uid: string): Promise<void> 
     'clients',
     'cuentasPorPagar',
     'gastosOperativos',
+    'suppliers',
     'cashShiftHistory',
     'creditNotes',
     'inventoryDischarges'

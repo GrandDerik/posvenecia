@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import { TransactionsDatePreset } from '../services/firestoreSyncService';
 import { 
   FileSpreadsheet, 
   FileText, 
@@ -36,11 +37,17 @@ import {
   Building2,
   Phone,
   Hash,
-  Receipt
+  Receipt,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardCheck,
+  History
 } from 'lucide-react';
 import { 
   formatBs, 
   formatUSD, 
+  round2,
+  safeDiv,
   exportLibroVentasExcel, 
   exportLibroVentasPDF, 
   exportLibroComprasExcel, 
@@ -98,7 +105,13 @@ export const ContabilidadView: React.FC = () => {
     checkRemoteChangesForMultiDevice,
     syncToGoogleDrive,
     isDriveSyncing,
-    googleUser
+    googleUser,
+    transactionsPreset,
+    transactionsDateRange,
+    isLoadingHistory,
+    setTransactionsDateFilter,
+    isCashRegisterOpen,
+    setIsCuadreModalOpen
   } = useApp();
 
   const [subTab, setSubTab] = useState<'ventas' | 'compras' | 'notas_credito' | 'salidas_inventario' | 'cierres_caja' | 'cuentas_por_pagar' | 'igtf' | 'estado_cuenta'>('ventas');
@@ -106,6 +119,21 @@ export const ContabilidadView: React.FC = () => {
   const [isGastoModalOpen, setIsGastoModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+
+  // Firestore Date Range & Pagination state
+  const [customStartDate, setCustomStartDate] = useState<string>(transactionsDateRange?.startDate || '');
+  const [customEndDate, setCustomEndDate] = useState<string>(transactionsDateRange?.endDate || '');
+  const [showCustomRangePicker, setShowCustomRangePicker] = useState<boolean>(transactionsPreset === 'custom');
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [salesPage, setSalesPage] = useState<number>(1);
+  const [expensesPage, setExpensesPage] = useState<number>(1);
+  const [ncPage, setNcPage] = useState<number>(1);
+
+  useEffect(() => {
+    setSalesPage(1);
+    setExpensesPage(1);
+    setNcPage(1);
+  }, [searchTerm, subTab, transactionsPreset, transactionsDateRange, pageSize]);
 
   // Detail ("Ojito") Modals
   const [selectedShiftForDetail, setSelectedShiftForDetail] = useState<CashShift | null>(null);
@@ -380,55 +408,103 @@ export const ContabilidadView: React.FC = () => {
     s.clientRIF.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Filter expenses
-  const filteredExpenses = expenses.filter(e => 
+  // Active (non-anulada) sales for fiscal & balance math
+  const activeSales = sales.filter(s => s.status !== 'anulada');
+  const activeFilteredSales = filteredSales.filter(s => s.status !== 'anulada');
+
+  // Filter expenses (exclude settlement outflow rows that duplicate an original 'credito' purchase invoice)
+  const creditLinkedCuentaIds = new Set(
+    expenses.filter(e => e.paymentMethod === 'credito' && e.linkedCuentaId).map(e => e.linkedCuentaId as string)
+  );
+  const nonDuplicatedExpenses = expenses.filter(
+    e => !(e.linkedCuentaId && e.paymentMethod !== 'credito' && creditLinkedCuentaIds.has(e.linkedCuentaId))
+  );
+  const filteredExpenses = nonDuplicatedExpenses.filter(e => 
     e.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
     e.supplierName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     e.supplierRIF.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Sales totals (SENIAT)
-  const totalSalesBs = filteredSales.reduce((a, s) => a + s.totalBs, 0);
-  const totalSalesUSD = filteredSales.reduce((a, s) => a + s.totalUSD, 0);
-  const totalExemptBs = filteredSales.reduce((a, s) => a + s.exemptBs, 0);
-  const totalTaxableBs = filteredSales.reduce((a, s) => a + s.taxableBs, 0);
-  const totalIvaBs = filteredSales.reduce((a, s) => a + s.ivaBs, 0);
-  const totalIgtfBs = filteredSales.reduce((a, s) => a + s.igtfBs, 0);
-  const totalIgtfUSD = filteredSales.reduce((a, s) => a + s.igtfUSD, 0);
+  // Credit Notes deductions (SENIAT)
+  const totalCreditNotesUSD = round2(creditNotes.reduce((a, n) => a + n.totalUSD, 0));
+  const totalCreditNotesBs = round2(creditNotes.reduce((a, n) => a + n.totalBs, 0));
+
+  // Sales totals (SENIAT - excluding anuladas)
+  const totalSalesBs = round2(activeFilteredSales.reduce((a, s) => a + s.totalBs, 0));
+  const totalSalesUSD = round2(activeFilteredSales.reduce((a, s) => a + s.totalUSD, 0));
+  const totalExemptBs = round2(activeFilteredSales.reduce((a, s) => a + s.exemptBs, 0));
+  const totalTaxableBs = round2(activeFilteredSales.reduce((a, s) => a + s.taxableBs, 0));
+  const totalIvaBs = round2(activeFilteredSales.reduce((a, s) => a + s.ivaBs, 0));
+  const totalIgtfBs = round2(activeFilteredSales.reduce((a, s) => a + s.igtfBs, 0));
+  const totalIgtfUSD = round2(activeFilteredSales.reduce((a, s) => a + s.igtfUSD, 0));
 
   // Purchases totals (SENIAT)
-  const totalExpBs = filteredExpenses.reduce((a, e) => a + e.amountBs, 0);
-  const totalExpUSD = filteredExpenses.reduce((a, e) => a + e.amountUSD, 0);
-  const totalBaseExpBs = filteredExpenses.reduce((a, e) => a + e.baseImponibleBs, 0);
-  const totalIvaExpBs = filteredExpenses.reduce((a, e) => a + e.ivaBs, 0);
-  const totalRetIvaBs = filteredExpenses.reduce((a, e) => a + e.retencionIVABs, 0);
-  const totalRetIslrBs = filteredExpenses.reduce((a, e) => a + e.retencionISLRBs, 0);
+  const totalExpBs = round2(filteredExpenses.reduce((a, e) => a + e.amountBs, 0));
+  const totalExpUSD = round2(filteredExpenses.reduce((a, e) => a + e.amountUSD, 0));
+  const totalBaseExpBs = round2(filteredExpenses.reduce((a, e) => a + e.baseImponibleBs, 0));
+  const totalIvaExpBs = round2(filteredExpenses.reduce((a, e) => a + e.ivaBs, 0));
+  const totalRetIvaBs = round2(filteredExpenses.reduce((a, e) => a + e.retencionIVABs, 0));
+  const totalRetIslrBs = round2(filteredExpenses.reduce((a, e) => a + e.retencionISLRBs, 0));
 
-  // Net Balance
-  const netUSD = totalSalesUSD - totalExpUSD;
-  const netBs = totalSalesBs - totalExpBs;
+  // Net Balance (Active Sales minus Credit Notes minus Purchases/Expenses)
+  const allActiveSalesUSD = round2(activeSales.reduce((a, s) => a + s.totalUSD, 0));
+  const allActiveSalesBs = round2(activeSales.reduce((a, s) => a + s.totalBs, 0));
+  const netIngresosUSD = round2(Math.max(0, allActiveSalesUSD - totalCreditNotesUSD));
+  const netIngresosBs = round2(Math.max(0, allActiveSalesBs - totalCreditNotesBs));
+  const allExpUSD = round2(nonDuplicatedExpenses.reduce((a, e) => a + e.amountUSD, 0));
+  const allExpBs = round2(nonDuplicatedExpenses.reduce((a, e) => a + e.amountBs, 0));
+  const netUSD = round2(netIngresosUSD - allExpUSD);
+  const netBs = round2(netIngresosBs - allExpBs);
 
-  // Breakdown by payment methods for sales
+  // Breakdown by payment methods for active sales
   const methodsVentas: Record<string, { usd: number; bs: number }> = {};
-  sales.forEach(s => {
+  activeSales.forEach(s => {
     if (!methodsVentas[s.paymentMethod]) {
       methodsVentas[s.paymentMethod] = { usd: 0, bs: 0 };
     }
-    methodsVentas[s.paymentMethod].usd += s.totalUSD;
-    methodsVentas[s.paymentMethod].bs += s.totalBs;
+    methodsVentas[s.paymentMethod].usd = round2(methodsVentas[s.paymentMethod].usd + s.totalUSD);
+    methodsVentas[s.paymentMethod].bs = round2(methodsVentas[s.paymentMethod].bs + s.totalBs);
   });
 
   const estadoCuentaSummary = {
-    ventasTotalBs: totalSalesBs,
-    ventasTotalUSD: totalSalesUSD,
-    gastosTotalBs: totalExpBs,
-    gastosTotalUSD: totalExpUSD,
+    ventasTotalBs: netIngresosBs,
+    ventasTotalUSD: netIngresosUSD,
+    gastosTotalBs: allExpBs,
+    gastosTotalUSD: allExpUSD,
     netoBs: netBs,
     netoUSD: netUSD,
-    igtfBs: totalIgtfBs,
-    igtfUSD: totalIgtfUSD,
+    igtfBs: round2(activeSales.reduce((a, s) => a + s.igtfBs, 0)),
+    igtfUSD: round2(activeSales.reduce((a, s) => a + s.igtfUSD, 0)),
     metodosVentas: methodsVentas,
     bcvRate
+  };
+
+  // Pagination slices for Ventas & Compras
+  const totalSalesPages = Math.max(1, Math.ceil(filteredSales.length / pageSize));
+  const safeSalesPage = Math.min(salesPage, totalSalesPages);
+  const paginatedSales = filteredSales.slice((safeSalesPage - 1) * pageSize, safeSalesPage * pageSize);
+
+  const totalExpensesPages = Math.max(1, Math.ceil(filteredExpenses.length / pageSize));
+  const safeExpensesPage = Math.min(expensesPage, totalExpensesPages);
+  const paginatedExpenses = filteredExpenses.slice((safeExpensesPage - 1) * pageSize, safeExpensesPage * pageSize);
+
+  const handleSelectDatePreset = (preset: TransactionsDatePreset) => {
+    if (preset === 'custom') {
+      setShowCustomRangePicker(true);
+      if (transactionsDateRange) {
+        setCustomStartDate(transactionsDateRange.startDate);
+        setCustomEndDate(transactionsDateRange.endDate);
+      }
+      return;
+    }
+    setShowCustomRangePicker(false);
+    setTransactionsDateFilter(preset);
+  };
+
+  const handleApplyCustomRange = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customStartDate || !customEndDate) return;
+    setTransactionsDateFilter('custom', customStartDate, customEndDate);
   };
 
   return (
@@ -571,6 +647,106 @@ export const ContabilidadView: React.FC = () => {
           </button>
         </div>
 
+        {/* Row 3: Firestore Date-Range Filter Bar (Optimización Móvil y Carga Bajo Demanda) */}
+        <div className="pt-3 border-t border-[#EEF2F7] space-y-2.5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2 text-xs font-bold text-[#0B1528]">
+              <Calendar className="w-4 h-4 text-[#2563EB] shrink-0" />
+              <span>Período de Consulta en Nube (Ventas y Gastos):</span>
+              {isLoadingHistory ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] text-[10px] font-bold">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Cargando...
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full bg-[#F8FAFC] text-slate-600 border border-[#DCE4F0] text-[10px] font-mono-numbers font-semibold">
+                  {transactionsPreset === 'all_history'
+                    ? 'Histórico Completo'
+                    : transactionsDateRange
+                      ? `${transactionsDateRange.startDate} → ${transactionsDateRange.endDate}`
+                      : 'Mes Actual'}
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+              {(
+                [
+                  { id: 'current_month', label: 'Mes Actual' },
+                  { id: 'today', label: 'Hoy' },
+                  { id: 'last_30_days', label: 'Últimos 30d' },
+                  { id: 'previous_month', label: 'Mes Anterior' },
+                  { id: 'custom', label: 'Rango Personalizado' },
+                ] as Array<{ id: TransactionsDatePreset; label: string }>
+              ).map((opt) => {
+                const isActive = opt.id === 'custom' ? (showCustomRangePicker || transactionsPreset === 'custom') : (!showCustomRangePicker && transactionsPreset === opt.id);
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => handleSelectDatePreset(opt.id)}
+                    className={`px-2.5 py-1.5 rounded-xl border transition-colors cursor-pointer whitespace-nowrap ${
+                      isActive
+                        ? 'bg-[#0B1528] text-white border-[#0B1528]'
+                        : 'bg-[#F8FAFC] text-slate-600 border-[#DCE4F0] hover:bg-white hover:text-[#0B1528]'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => handleSelectDatePreset('all_history')}
+                className={`px-2.5 py-1.5 rounded-xl border transition-colors cursor-pointer inline-flex items-center gap-1 whitespace-nowrap ${
+                  !showCustomRangePicker && transactionsPreset === 'all_history'
+                    ? 'bg-[#D96B27] text-white border-[#D96B27]'
+                    : 'bg-[#FFF3E8] text-[#9A4B12] border-[#F5D3B3] hover:bg-[#FFE6CE]'
+                }`}
+                title="Cargar todos los meses anteriores desde Firestore bajo demanda"
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>Cargar Todo el Histórico</span>
+              </button>
+            </div>
+          </div>
+
+          {showCustomRangePicker && (
+            <form
+              onSubmit={handleApplyCustomRange}
+              className="p-3 bg-[#F8FAFC] border border-[#DCE4F0] rounded-2xl flex flex-wrap items-end gap-2.5 text-xs"
+            >
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Desde</label>
+                <input
+                  type="date"
+                  value={customStartDate}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
+                  className="px-2.5 py-1.5 bg-white border border-[#DCE4F0] rounded-xl text-xs font-mono text-[#0B1528] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Hasta</label>
+                <input
+                  type="date"
+                  value={customEndDate}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
+                  className="px-2.5 py-1.5 bg-white border border-[#DCE4F0] rounded-xl text-xs font-mono text-[#0B1528] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                className="px-3.5 py-1.5 bg-[#2563EB] hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap"
+              >
+                Aplicar Rango
+              </button>
+            </form>
+          )}
+        </div>
+
         {/* Sync Feedback Toast Banner */}
         {syncFeedback && (
           <div className="p-2.5 bg-[#E7F8EE] border border-[#A7E6C4] rounded-xl text-xs font-bold text-[#065F46] flex items-center gap-2 animate-in fade-in">
@@ -622,7 +798,7 @@ export const ContabilidadView: React.FC = () => {
               <div className="text-lg font-black text-[#0B1528] font-mono-numbers mt-0.5">
                 Bs. {formatBs(totalTaxableBs)}
               </div>
-              <span className="text-[11px] text-slate-500 font-mono-numbers">≈ ${formatUSD(totalTaxableBs / bcvRate)}</span>
+              <span className="text-[11px] text-slate-500 font-mono-numbers">≈ ${formatUSD(safeDiv(totalTaxableBs, bcvRate, 0))}</span>
             </div>
 
             <div className="bg-white/95 p-4 rounded-2xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
@@ -630,7 +806,7 @@ export const ContabilidadView: React.FC = () => {
               <div className="text-lg font-black text-[#1D4ED8] font-mono-numbers mt-0.5">
                 Bs. {formatBs(totalIvaBs)}
               </div>
-              <span className="text-[11px] text-slate-500 font-mono-numbers">≈ ${formatUSD(totalIvaBs / bcvRate)}</span>
+              <span className="text-[11px] text-slate-500 font-mono-numbers">≈ ${formatUSD(safeDiv(totalIvaBs, bcvRate, 0))}</span>
             </div>
 
             <div className="bg-white/95 p-4 rounded-2xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
@@ -678,7 +854,14 @@ export const ContabilidadView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#EEF2F7]">
-                  {filteredSales.map((sale, index) => (
+                  {paginatedSales.length === 0 ? (
+                    <tr>
+                      <td colSpan={14} className="py-8 text-center text-slate-400 font-sans">
+                        No hay ventas registradas en el período seleccionado.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedSales.map((sale, index) => (
                     <tr key={sale.id} className="hover:bg-[#F8FAFC] transition-colors">
                       <td className="py-2 px-2 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">
@@ -708,11 +891,16 @@ export const ContabilidadView: React.FC = () => {
                           </button>
                         </div>
                       </td>
-                      <td className="py-2 px-3 text-center text-slate-400">{index + 1}</td>
+                      <td className="py-2 px-3 text-center text-slate-400">{(safeSalesPage - 1) * pageSize + index + 1}</td>
                       <td className="py-2 px-3 text-slate-700 whitespace-nowrap">
                         {new Date(sale.date).toLocaleDateString('es-VE')}
                       </td>
-                      <td className="py-2 px-3 font-bold text-[#0B1528]">{sale.invoiceNumber}</td>
+                      <td className="py-2 px-3 font-bold text-[#0B1528]">
+                        {sale.invoiceNumber}
+                        {sale.status === 'anulada' && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] text-[9px] font-sans font-extrabold">ANULADA</span>
+                        )}
+                      </td>
                       <td className="py-2 px-3 text-slate-600">{sale.controlNumber}</td>
                       <td className="py-2 px-3 text-slate-800">{sale.clientRIF}</td>
                       <td className="py-2 px-3 font-sans text-[#0B1528] max-w-xs truncate">{sale.clientName}</td>
@@ -724,7 +912,8 @@ export const ContabilidadView: React.FC = () => {
                       <td className="py-2 px-3 text-right text-[#065F46] font-mono-numbers">{formatBs(sale.igtfBs)}</td>
                       <td className="py-2 px-3 text-right font-bold text-[#0B1528] font-mono-numbers">${formatUSD(sale.totalUSD)}</td>
                     </tr>
-                  ))}
+                  ))
+                  )}
                 </tbody>
                 <tfoot className="bg-[#0B1528] text-white font-bold text-xs border-t border-[#1E293B] font-mono-numbers">
                   <tr>
@@ -740,6 +929,49 @@ export const ContabilidadView: React.FC = () => {
                 </tfoot>
               </table>
             </div>
+
+            {/* Pagination Footer */}
+            {filteredSales.length > 0 && (
+              <div className="px-4 py-3 bg-[#F8FAFC] border-t border-[#DCE4F0] flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 text-slate-600">
+                  <span>
+                    Mostrando <strong className="font-mono-numbers">{(safeSalesPage - 1) * pageSize + 1}</strong>–<strong className="font-mono-numbers">{Math.min(safeSalesPage * pageSize, filteredSales.length)}</strong> de <strong className="font-mono-numbers">{filteredSales.length}</strong> ventas
+                  </span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    className="px-2 py-1 bg-white border border-[#DCE4F0] rounded-lg text-xs font-bold text-[#0B1528] cursor-pointer"
+                  >
+                    {[15, 25, 50, 100].map((n) => (
+                      <option key={n} value={n}>{n} / pág</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={safeSalesPage <= 1}
+                    onClick={() => setSalesPage((p) => Math.max(1, p - 1))}
+                    className="px-2.5 py-1.5 rounded-lg border border-[#DCE4F0] bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 font-bold flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    <span>Anterior</span>
+                  </button>
+                  <span className="px-2.5 py-1 font-mono-numbers font-bold text-[#0B1528]">
+                    {safeSalesPage} / {totalSalesPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={safeSalesPage >= totalSalesPages}
+                    onClick={() => setSalesPage((p) => Math.min(totalSalesPages, p + 1))}
+                    className="px-2.5 py-1.5 rounded-lg border border-[#DCE4F0] bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 font-bold flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <span>Siguiente</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -850,7 +1082,14 @@ export const ContabilidadView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#EEF2F7]">
-                  {filteredExpenses.map((exp, index) => (
+                  {paginatedExpenses.length === 0 ? (
+                    <tr>
+                      <td colSpan={14} className="py-8 text-center text-slate-400 font-sans">
+                        No hay facturas de compra o egresos registrados en el período seleccionado.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedExpenses.map((exp, index) => (
                     <tr key={exp.id} className="hover:bg-[#F8FAFC] transition-colors">
                       <td className="py-2 px-2 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">
@@ -880,11 +1119,16 @@ export const ContabilidadView: React.FC = () => {
                           </button>
                         </div>
                       </td>
-                      <td className="py-2 px-3 text-center text-slate-400">{index + 1}</td>
+                      <td className="py-2 px-3 text-center text-slate-400">{(safeExpensesPage - 1) * pageSize + index + 1}</td>
                       <td className="py-2 px-3 text-slate-700 whitespace-nowrap">
                         {new Date(exp.date).toLocaleDateString('es-VE')}
                       </td>
-                      <td className="py-2 px-3 font-bold text-[#0B1528]">{exp.invoiceNumber}</td>
+                      <td className="py-2 px-3 font-bold text-[#0B1528]">
+                        {exp.invoiceNumber}
+                        {exp.paymentMethod === 'credito' && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded bg-[#FFF3E8] text-[#9A4B12] border border-[#F5D3B3] text-[9px] font-sans font-extrabold">CRÉDITO</span>
+                        )}
+                      </td>
                       <td className="py-2 px-3 text-slate-600">{exp.controlNumber}</td>
                       <td className="py-2 px-3 text-slate-800">{exp.supplierRIF}</td>
                       <td className="py-2 px-3 font-sans text-[#0B1528] max-w-xs truncate">{exp.supplierName}</td>
@@ -896,7 +1140,8 @@ export const ContabilidadView: React.FC = () => {
                       <td className="py-2 px-3 text-right font-bold text-[#0B1528] font-mono-numbers">{formatBs(exp.amountBs)}</td>
                       <td className="py-2 px-3 text-right font-bold text-[#0B1528] font-mono-numbers">${formatUSD(exp.amountUSD)}</td>
                     </tr>
-                  ))}
+                  ))
+                  )}
                 </tbody>
                 <tfoot className="bg-[#0B1528] text-white font-bold text-xs border-t border-[#1E293B] font-mono-numbers">
                   <tr>
@@ -911,6 +1156,49 @@ export const ContabilidadView: React.FC = () => {
                 </tfoot>
               </table>
             </div>
+
+            {/* Pagination Footer */}
+            {filteredExpenses.length > 0 && (
+              <div className="px-4 py-3 bg-[#F8FAFC] border-t border-[#DCE4F0] flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 text-slate-600">
+                  <span>
+                    Mostrando <strong className="font-mono-numbers">{(safeExpensesPage - 1) * pageSize + 1}</strong>–<strong className="font-mono-numbers">{Math.min(safeExpensesPage * pageSize, filteredExpenses.length)}</strong> de <strong className="font-mono-numbers">{filteredExpenses.length}</strong> facturas
+                  </span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    className="px-2 py-1 bg-white border border-[#DCE4F0] rounded-lg text-xs font-bold text-[#0B1528] cursor-pointer"
+                  >
+                    {[15, 25, 50, 100].map((n) => (
+                      <option key={n} value={n}>{n} / pág</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={safeExpensesPage <= 1}
+                    onClick={() => setExpensesPage((p) => Math.max(1, p - 1))}
+                    className="px-2.5 py-1.5 rounded-lg border border-[#DCE4F0] bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 font-bold flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    <span>Anterior</span>
+                  </button>
+                  <span className="px-2.5 py-1 font-mono-numbers font-bold text-[#0B1528]">
+                    {safeExpensesPage} / {totalExpensesPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={safeExpensesPage >= totalExpensesPages}
+                    onClick={() => setExpensesPage((p) => Math.min(totalExpensesPages, p + 1))}
+                    className="px-2.5 py-1.5 rounded-lg border border-[#DCE4F0] bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 font-bold flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <span>Siguiente</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -946,13 +1234,18 @@ export const ContabilidadView: React.FC = () => {
           {(() => {
             const filteredNCs = creditNotes.filter(nc =>
               nc.creditNoteNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              nc.controlNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
               nc.originalInvoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              (nc.originalControlNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
               nc.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
               nc.clientRIF.toLowerCase().includes(searchTerm.toLowerCase())
             );
             const totalNCRefundUSD = filteredNCs.reduce((acc, n) => acc + n.totalUSD, 0);
             const totalNCRefundBs = filteredNCs.reduce((acc, n) => acc + n.totalBs, 0);
             const totalNCIvaBs = filteredNCs.reduce((acc, n) => acc + n.ivaBs, 0);
+            const totalNcPages = Math.max(1, Math.ceil(filteredNCs.length / pageSize));
+            const safeNcPage = Math.min(ncPage, totalNcPages);
+            const paginatedNCs = filteredNCs.slice((safeNcPage - 1) * pageSize, safeNcPage * pageSize);
 
             return (
               <>
@@ -1009,14 +1302,14 @@ export const ContabilidadView: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#EEF2F7]">
-                        {filteredNCs.length === 0 ? (
+                        {paginatedNCs.length === 0 ? (
                           <tr>
                             <td colSpan={13} className="py-8 text-center text-slate-400 font-sans">
                               No hay notas de crédito registradas.
                             </td>
                           </tr>
                         ) : (
-                          filteredNCs.map((nc, idx) => (
+                          paginatedNCs.map((nc, idx) => (
                             <tr key={nc.id} className="hover:bg-[#F8FAFC] transition-colors">
                               <td className="py-2 px-2 text-center whitespace-nowrap">
                                 <div className="inline-flex items-center gap-1">
@@ -1038,13 +1331,20 @@ export const ContabilidadView: React.FC = () => {
                                   </button>
                                 </div>
                               </td>
-                              <td className="py-2 px-3 text-center text-slate-400">{idx + 1}</td>
+                              <td className="py-2 px-3 text-center text-slate-400">{(safeNcPage - 1) * pageSize + idx + 1}</td>
                               <td className="py-2 px-3 text-slate-700 whitespace-nowrap">
                                 {new Date(nc.date).toLocaleDateString('es-VE')}
                               </td>
                               <td className="py-2 px-3 font-bold text-[#BE123C]">{nc.creditNoteNumber}</td>
                               <td className="py-2 px-3 text-slate-600">{nc.controlNumber}</td>
-                              <td className="py-2 px-3 font-bold text-[#0B1528]">{nc.originalInvoiceNumber}</td>
+                              <td className="py-2 px-3 font-bold text-[#0B1528]">
+                                <div>{nc.originalInvoiceNumber}</div>
+                                {nc.originalControlNumber && (
+                                  <div className="text-[10px] font-normal text-slate-500">
+                                    Ctrl: {nc.originalControlNumber}
+                                  </div>
+                                )}
+                              </td>
                               <td className="py-2 px-3 text-slate-700">{nc.clientRIF}</td>
                               <td className="py-2 px-3 font-sans text-[#0B1528] max-w-xs truncate">{nc.clientName}</td>
                               <td className="py-2 px-3 font-sans text-slate-600 text-[11px] max-w-xs truncate">{nc.reason}</td>
@@ -1058,6 +1358,40 @@ export const ContabilidadView: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Pagination Footer */}
+                  {filteredNCs.length > 0 && (
+                    <div className="px-4 py-3 bg-[#F8FAFC] border-t border-[#DCE4F0] flex flex-wrap items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2 text-slate-600">
+                        <span>
+                          Mostrando <strong className="font-mono-numbers">{(safeNcPage - 1) * pageSize + 1}</strong>–<strong className="font-mono-numbers">{Math.min(safeNcPage * pageSize, filteredNCs.length)}</strong> de <strong className="font-mono-numbers">{filteredNCs.length}</strong> notas
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={safeNcPage <= 1}
+                          onClick={() => setNcPage((p) => Math.max(1, p - 1))}
+                          className="px-2.5 py-1.5 rounded-lg border border-[#DCE4F0] bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 font-bold flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <span>Anterior</span>
+                        </button>
+                        <span className="px-2.5 py-1 font-mono-numbers font-bold text-[#0B1528]">
+                          {safeNcPage} / {totalNcPages}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={safeNcPage >= totalNcPages}
+                          onClick={() => setNcPage((p) => Math.min(totalNcPages, p + 1))}
+                          className="px-2.5 py-1.5 rounded-lg border border-[#DCE4F0] bg-white hover:bg-slate-100 disabled:opacity-40 text-slate-700 font-bold flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          <span>Siguiente</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
             );
@@ -1253,6 +1587,16 @@ export const ContabilidadView: React.FC = () => {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                onClick={() => setIsCuadreModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-[#EBF3FE] hover:bg-blue-100 text-[#1D4ED8] border border-[#93C5FD] rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                title="Emitir Corte Parcial de Caja (Cierre X) del turno activo sin cerrar la caja"
+              >
+                <ClipboardCheck className="w-4 h-4" />
+                <span>Corte Parcial (Cierre X)</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => exportHistorialCierresExcel(cashShiftHistory, businessInfo)}
                 disabled={cashShiftHistory.length === 0}
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-[#E7F8EE] hover:bg-emerald-100 text-[#065F46] border border-[#A7E6C4] rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
@@ -1350,6 +1694,14 @@ export const ContabilidadView: React.FC = () => {
                   </div>
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setIsCuadreModalOpen(true)}
+                className="w-full sm:w-auto px-4 py-2 bg-[#065F46] hover:bg-emerald-900 text-white rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <ClipboardCheck className="w-4 h-4" />
+                <span>Emitir Corte Parcial (Cierre X)</span>
+              </button>
             </div>
           )}
 
@@ -1805,7 +2157,7 @@ export const ContabilidadView: React.FC = () => {
 
               <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={() => exportLibroVentasExcel(sales.filter(s => s.paymentMethod === 'efectivo_usd'), businessInfo)}
+                  onClick={() => exportLibroVentasExcel(activeSales.filter(s => s.paymentMethod === 'efectivo_usd'), businessInfo)}
                   className="px-3.5 py-2 bg-[#E7F8EE] hover:bg-emerald-100 text-[#065F46] border border-[#A7E6C4] rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <FileSpreadsheet className="w-4 h-4" />
@@ -1821,7 +2173,7 @@ export const ContabilidadView: React.FC = () => {
                   Base Gravable en Efectivo USD
                 </span>
                 <div className="text-2xl font-black text-slate-900 font-mono-numbers mt-1">
-                  ${formatUSD(sales.filter(s => s.paymentMethod === 'efectivo_usd').reduce((a, s) => a + (s.subtotalUSD + s.ivaUSD), 0))}
+                  ${formatUSD(round2(activeSales.filter(s => s.paymentMethod === 'efectivo_usd').reduce((a, s) => a + (s.subtotalUSD + s.ivaUSD), 0)))}
                 </div>
                 <span className="text-[11px] text-[#065F46]">Total cobrado en billetes divisa</span>
               </div>
@@ -1869,7 +2221,7 @@ export const ContabilidadView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#DCE4F0]/60">
-                  {sales.filter(s => s.paymentMethod === 'efectivo_usd').map(sale => (
+                  {activeSales.filter(s => s.paymentMethod === 'efectivo_usd').map(sale => (
                     <tr key={sale.id} className="hover:bg-[#EEF2F7]/60">
                       <td className="py-2 px-2 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">
@@ -1956,13 +2308,13 @@ export const ContabilidadView: React.FC = () => {
                 </span>
               </div>
               <div className="text-2xl font-black text-slate-900 font-mono-numbers">
-                ${formatUSD(totalSalesUSD)}
+                ${formatUSD(netIngresosUSD)}
               </div>
               <div className="text-xs font-bold text-[#065F46] font-mono-numbers">
-                Bs. {formatBs(totalSalesBs)}
+                Bs. {formatBs(netIngresosBs)}
               </div>
               <p className="text-[11px] text-slate-400 pt-1 border-t border-[#DCE4F0]">
-                Registrados en {sales.length} transacciones fiscales
+                {activeSales.length} ventas activas{totalCreditNotesUSD > 0 ? ` (-$${formatUSD(totalCreditNotesUSD)} en notas de crédito)` : ''}
               </p>
             </div>
 
@@ -1975,10 +2327,10 @@ export const ContabilidadView: React.FC = () => {
                 </span>
               </div>
               <div className="text-2xl font-black text-slate-900 font-mono-numbers">
-                ${formatUSD(totalExpUSD)}
+                ${formatUSD(allExpUSD)}
               </div>
               <div className="text-xs font-bold text-[#BE123C] font-mono-numbers">
-                Bs. {formatBs(totalExpBs)}
+                Bs. {formatBs(allExpBs)}
               </div>
               <p className="text-[11px] text-slate-400 pt-1 border-t border-[#DCE4F0]">
                 Compras a proveedores y gastos operativos
@@ -2020,8 +2372,8 @@ export const ContabilidadView: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-[#DCE4F0]/60 font-mono-numbers">
                   {Object.entries(methodsVentas).map(([method, amounts]) => {
-                    const count = sales.filter(s => s.paymentMethod === method).length;
-                    const pct = totalSalesUSD > 0 ? (amounts.usd / totalSalesUSD) * 100 : 0;
+                    const count = activeSales.filter(s => s.paymentMethod === method).length;
+                    const pct = allActiveSalesUSD > 0 ? (amounts.usd / allActiveSalesUSD) * 100 : 0;
 
                     return (
                       <tr key={method} className="hover:bg-[#EEF2F7]/60">

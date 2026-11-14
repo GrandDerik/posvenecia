@@ -27,10 +27,13 @@ import {
   Eye,
   X,
   UserCheck,
-  Hash
+  Hash,
+  Briefcase,
+  MapPin,
+  Mail
 } from 'lucide-react';
-import { formatUSD, formatBs } from '../utils/exportUtils';
-import { CuentaPorPagar, PaymentMethod, GastoOperativo, GastoOperativoCategory } from '../types';
+import { formatUSD, formatBs, getLocalDateStr, round2 } from '../utils/exportUtils';
+import { CuentaPorPagar, PaymentMethod, GastoOperativo, GastoOperativoCategory, Supplier } from '../types';
 
 export const CuentasPorPagarView: React.FC = () => {
   const { 
@@ -44,13 +47,17 @@ export const CuentasPorPagarView: React.FC = () => {
     updateGastoOperativo,
     deleteGastoOperativo,
     markGastoOperativoPagado,
+    suppliers,
+    addSupplier,
+    updateSupplier,
+    deleteSupplier,
     bcvRate,
     isCashRegisterOpen,
     setIsAperturaModalOpen
   } = useApp();
 
-  // Active Sub-Tab: 'proveedores' vs 'gastos_mes'
-  const [activeSubTab, setActiveSubTab] = useState<'proveedores' | 'gastos_mes'>('gastos_mes');
+  // Active Sub-Tab: 'proveedores' vs 'gastos_mes' vs 'maestro_proveedores'
+  const [activeSubTab, setActiveSubTab] = useState<'gastos_mes' | 'proveedores' | 'maestro_proveedores'>('gastos_mes');
 
   // Search & Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -78,18 +85,31 @@ export const CuentasPorPagarView: React.FC = () => {
 
   // Confirm delete state
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmDeleteSupplierId, setConfirmDeleteSupplierId] = useState<string | null>(null);
+
+  // Maestro de Proveedores Modal State
+  const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [supName, setSupName] = useState('');
+  const [supRif, setSupRif] = useState('J-');
+  const [supPhone, setSupPhone] = useState('');
+  const [supAddress, setSupAddress] = useState('');
+  const [supEmail, setSupEmail] = useState('');
+  const [supCreditDays, setSupCreditDays] = useState('15');
+  const [supNotes, setSupNotes] = useState('');
 
   // New/Edit Cuenta por Pagar Form
+  const [newSupplierId, setNewSupplierId] = useState('');
   const [newSupplierName, setNewSupplierName] = useState('');
   const [newSupplierRIF, setNewSupplierRIF] = useState('');
   const [newSupplierPhone, setNewSupplierPhone] = useState('');
   const [newInvoiceNumber, setNewInvoiceNumber] = useState('');
   const [newControlNumber, setNewControlNumber] = useState('');
-  const [newIssueDate, setNewIssueDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newIssueDate, setNewIssueDate] = useState(getLocalDateStr());
   const [newDueDate, setNewDueDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 15);
-    return d.toISOString().split('T')[0];
+    return getLocalDateStr(d);
   });
   const [newCategory, setNewCategory] = useState<'Mercancía' | 'Servicios' | 'Alquiler' | 'Materia Prima' | 'Mantenimiento' | 'Otros'>('Mercancía');
   const [newDescription, setNewDescription] = useState('');
@@ -109,16 +129,17 @@ export const CuentasPorPagarView: React.FC = () => {
   const [gastoConcept, setGastoConcept] = useState('');
   const [gastoCategory, setGastoCategory] = useState<GastoOperativoCategory>('Insumos / Papelería');
   const [gastoType, setGastoType] = useState<'mensual_fijo' | 'eventual'>('eventual');
+  const [gastoSupplierId, setGastoSupplierId] = useState('');
   const [gastoSupplierName, setGastoSupplierName] = useState('');
   const [gastoSupplierRIF, setGastoSupplierRIF] = useState('');
   const [gastoSupplierPhone, setGastoSupplierPhone] = useState('');
   const [gastoInvoiceNumber, setGastoInvoiceNumber] = useState('');
   const [gastoMonth, setGastoMonth] = useState(capitalizedMonth);
-  const [gastoDate, setGastoDate] = useState(new Date().toISOString().split('T')[0]);
+  const [gastoDate, setGastoDate] = useState(getLocalDateStr());
   const [gastoDueDate, setGastoDueDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 5);
-    return d.toISOString().split('T')[0];
+    return getLocalDateStr(d);
   });
   const [gastoAmountUSD, setGastoAmountUSD] = useState('');
   const [gastoAmountBs, setGastoAmountBs] = useState('');
@@ -212,20 +233,100 @@ export const CuentasPorPagarView: React.FC = () => {
     return matchesSearch && matchesType && matchesStatus;
   });
 
+  const getLiveSupplierBalance = (sup: Supplier): number => {
+    const supRif = (sup.rif || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const supNameLower = (sup.name || '').trim().toLowerCase();
+    const cppPending = cuentasPorPagar
+      .filter(c => {
+        if (c.status === 'pagada' || (c.remainingUSD || 0) <= 0.009) return false;
+        if (c.supplierId) return c.supplierId === sup.id;
+        const cRif = (c.supplierRIF || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (supRif.length > 2 && cRif === supRif) return true;
+        return supNameLower.length > 0 && (c.supplierName || '').trim().toLowerCase() === supNameLower;
+      })
+      .reduce((s, c) => s + (c.remainingUSD || 0), 0);
+    return round2(Math.max(cppPending, sup.accumulatedBalanceUSD || 0));
+  };
+
+  const filteredSuppliers = suppliers.filter(s => {
+    const q = searchTerm.toLowerCase();
+    return (
+      (s.name || '').toLowerCase().includes(q) ||
+      (s.rif || '').toLowerCase().includes(q) ||
+      (s.phone || '').toLowerCase().includes(q) ||
+      (s.address && s.address.toLowerCase().includes(q))
+    );
+  });
+
+  const openNewSupplierModal = () => {
+    setEditingSupplier(null);
+    setSupName('');
+    setSupRif('J-');
+    setSupPhone('');
+    setSupAddress('');
+    setSupEmail('');
+    setSupCreditDays('15');
+    setSupNotes('');
+    setIsSupplierModalOpen(true);
+  };
+
+  const openEditSupplierModal = (sup: Supplier) => {
+    setEditingSupplier(sup);
+    setSupName(sup.name);
+    setSupRif(sup.rif || '');
+    setSupPhone(sup.phone || '');
+    setSupAddress(sup.address || '');
+    setSupEmail(sup.email || '');
+    setSupCreditDays(String(sup.creditDays ?? 15));
+    setSupNotes(sup.notes || '');
+    setIsSupplierModalOpen(true);
+  };
+
+  const handleCreateOrEditSupplier = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supName.trim()) return;
+    const creditDays = Math.max(0, parseInt(supCreditDays, 10) || 0);
+    if (editingSupplier) {
+      updateSupplier({
+        ...editingSupplier,
+        name: supName.trim(),
+        rif: supRif.trim().toUpperCase(),
+        phone: supPhone.trim(),
+        address: supAddress.trim() || undefined,
+        email: supEmail.trim() || undefined,
+        creditDays,
+        notes: supNotes.trim() || undefined
+      });
+    } else {
+      addSupplier({
+        name: supName.trim(),
+        rif: supRif.trim().toUpperCase(),
+        phone: supPhone.trim(),
+        address: supAddress.trim() || undefined,
+        email: supEmail.trim() || undefined,
+        creditDays,
+        notes: supNotes.trim() || undefined
+      });
+    }
+    setEditingSupplier(null);
+    setIsSupplierModalOpen(false);
+  };
+
   const openNewGastoModal = () => {
     setEditingGasto(null);
     setGastoConcept('');
     setGastoCategory('Insumos / Papelería');
     setGastoType('eventual');
+    setGastoSupplierId('');
     setGastoSupplierName('');
     setGastoSupplierRIF('');
     setGastoSupplierPhone('');
     setGastoInvoiceNumber('');
     setGastoMonth(capitalizedMonth);
-    setGastoDate(new Date().toISOString().split('T')[0]);
+    setGastoDate(getLocalDateStr());
     const d = new Date();
     d.setDate(d.getDate() + 5);
-    setGastoDueDate(d.toISOString().split('T')[0]);
+    setGastoDueDate(getLocalDateStr(d));
     setGastoAmountUSD('');
     setGastoAmountBs('');
     setGastoCurrencyInput('USD');
@@ -241,13 +342,14 @@ export const CuentasPorPagarView: React.FC = () => {
     setGastoConcept(g.concept);
     setGastoCategory(g.category);
     setGastoType(g.type);
+    setGastoSupplierId(g.supplierId || '');
     setGastoSupplierName(g.supplierName || '');
     setGastoSupplierRIF(g.supplierRIF || '');
     setGastoSupplierPhone(g.supplierPhone || '');
     setGastoInvoiceNumber(g.invoiceNumber || '');
     setGastoMonth(g.month);
-    setGastoDate(g.date ? g.date.split('T')[0] : new Date().toISOString().split('T')[0]);
-    setGastoDueDate(g.dueDate ? g.dueDate.split('T')[0] : new Date().toISOString().split('T')[0]);
+    setGastoDate(g.date ? getLocalDateStr(new Date(g.date)) : getLocalDateStr());
+    setGastoDueDate(g.dueDate ? getLocalDateStr(new Date(g.dueDate)) : getLocalDateStr());
     setGastoCurrencyInput('USD');
     setGastoAmountUSD(g.amountUSD.toFixed(2));
     setGastoAmountBs((g.amountUSD * bcvRate).toFixed(2));
@@ -258,17 +360,18 @@ export const CuentasPorPagarView: React.FC = () => {
     setIsAddGastoModalOpen(true);
   };
 
-  const openNewCuentaModal = () => {
+  const openNewCuentaModal = (preselectedSupplier?: Supplier) => {
     setEditingCuenta(null);
-    setNewSupplierName('');
-    setNewSupplierRIF('');
-    setNewSupplierPhone('');
+    setNewSupplierId(preselectedSupplier?.id || '');
+    setNewSupplierName(preselectedSupplier?.name || '');
+    setNewSupplierRIF(preselectedSupplier?.rif || '');
+    setNewSupplierPhone(preselectedSupplier?.phone || '');
     setNewInvoiceNumber('');
     setNewControlNumber('');
-    setNewIssueDate(new Date().toISOString().split('T')[0]);
+    setNewIssueDate(getLocalDateStr());
     const d = new Date();
-    d.setDate(d.getDate() + 15);
-    setNewDueDate(d.toISOString().split('T')[0]);
+    d.setDate(d.getDate() + (preselectedSupplier?.creditDays ?? 15));
+    setNewDueDate(getLocalDateStr(d));
     setNewCategory('Mercancía');
     setNewDescription('');
     setNewTotalUSD('');
@@ -278,18 +381,47 @@ export const CuentasPorPagarView: React.FC = () => {
 
   const openEditCuentaModal = (c: CuentaPorPagar) => {
     setEditingCuenta(c);
+    setNewSupplierId(c.supplierId || '');
     setNewSupplierName(c.supplierName);
     setNewSupplierRIF(c.supplierRIF || '');
     setNewSupplierPhone(c.supplierPhone || '');
     setNewInvoiceNumber(c.invoiceNumber);
     setNewControlNumber(c.controlNumber || '');
-    setNewIssueDate(c.date ? c.date.split('T')[0] : new Date().toISOString().split('T')[0]);
-    setNewDueDate(c.dueDate ? c.dueDate.split('T')[0] : new Date().toISOString().split('T')[0]);
+    setNewIssueDate(c.date ? getLocalDateStr(new Date(c.date)) : getLocalDateStr());
+    setNewDueDate(c.dueDate ? getLocalDateStr(new Date(c.dueDate)) : getLocalDateStr());
     setNewCategory(c.category);
     setNewDescription(c.description);
     setNewTotalUSD(c.totalAmountUSD.toFixed(2));
     setNewNotes(c.notes || '');
     setIsAddCuentaModalOpen(true);
+  };
+
+  const handleSelectCuentaSupplier = (supId: string) => {
+    setNewSupplierId(supId);
+    const sup = suppliers.find(s => s.id === supId);
+    if (sup) {
+      setNewSupplierName(sup.name);
+      setNewSupplierRIF(sup.rif);
+      setNewSupplierPhone(sup.phone);
+      const base = newIssueDate ? new Date(`${newIssueDate}T12:00:00`) : new Date();
+      base.setDate(base.getDate() + (sup.creditDays ?? 15));
+      setNewDueDate(getLocalDateStr(base));
+    }
+  };
+
+  const handleSelectGastoSupplier = (supId: string) => {
+    setGastoSupplierId(supId);
+    const sup = suppliers.find(s => s.id === supId);
+    if (sup) {
+      setGastoSupplierName(sup.name);
+      setGastoSupplierRIF(sup.rif);
+      setGastoSupplierPhone(sup.phone);
+      if (sup.creditDays > 0) {
+        const base = gastoDate ? new Date(`${gastoDate}T12:00:00`) : new Date();
+        base.setDate(base.getDate() + sup.creditDays);
+        setGastoDueDate(getLocalDateStr(base));
+      }
+    }
   };
 
   const handleCreateOrEditCuenta = (e: React.FormEvent) => {
@@ -301,6 +433,7 @@ export const CuentasPorPagarView: React.FC = () => {
       const remaining = Math.max(0, Number((amount - editingCuenta.paidAmountUSD).toFixed(2)));
       updateCuentaPorPagar({
         ...editingCuenta,
+        supplierId: newSupplierId || editingCuenta.supplierId,
         supplierName: newSupplierName.trim(),
         supplierRIF: newSupplierRIF.trim() || undefined,
         supplierPhone: newSupplierPhone.trim() || undefined,
@@ -317,6 +450,7 @@ export const CuentasPorPagarView: React.FC = () => {
       });
     } else {
       addCuentaPorPagar({
+        supplierId: newSupplierId || undefined,
         supplierName: newSupplierName.trim(),
         supplierRIF: newSupplierRIF.trim() || undefined,
         supplierPhone: newSupplierPhone.trim() || undefined,
@@ -382,6 +516,7 @@ export const CuentasPorPagarView: React.FC = () => {
         concept: gastoConcept.trim(),
         category: gastoCategory,
         type: gastoType,
+        supplierId: gastoSupplierId || editingGasto.supplierId,
         supplierName: gastoSupplierName.trim() || undefined,
         supplierRIF: gastoSupplierRIF.trim() || undefined,
         supplierPhone: gastoSupplierPhone.trim() || undefined,
@@ -404,6 +539,7 @@ export const CuentasPorPagarView: React.FC = () => {
         concept: gastoConcept.trim(),
         category: gastoCategory,
         type: gastoType,
+        supplierId: gastoSupplierId || undefined,
         supplierName: gastoSupplierName.trim() || undefined,
         supplierRIF: gastoSupplierRIF.trim() || undefined,
         supplierPhone: gastoSupplierPhone.trim() || undefined,
@@ -493,20 +629,29 @@ export const CuentasPorPagarView: React.FC = () => {
                 <Plus className="w-4 h-4" />
                 <span>Registrar Gasto del Mes</span>
               </button>
-            ) : (
+            ) : activeSubTab === 'proveedores' ? (
               <button
                 type="button"
-                onClick={openNewCuentaModal}
+                onClick={() => openNewCuentaModal()}
                 className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
                 <span>Registrar Factura Proveedor</span>
               </button>
+            ) : (
+              <button
+                type="button"
+                onClick={openNewSupplierModal}
+                className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Registrar Proveedor</span>
+              </button>
             )}
           </div>
         </div>
 
-        {/* Dual Sub-Navigation Switcher */}
+        {/* Triple Sub-Navigation Switcher */}
         <div className="flex flex-col sm:flex-row p-1 bg-[#EEF2F7] rounded-2xl border border-[#DCE4F0] gap-1">
           <button
             type="button"
@@ -521,7 +666,7 @@ export const CuentasPorPagarView: React.FC = () => {
             }`}
           >
             <Home className="w-4 h-4 shrink-0" />
-            <span>Gastos del Mes & Insumos (Por Pagar)</span>
+            <span>Gastos del Mes & Insumos</span>
             {gastosOperativos.filter(g => g.status !== 'pagado').length > 0 && (
               <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] font-extrabold font-mono-numbers">
                 {gastosOperativos.filter(g => g.status !== 'pagado').length}
@@ -542,12 +687,31 @@ export const CuentasPorPagarView: React.FC = () => {
             }`}
           >
             <Building2 className="w-4 h-4 shrink-0" />
-            <span>Facturas a Proveedores (Compras a Crédito)</span>
+            <span>Facturas a Proveedores</span>
             {cuentasPorPagar.filter(c => c.status !== 'pagada').length > 0 && (
               <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[#FFF3E8] text-[#9A4B12] border border-[#F5D3B3] font-extrabold font-mono-numbers">
                 {cuentasPorPagar.filter(c => c.status !== 'pagada').length}
               </span>
             )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSubTab('maestro_proveedores');
+              setStatusFilter('todos');
+            }}
+            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
+              activeSubTab === 'maestro_proveedores'
+                ? 'bg-white text-[#1D4ED8] shadow-xs border border-[#DCE4F0]'
+                : 'text-slate-600 hover:text-[#0B1528]'
+            }`}
+          >
+            <Briefcase className="w-4 h-4 shrink-0" />
+            <span>Maestro de Proveedores</span>
+            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] font-extrabold font-mono-numbers">
+              {suppliers.length}
+            </span>
           </button>
         </div>
       </div>
@@ -671,7 +835,9 @@ export const CuentasPorPagarView: React.FC = () => {
             type="text"
             placeholder={activeSubTab === 'gastos_mes' 
               ? "Buscar por concepto, proveedor, RIF/Cédula, factura o teléfono..."
-              : "Buscar factura, proveedor, RIF o número de control..."
+              : activeSubTab === 'maestro_proveedores'
+                ? "Buscar proveedor por razón social, RIF, teléfono o dirección..."
+                : "Buscar factura, proveedor, RIF o número de control..."
             }
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -680,60 +846,62 @@ export const CuentasPorPagarView: React.FC = () => {
         </div>
 
         {/* Filters specific to active sub-tab */}
-        <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
-          {activeSubTab === 'gastos_mes' ? (
-            <>
-              <select
-                value={gastoTypeFilter}
-                onChange={(e) => setGastoTypeFilter(e.target.value as any)}
-                className="px-2.5 py-1.5 bg-[#F8FAFC] text-[#0B1528] rounded-xl text-xs font-bold border border-[#DCE4F0] focus:outline-none focus:border-blue-500"
-              >
-                <option value="todos">Todos los Tipos</option>
-                <option value="mensual_fijo">Mensuales Fijos</option>
-                <option value="eventual">Eventuales / Insumos</option>
-              </select>
+        {activeSubTab !== 'maestro_proveedores' && (
+          <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
+            {activeSubTab === 'gastos_mes' ? (
+              <>
+                <select
+                  value={gastoTypeFilter}
+                  onChange={(e) => setGastoTypeFilter(e.target.value as any)}
+                  className="px-2.5 py-1.5 bg-[#F8FAFC] text-[#0B1528] rounded-xl text-xs font-bold border border-[#DCE4F0] focus:outline-none focus:border-blue-500"
+                >
+                  <option value="todos">Todos los Tipos</option>
+                  <option value="mensual_fijo">Mensuales Fijos</option>
+                  <option value="eventual">Eventuales / Insumos</option>
+                </select>
 
+                <div className="flex flex-wrap items-center gap-1">
+                  {([
+                    { id: 'todos', label: 'Todos' },
+                    { id: 'pendiente', label: 'Pendiente' },
+                    { id: 'parcial', label: 'Parcial' },
+                    { id: 'pagado', label: 'Pagado' }
+                  ] as const).map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setStatusFilter(st.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                        statusFilter === st.id
+                          ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_10px_-2px_rgba(37,99,235,0.4)]'
+                          : 'bg-[#EEF2F7] text-slate-600 hover:bg-[#E2E8F0]'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
               <div className="flex flex-wrap items-center gap-1">
-                {([
-                  { id: 'todos', label: 'Todos' },
-                  { id: 'pendiente', label: 'Pendiente' },
-                  { id: 'parcial', label: 'Parcial' },
-                  { id: 'pagado', label: 'Pagado' }
-                ] as const).map((st) => (
+                {(['todos', 'pendiente', 'parcial', 'vencida', 'pagada'] as const).map((st) => (
                   <button
-                    key={st.id}
+                    key={st}
                     type="button"
-                    onClick={() => setStatusFilter(st.id)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-                      statusFilter === st.id
+                    onClick={() => setStatusFilter(st)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+                      statusFilter === st
                         ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_10px_-2px_rgba(37,99,235,0.4)]'
                         : 'bg-[#EEF2F7] text-slate-600 hover:bg-[#E2E8F0]'
                     }`}
                   >
-                    {st.label}
+                    {st}
                   </button>
                 ))}
               </div>
-            </>
-          ) : (
-            <div className="flex flex-wrap items-center gap-1">
-              {(['todos', 'pendiente', 'parcial', 'vencida', 'pagada'] as const).map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => setStatusFilter(st)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize whitespace-nowrap shrink-0 transition-all cursor-pointer ${
-                    statusFilter === st
-                      ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_10px_-2px_rgba(37,99,235,0.4)]'
-                      : 'bg-[#EEF2F7] text-slate-600 hover:bg-[#E2E8F0]'
-                  }`}
-                >
-                  {st}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* VIEW: GASTOS OPERATIVOS DEL MES */}
@@ -1037,7 +1205,7 @@ export const CuentasPorPagarView: React.FC = () => {
               </p>
               <button
                 type="button"
-                onClick={openNewCuentaModal}
+                onClick={() => openNewCuentaModal()}
                 className="mt-2 px-4 py-2 bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] hover:bg-blue-100 font-bold text-xs rounded-xl transition-colors cursor-pointer"
               >
                 + Agregar Primera Factura Proveedor
@@ -1300,9 +1468,25 @@ export const CuentasPorPagarView: React.FC = () => {
 
               {/* DATOS FISCALES Y DE CONTACTO DEL PROVEEDOR / EMISOR */}
               <div className="bg-slate-50/80 border border-slate-200 rounded-2xl p-3 space-y-2.5">
-                <div className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
-                  <UserCheck className="w-3.5 h-3.5 text-blue-600" />
-                  Datos Fiscales y Contacto del Proveedor / Emisor
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                    <UserCheck className="w-3.5 h-3.5 text-blue-600" />
+                    Datos Fiscales y Contacto del Proveedor / Emisor
+                  </div>
+                  {suppliers.length > 0 && (
+                    <select
+                      value={gastoSupplierId}
+                      onChange={(e) => handleSelectGastoSupplier(e.target.value)}
+                      className="px-2 py-1 bg-white border border-blue-300 rounded-lg text-[11px] font-bold text-blue-900 focus:outline-none"
+                    >
+                      <option value="">-- Elegir Proveedor ({suppliers.length}) --</option>
+                      {suppliers.map(s => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.rif})
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div>
@@ -1311,7 +1495,10 @@ export const CuentasPorPagarView: React.FC = () => {
                       type="text"
                       placeholder="Ej: Papelería El Sol / Juan Pérez"
                       value={gastoSupplierName}
-                      onChange={(e) => setGastoSupplierName(e.target.value)}
+                      onChange={(e) => {
+                        setGastoSupplierName(e.target.value);
+                        if (gastoSupplierId) setGastoSupplierId('');
+                      }}
                       className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:border-blue-500 focus:outline-none"
                     />
                   </div>
@@ -1979,6 +2166,26 @@ export const CuentasPorPagarView: React.FC = () => {
             <div className="p-5 overflow-y-auto space-y-4">
 
             <form onSubmit={handleCreateOrEditCuenta} className="space-y-3.5">
+              {suppliers.length > 0 && (
+                <div className="bg-[#EBF3FE] border border-[#C5DCFC] rounded-2xl p-3">
+                  <label className="block text-[11px] font-extrabold text-[#1D4ED8] mb-1">
+                    Seleccionar desde Maestro de Proveedores
+                  </label>
+                  <select
+                    value={newSupplierId}
+                    onChange={(e) => handleSelectCuentaSupplier(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-[#93C5FD] rounded-xl text-xs font-bold text-[#0B1528] focus:outline-none"
+                  >
+                    <option value="">-- Elegir proveedor registrado (o ingresar manualmente abajo) --</option>
+                    {suppliers.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.rif}) • {s.creditDays} días crédito
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Nombre del Proveedor *</label>
                 <input
@@ -1986,7 +2193,10 @@ export const CuentasPorPagarView: React.FC = () => {
                   required
                   placeholder="Ej: Distribuidora Alimentos Polar, Papelera El Sol..."
                   value={newSupplierName}
-                  onChange={(e) => setNewSupplierName(e.target.value)}
+                  onChange={(e) => {
+                    setNewSupplierName(e.target.value);
+                    if (newSupplierId) setNewSupplierId('');
+                  }}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:bg-white focus:border-blue-500 focus:outline-none"
                 />
               </div>
@@ -2263,6 +2473,285 @@ export const CuentasPorPagarView: React.FC = () => {
               </div>
             </form>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW: MAESTRO DE PROVEEDORES */}
+      {activeSubTab === 'maestro_proveedores' && (
+        <div className="space-y-3">
+          {filteredSuppliers.length === 0 ? (
+            <div className="bg-white/95 rounded-3xl p-8 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] text-center space-y-2">
+              <Briefcase className="w-12 h-12 text-slate-300 mx-auto" />
+              <h3 className="text-sm font-bold text-[#0B1528]">No hay proveedores registrados en el Maestro</h3>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                Centraliza tus distribuidores con su RIF, teléfono, dirección y días de crédito para seleccionarlos con un clic en Compras y Cuentas por Pagar.
+              </p>
+              <button
+                type="button"
+                onClick={openNewSupplierModal}
+                className="mt-2 px-4 py-2 bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] hover:bg-blue-100 font-bold text-xs rounded-xl transition-colors cursor-pointer"
+              >
+                + Registrar Primer Proveedor
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {filteredSuppliers.map((sup) => {
+                const liveBalanceUSD = getLiveSupplierBalance(sup);
+                return (
+                  <div
+                    key={sup.id}
+                    className="bg-white/95 rounded-2xl border border-[#DCE4F0] p-4 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] hover:border-[#93C5FD] transition-all flex flex-col justify-between space-y-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2.5 rounded-xl bg-[#EBF3FE] border border-[#C5DCFC] text-[#1D4ED8] shrink-0">
+                          <Briefcase className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="font-extrabold text-sm text-[#0B1528]">{sup.name}</div>
+                          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                            <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-[#F8FAFC] text-slate-600 border border-[#DCE4F0]">
+                              {sup.rif || 'Sin RIF'}
+                            </span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#EEF2F7] text-[#0B1528] border border-[#DCE4F0]">
+                              {sup.creditDays} días crédito
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase">Saldo Acumulado</div>
+                        <div className={`text-base font-black font-mono-numbers ${liveBalanceUSD > 0 ? 'text-[#BE123C]' : 'text-[#065F46]'}`}>
+                          ${formatUSD(liveBalanceUSD)}
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono-numbers">
+                          Bs {formatBs(liveBalanceUSD * bcvRate)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#F8FAFC] rounded-xl p-2.5 text-xs text-slate-600 border border-[#DCE4F0] space-y-1">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {sup.phone && (
+                          <a
+                            href={`https://wa.me/58${sup.phone.replace(/\D/g, '').slice(-10)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[#065F46] hover:underline font-semibold flex items-center gap-1"
+                          >
+                            <Phone className="w-3 h-3" /> {sup.phone}
+                          </a>
+                        )}
+                        {sup.email && (
+                          <span className="flex items-center gap-1 text-slate-500">
+                            <Mail className="w-3 h-3" /> {sup.email}
+                          </span>
+                        )}
+                      </div>
+                      {sup.address && (
+                        <div className="flex items-start gap-1 text-[11px] text-slate-500">
+                          <MapPin className="w-3 h-3 shrink-0 mt-0.5" />
+                          <span>{sup.address}</span>
+                        </div>
+                      )}
+                      {sup.notes && (
+                        <div className="text-[11px] italic text-slate-500">{sup.notes}</div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveSubTab('proveedores');
+                          openNewCuentaModal(sup);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-[#0B1528] hover:bg-[#152440] text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5 text-blue-300" />
+                        <span>Cargar Factura</span>
+                      </button>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openEditSupplierModal(sup)}
+                          className="p-1.5 rounded-xl bg-[#F8FAFC] text-slate-600 border border-[#DCE4F0] hover:bg-[#EBF3FE] hover:text-[#1D4ED8] cursor-pointer"
+                          title="Editar proveedor"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        {confirmDeleteSupplierId === sup.id ? (
+                          <div className="flex items-center gap-1 bg-[#FEECEF] px-2 py-1 rounded-xl border border-[#FBC4CD]">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                deleteSupplier(sup.id);
+                                setConfirmDeleteSupplierId(null);
+                              }}
+                              className="text-[11px] font-bold text-[#BE123C] hover:underline cursor-pointer"
+                            >
+                              Confirmar
+                            </button>
+                            <span className="text-slate-300">|</span>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteSupplierId(null)}
+                              className="text-[11px] font-semibold text-slate-500 cursor-pointer"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteSupplierId(sup.id)}
+                            className="p-1.5 rounded-xl bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] hover:bg-rose-100 cursor-pointer"
+                            title="Eliminar proveedor"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* MODAL: REGISTRAR / EDITAR PROVEEDOR EN MAESTRO */}
+      {isSupplierModalOpen && (
+        <div className="fixed inset-0 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-3 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-[#DCE4F0]">
+            <div className="p-4 bg-[#0B1528] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Briefcase className="w-4 h-4 text-blue-300" />
+                <h3 className="font-extrabold text-sm">
+                  {editingSupplier ? 'Editar Proveedor' : 'Registrar Nuevo Proveedor'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSupplierModalOpen(false);
+                  setEditingSupplier(null);
+                }}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateOrEditSupplier} className="p-5 space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Nombre / Razón Social *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej: Distribuidora Alimentos Polar C.A."
+                  value={supName}
+                  onChange={(e) => setSupName(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-semibold focus:bg-white focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">RIF / Cédula *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="J-12345678-0"
+                    value={supRif}
+                    onChange={(e) => setSupRif(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-mono focus:bg-white focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Teléfono / WhatsApp *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="0414-1234567"
+                    value={supPhone}
+                    onChange={(e) => setSupPhone(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-mono focus:bg-white focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Días de Crédito *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="365"
+                    required
+                    value={supCreditDays}
+                    onChange={(e) => setSupCreditDays(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-mono font-bold focus:bg-white focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Correo (Opcional)</label>
+                  <input
+                    type="email"
+                    placeholder="ventas@proveedor.com"
+                    value={supEmail}
+                    onChange={(e) => setSupEmail(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs focus:bg-white focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Dirección Fiscal / Despacho</label>
+                <input
+                  type="text"
+                  placeholder="Ej: Zona Industrial Los Montones, Barcelona..."
+                  value={supAddress}
+                  onChange={(e) => setSupAddress(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs focus:bg-white focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Notas / Condiciones Comerciales</label>
+                <textarea
+                  rows={2}
+                  placeholder="Despacho los martes y jueves, contacto asesor..."
+                  value={supNotes}
+                  onChange={(e) => setSupNotes(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs focus:bg-white focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSupplierModalOpen(false);
+                    setEditingSupplier(null);
+                  }}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
+                >
+                  {editingSupplier ? 'Guardar Cambios' : 'Guardar Proveedor'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

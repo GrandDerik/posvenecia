@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   KeyRound, 
@@ -15,7 +15,8 @@ import {
   X,
   FileText,
   Landmark,
-  CreditCard
+  CreditCard,
+  RefreshCw
 } from 'lucide-react';
 import { formatBs, formatUSD } from '../../utils/exportUtils';
 import { BankInitialBalance } from '../../types';
@@ -27,6 +28,12 @@ export const AperturaCajaModal: React.FC = () => {
     openCashShift, 
     bcvRate, 
     bcvEuroRate,
+    isBcvRateUpdatedToday,
+    fetchLiveRate,
+    fetchLiveEuroRate,
+    isFetchingLiveRate,
+    updateBcvRate,
+    isOnline,
     googleUser,
     businessInfo,
     setIsProfileModalOpen
@@ -36,13 +43,16 @@ export const AperturaCajaModal: React.FC = () => {
   const [initialBs, setInitialBs] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [manualRateInput, setManualRateInput] = useState<string>('');
+  const [bcvSyncFeedback, setBcvSyncFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const hasAttemptedAutoSyncRef = useRef(false);
 
   // Bank balances map: key -> { balanceBs, balanceUSD }
   const [bankBalances, setBankBalances] = useState<Record<string, { balanceBs: string; balanceUSD: string }>>({});
 
   const configuredBanks = businessInfo.bankAccounts || [];
 
-  // Initialize or reset bank balance fields on modal open
+  // Initialize or reset bank balance fields + auto-sync daily BCV rate if stale on modal open
   useEffect(() => {
     if (isAperturaModalOpen) {
       const initialMap: Record<string, { balanceBs: string; balanceUSD: string }> = {};
@@ -54,8 +64,39 @@ export const AperturaCajaModal: React.FC = () => {
         initialMap['default-pm'] = { balanceBs: '', balanceUSD: '' };
       }
       setBankBalances(initialMap);
+      setManualRateInput(bcvRate > 0 ? bcvRate.toFixed(2) : '');
+
+      if (!isBcvRateUpdatedToday && isOnline && !hasAttemptedAutoSyncRef.current) {
+        hasAttemptedAutoSyncRef.current = true;
+        setBcvSyncFeedback(null);
+        Promise.allSettled([fetchLiveRate(), fetchLiveEuroRate()])
+          .then((results) => {
+            const usdRes = results[0];
+            if (usdRes.status === 'fulfilled') {
+              setManualRateInput(usdRes.value.toFixed(2));
+              setBcvSyncFeedback({
+                type: 'success',
+                text: `Tasa oficial BCV sincronizada automáticamente: Bs. ${formatBs(usdRes.value)}`
+              });
+            } else {
+              setBcvSyncFeedback({
+                type: 'error',
+                text: 'No se pudo consultar la tasa BCV automáticamente. Puedes reintentar o ingresarla manualmente.'
+              });
+            }
+          });
+      }
+    } else {
+      hasAttemptedAutoSyncRef.current = false;
+      setBcvSyncFeedback(null);
     }
   }, [isAperturaModalOpen, configuredBanks.length, businessInfo.pagoMovilBank]);
+
+  useEffect(() => {
+    if (isAperturaModalOpen && bcvRate > 0) {
+      setManualRateInput(bcvRate.toFixed(2));
+    }
+  }, [bcvRate, isAperturaModalOpen]);
 
   if (!isAperturaModalOpen) return null;
 
@@ -200,6 +241,108 @@ export const AperturaCajaModal: React.FC = () => {
             <div className="text-[11px] font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg">
               Operador: {googleUser?.name?.split(' ')[0] || 'Administrador'}
             </div>
+          </div>
+
+          {/* Daily BCV Rate Sync & Verification Card */}
+          <div
+            className={`p-3 rounded-2xl border text-xs space-y-2 transition-colors ${
+              isFetchingLiveRate
+                ? 'bg-blue-50/80 border-blue-200 text-blue-900'
+                : isBcvRateUpdatedToday
+                  ? 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
+                  : 'bg-amber-50/90 border-amber-300 text-amber-950'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2 font-bold">
+                {isFetchingLiveRate ? (
+                  <RefreshCw className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
+                ) : isBcvRateUpdatedToday ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                )}
+                <span>
+                  {isFetchingLiveRate
+                    ? 'Sincronizando tasa oficial del BCV de hoy...'
+                    : isBcvRateUpdatedToday
+                      ? `Tasa BCV de hoy al día: Bs. ${formatBs(bcvRate)}`
+                      : 'Tasa BCV del día aún no actualizada'}
+                </span>
+              </div>
+              {bcvEuroRate > 0 && (
+                <span className="text-[11px] font-mono font-semibold opacity-80">
+                  EUR: Bs. {formatBs(bcvEuroRate)}
+                </span>
+              )}
+            </div>
+
+            {bcvSyncFeedback && (
+              <p className={`text-[11px] font-semibold ${bcvSyncFeedback.type === 'success' ? 'text-emerald-800' : 'text-rose-700'}`}>
+                {bcvSyncFeedback.text}
+              </p>
+            )}
+
+            {!isBcvRateUpdatedToday && !isFetchingLiveRate && (
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={!isOnline || isFetchingLiveRate}
+                  onClick={async () => {
+                    setBcvSyncFeedback(null);
+                    try {
+                      const newRate = await fetchLiveRate();
+                      fetchLiveEuroRate().catch(() => {});
+                      setManualRateInput(newRate.toFixed(2));
+                      setBcvSyncFeedback({
+                        type: 'success',
+                        text: `Tasa BCV actualizada: Bs. ${formatBs(newRate)}`
+                      });
+                    } catch {
+                      setBcvSyncFeedback({
+                        type: 'error',
+                        text: 'Error al consultar tasa BCV en línea. Ingresa el valor manual.'
+                      });
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-[11px] font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Sincronizar BCV Hoy</span>
+                </button>
+
+                <div className="flex items-center gap-1.5 flex-1">
+                  <div className="relative flex-1">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">Bs</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={manualRateInput}
+                      onChange={(e) => setManualRateInput(e.target.value)}
+                      placeholder="Ej. 52.40"
+                      className="w-full pl-7 pr-2 py-1.5 bg-white border border-amber-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const parsed = parseFloat(manualRateInput);
+                      if (!isNaN(parsed) && parsed > 0) {
+                        updateBcvRate(parsed);
+                        setBcvSyncFeedback({
+                          type: 'success',
+                          text: `Tasa manual guardada para hoy: Bs. ${formatBs(parsed)}`
+                        });
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-[#0B1528] hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold cursor-pointer whitespace-nowrap"
+                  >
+                    Guardar Tasa
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Section: Fondo Inicial en Efectivo */}

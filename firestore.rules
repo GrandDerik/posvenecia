@@ -99,6 +99,7 @@ service cloud.firestore {
         && isOptString(data, 'date', 100)
         && isOptString(data, 'invoiceNumber', 100)
         && isOptString(data, 'controlNumber', 100)
+        && isOptString(data, 'supplierId', 128)
         && isOptString(data, 'supplierName', 200)
         && isOptString(data, 'supplierRIF', 50)
         && isOptString(data, 'supplierPhone', 50)
@@ -152,6 +153,7 @@ service cloud.firestore {
     function isValidCuentaPorPagar(data) {
       return data is map
         && isOptString(data, 'id', 128)
+        && isOptString(data, 'supplierId', 128)
         && isOptString(data, 'supplierName', 200)
         && isOptString(data, 'supplierRIF', 50)
         && isOptString(data, 'supplierPhone', 50)
@@ -178,6 +180,7 @@ service cloud.firestore {
         && isOptString(data, 'month', 50)
         && isOptString(data, 'date', 100)
         && isOptString(data, 'dueDate', 100)
+        && isOptString(data, 'supplierId', 128)
         && isOptString(data, 'supplierName', 200)
         && isOptString(data, 'supplierRIF', 50)
         && isOptString(data, 'supplierPhone', 50)
@@ -222,6 +225,8 @@ service cloud.firestore {
         && isOptString(data, 'updatedAt', 100)
         && isOptNumber(data, 'bcvRate')
         && isOptNumber(data, 'bcvEuroRate')
+        && isOptString(data, 'bcvLastUpdatedDate', 50)
+        && isOptString(data, 'bcvLastUpdatedAt', 100)
         && isOptString(data, 'baseCurrency', 10)
         && isOptString(data, 'managerPin', 32)
         && isOptString(data, 'lastUpdatedBy', 200)
@@ -275,6 +280,43 @@ service cloud.firestore {
         && isOptString(data, 'reason', 100)
         && isOptString(data, 'notes', 1000)
         && isOptString(data, 'responsibleName', 100);
+    }
+
+    function isValidKardexEntry(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'date', 100)
+        && isOptString(data, 'productId', 128)
+        && isOptString(data, 'productCode', 100)
+        && isOptString(data, 'productName', 200)
+        && isOptString(data, 'category', 100)
+        && isOptString(data, 'type', 50)
+        && isOptNumber(data, 'quantityChange')
+        && isOptNumber(data, 'previousStock')
+        && isOptNumber(data, 'newStock')
+        && isOptNumber(data, 'unitCostUSD')
+        && isOptNumber(data, 'totalCostUSD')
+        && isOptString(data, 'valuationMethod', 50)
+        && isOptNumber(data, 'fifoBalanceUSD')
+        && isOptNumber(data, 'avgCostUSD')
+        && isOptNumber(data, 'avgBalanceUSD')
+        && isOptString(data, 'reference', 150)
+        && isOptString(data, 'notes', 1000)
+        && isOptString(data, 'userName', 120);
+    }
+
+    function isValidSupplier(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'name', 200)
+        && isOptString(data, 'rif', 50)
+        && isOptString(data, 'phone', 50)
+        && isOptString(data, 'address', 500)
+        && isOptString(data, 'email', 200)
+        && isOptNumber(data, 'creditDays')
+        && isOptNumber(data, 'accumulatedBalanceUSD')
+        && isOptString(data, 'notes', 1000)
+        && isOptString(data, 'createdAt', 100);
     }
 
     // Reglas explícitas por cada colección aislada bajo users/{userId}
@@ -351,6 +393,19 @@ service cloud.firestore {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(dischargeId);
         allow create, update: if isVerifiedOwner(userId) && isValidId(dischargeId) && isValidInventoryDischarge(incoming());
+      }
+
+      match /kardex/{kardexId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get: if isVerifiedOwner(userId) && isValidId(kardexId);
+        allow create: if isVerifiedOwner(userId) && isValidId(kardexId) && isValidKardexEntry(incoming());
+        allow update, delete: if false;
+      }
+
+      match /suppliers/{supplierId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(supplierId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(supplierId) && isValidSupplier(incoming());
       }
     }
   }

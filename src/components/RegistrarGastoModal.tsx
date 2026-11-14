@@ -18,7 +18,7 @@ import {
   Info,
   ArrowRight
 } from 'lucide-react';
-import { formatBs, formatUSD } from '../utils/exportUtils';
+import { formatBs, formatUSD, round2, getLocalDateStr } from '../utils/exportUtils';
 import { Expense, ExpenseItem, PurchaseCostStrategy } from '../types';
 
 interface RegistrarGastoModalProps {
@@ -28,9 +28,11 @@ interface RegistrarGastoModalProps {
 }
 
 export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen, onClose, editingExpense }) => {
-  const { addExpense, updateExpense, products, bcvRate, isCashRegisterOpen, setIsAperturaModalOpen } = useApp();
+  const { addExpense, updateExpense, products, suppliers, addSupplier, bcvRate, isCashRegisterOpen, setIsAperturaModalOpen } = useApp();
 
   // Invoice & Supplier details
+  const [selectedSupplierId, setSelectedSupplierId] = useState('');
+  const [saveAsNewSupplier, setSaveAsNewSupplier] = useState(false);
   const [supplierName, setSupplierName] = useState('');
   const [supplierRIF, setSupplierRIF] = useState('J-');
   const [supplierPhone, setSupplierPhone] = useState('');
@@ -42,7 +44,12 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const [amountInput, setAmountInput] = useState('');
   const [hasIVA, setHasIVA] = useState(true);
   const [applyRetencionIVA, setApplyRetencionIVA] = useState(true); // 75% SENIAT retention
-  const [paymentMethod, setPaymentMethod] = useState<'efectivo_usd' | 'efectivo_bs' | 'pago_movil' | 'debito' | 'transferencia'>('pago_movil');
+  const [paymentMethod, setPaymentMethod] = useState<Expense['paymentMethod']>('pago_movil');
+  const [dueDate, setDueDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 15);
+    return getLocalDateStr(d);
+  });
   const [reference, setReference] = useState('');
 
   // Inventory Integration Items state
@@ -183,6 +190,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
 
   useEffect(() => {
     if (isOpen && editingExpense) {
+      setSelectedSupplierId(editingExpense.supplierId || '');
+      setSaveAsNewSupplier(false);
       setSupplierName(editingExpense.supplierName || '');
       setSupplierRIF(editingExpense.supplierRIF || 'J-');
       setSupplierPhone(editingExpense.supplierPhone || '');
@@ -195,6 +204,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setHasIVA((editingExpense.ivaBs || 0) > 0);
       setApplyRetencionIVA((editingExpense.retencionIVABs || 0) > 0);
       setPaymentMethod(editingExpense.paymentMethod || 'pago_movil');
+      setDueDate(editingExpense.dueDate ? editingExpense.dueDate.split('T')[0] : getLocalDateStr());
       setReference(editingExpense.reference || '');
       setPurchasedItems(Array.isArray(editingExpense.items) ? editingExpense.items : []);
       setSelectedProductId('');
@@ -205,6 +215,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setItemStrategy('fifo');
       setCustomNewPriceUSD('');
     } else if (isOpen && !editingExpense) {
+      setSelectedSupplierId('');
+      setSaveAsNewSupplier(false);
       setSupplierName('');
       setSupplierRIF('J-');
       setSupplierPhone('');
@@ -217,6 +229,9 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setHasIVA(true);
       setApplyRetencionIVA(true);
       setPaymentMethod('pago_movil');
+      const d = new Date();
+      d.setDate(d.getDate() + 15);
+      setDueDate(getLocalDateStr(d));
       setReference('');
       setPurchasedItems([]);
       setSelectedProductId('');
@@ -229,18 +244,36 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
     }
   }, [isOpen, editingExpense]);
 
+  const safeSuppliers = useMemo(() => (Array.isArray(suppliers) ? suppliers : []), [suppliers]);
+
+  const handleSelectMasterSupplier = (supId: string) => {
+    setSelectedSupplierId(supId);
+    const found = safeSuppliers.find(s => s.id === supId);
+    if (found) {
+      setSupplierName(found.name);
+      setSupplierRIF(found.rif);
+      setSupplierPhone(found.phone);
+      setSaveAsNewSupplier(false);
+      if (found.creditDays > 0) {
+        const d = new Date();
+        d.setDate(d.getDate() + found.creditDays);
+        setDueDate(getLocalDateStr(d));
+      }
+    }
+  };
+
   // Early return MUST appear after all React hooks to comply with Rules of Hooks
   if (!isOpen) return null;
 
   const rawAmount = parseFloat(amountInput) || 0;
-  const amountUSD = currency === 'USD' ? rawAmount : (safeBcvRate > 0 ? rawAmount / safeBcvRate : 0);
-  const amountBs = currency === 'USD' ? rawAmount * safeBcvRate : rawAmount;
+  const amountUSD = round2(currency === 'USD' ? rawAmount : (safeBcvRate > 0 ? rawAmount / safeBcvRate : 0));
+  const amountBs = round2(currency === 'USD' ? rawAmount * safeBcvRate : rawAmount);
 
   // SENIAT calculations for purchases
-  const baseImponibleBs = hasIVA ? (amountBs / 1.16) : amountBs;
-  const ivaBs = hasIVA ? (amountBs - baseImponibleBs) : 0;
-  const retencionIVABs = applyRetencionIVA ? (ivaBs * 0.75) : 0; // 75% retention standard SENIAT
-  const retencionISLRBs = baseImponibleBs * 0.02; // 2% ISLR retention
+  const baseImponibleBs = round2(hasIVA ? (amountBs / 1.16) : amountBs);
+  const ivaBs = round2(hasIVA ? (amountBs - baseImponibleBs) : 0);
+  const retencionIVABs = round2(applyRetencionIVA ? (ivaBs * 0.75) : 0); // 75% retention standard SENIAT
+  const retencionISLRBs = round2(baseImponibleBs * 0.02); // 2% ISLR retention
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -251,11 +284,28 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       ? (purchasedItems.some(i => i.strategy === 'fifo') ? 'fifo' : 'average_cost') 
       : undefined;
 
+    const normalizedDueDate = paymentMethod === 'credito' && dueDate
+      ? new Date(`${dueDate}T23:59:59`).toISOString()
+      : undefined;
+
+    let finalSupplierId = selectedSupplierId || undefined;
+    if (!editingExpense && !finalSupplierId && saveAsNewSupplier && supplierName.trim()) {
+      const createdSup = addSupplier({
+        name: supplierName.trim(),
+        rif: supplierRIF.trim(),
+        phone: supplierPhone.trim(),
+        creditDays: 15,
+        accumulatedBalanceUSD: 0
+      });
+      finalSupplierId = createdSup.id;
+    }
+
     if (editingExpense) {
       updateExpense({
         ...editingExpense,
         invoiceNumber: invoiceNumber.trim() || editingExpense.invoiceNumber,
         controlNumber: controlNumber.trim() || editingExpense.controlNumber,
+        supplierId: finalSupplierId ?? editingExpense.supplierId,
         supplierName: supplierName.trim(),
         supplierRIF: supplierRIF.trim(),
         supplierPhone: supplierPhone.trim() || undefined,
@@ -269,6 +319,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
         retencionISLRBs,
         bcvRate: editingExpense.bcvRate || bcvRate,
         paymentMethod,
+        dueDate: normalizedDueDate ?? editingExpense.dueDate,
         reference
       });
     } else {
@@ -276,6 +327,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
         date: new Date().toISOString(),
         invoiceNumber: invoiceNumber.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`,
         controlNumber: controlNumber.trim() || `00-${Math.floor(1000 + Math.random() * 9000)}`,
+        supplierId: finalSupplierId,
         supplierName: supplierName.trim(),
         supplierRIF: supplierRIF.trim(),
         supplierPhone: supplierPhone.trim() || undefined,
@@ -289,7 +341,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
         retencionISLRBs,
         bcvRate,
         paymentMethod,
-        reference,
+        dueDate: normalizedDueDate,
+        reference: paymentMethod === 'credito' ? (reference.trim() || 'CRÉDITO') : reference,
         items: purchasedItems.length > 0 ? purchasedItems : undefined,
         costStrategy: defaultStrategy
       });
@@ -342,9 +395,26 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
 
           {/* Supplier Info */}
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-3">
-            <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-              <Building className="w-3.5 h-3.5 text-teal-700" />
-              Datos del Proveedor y Factura
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Building className="w-3.5 h-3.5 text-teal-700" />
+                Datos del Proveedor y Factura
+              </div>
+
+              {safeSuppliers.length > 0 && (
+                <select
+                  value={selectedSupplierId}
+                  onChange={(e) => handleSelectMasterSupplier(e.target.value)}
+                  className="px-2.5 py-1.5 bg-white border border-teal-300 rounded-lg text-[11px] font-bold text-teal-900 focus:ring-1 focus:ring-teal-600 focus:outline-hidden"
+                >
+                  <option value="">-- Elegir de Maestro de Proveedores ({safeSuppliers.length}) --</option>
+                  {safeSuppliers.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.rif}) • {s.creditDays}d crédito
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
@@ -357,7 +427,10 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                   required
                   placeholder="Ej: Distribuidora Polar C.A."
                   value={supplierName}
-                  onChange={(e) => setSupplierName(e.target.value)}
+                  onChange={(e) => {
+                    setSupplierName(e.target.value);
+                    if (selectedSupplierId) setSelectedSupplierId('');
+                  }}
                   className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs focus:ring-1 focus:ring-teal-600 focus:outline-hidden"
                 />
               </div>
@@ -387,6 +460,18 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                 />
               </div>
             </div>
+
+            {!editingExpense && !selectedSupplierId && supplierName.trim() && (
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-teal-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={saveAsNewSupplier}
+                  onChange={(e) => setSaveAsNewSupplier(e.target.checked)}
+                  className="rounded text-teal-600"
+                />
+                <span>Guardar automáticamente en el Maestro de Proveedores</span>
+              </label>
+            )}
 
             <div className="grid grid-cols-3 gap-2">
               <div>
@@ -825,35 +910,63 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
           </div>
 
           {/* Payment Method */}
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Método de Pago Egresado
-              </label>
-              <select
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as any)}
-                className="w-full px-2.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-1 focus:ring-teal-600 focus:outline-hidden"
-              >
-                <option value="pago_movil">Pago Móvil</option>
-                <option value="efectivo_usd">Efectivo USD (Caja)</option>
-                <option value="efectivo_bs">Efectivo Bs (Caja)</option>
-                <option value="debito">Punto de Venta</option>
-                <option value="transferencia">Transferencia Bancaria</option>
-              </select>
+          <div className="space-y-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Condición / Método de Pago
+                </label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value as Expense['paymentMethod'])}
+                  className="w-full px-2.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:ring-1 focus:ring-teal-600 focus:outline-hidden font-medium"
+                >
+                  <option value="pago_movil">Pago Móvil</option>
+                  <option value="efectivo_usd">Efectivo USD (Caja)</option>
+                  <option value="efectivo_bs">Efectivo Bs (Caja)</option>
+                  <option value="debito">Punto de Venta</option>
+                  <option value="transferencia">Transferencia Bancaria</option>
+                  {!editingExpense && (
+                    <option value="credito">A Crédito / Cuenta por Pagar (Sin salida de caja)</option>
+                  )}
+                </select>
+              </div>
+              {paymentMethod === 'credito' ? (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Fecha de Vencimiento (Cta. por Pagar)
+                  </label>
+                  <input
+                    type="date"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-amber-50 border border-amber-300 rounded-xl text-xs font-mono focus:ring-1 focus:ring-amber-600 focus:outline-hidden"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Referencia de Pago
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ej: Ref 849201"
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:ring-1 focus:ring-teal-600 focus:outline-hidden"
+                  />
+                </div>
+              )}
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Referencia de Pago
-              </label>
-              <input
-                type="text"
-                placeholder="Ej: Ref 849201"
-                value={reference}
-                onChange={(e) => setReference(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono focus:ring-1 focus:ring-teal-600 focus:outline-hidden"
-              />
-            </div>
+
+            {paymentMethod === 'credito' && (
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-900 flex items-start gap-2">
+                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Compra a Crédito:</strong> Incrementará el stock en inventario, registrará el crédito fiscal en el Libro de Compras y creará el pasivo en <strong>Cuentas por Pagar</strong> sin descontar dinero de caja hasta que registres el pago o abono.
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Footer Actions */}
@@ -865,7 +978,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
             >
               Cancelar
             </button>
-            {isCashRegisterOpen || editingExpense ? (
+            {isCashRegisterOpen || editingExpense || paymentMethod === 'credito' ? (
               <button
                 type="submit"
                 disabled={!supplierName.trim() || rawAmount <= 0}
@@ -875,6 +988,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                 <span>
                   {editingExpense
                     ? 'Guardar Cambios de Factura'
+                    : paymentMethod === 'credito'
+                    ? `Guardar Factura a Crédito ${purchasedItems.length > 0 ? `(+${purchasedItems.length} Artículos)` : ''}`
                     : `Guardar Factura ${purchasedItems.length > 0 ? `e Ingresar ${purchasedItems.length} Artículos` : 'en Compras'}`}
                 </span>
               </button>

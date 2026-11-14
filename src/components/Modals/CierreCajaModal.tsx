@@ -18,7 +18,7 @@ import {
   Download,
   Landmark
 } from 'lucide-react';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs, formatUSD, round2 } from '../../utils/exportUtils';
 import { generateReporteZPDF, generateComprobanteCierrePDF } from '../../utils/pdfReceiptUtils';
 
 export const CierreCajaModal: React.FC = () => {
@@ -28,7 +28,9 @@ export const CierreCajaModal: React.FC = () => {
     cashShift, 
     closeCashShift, 
     sales, 
-    expenses, 
+    expenses,
+    creditNotes,
+    fiados,
     bcvRate, 
     businessInfo,
     setIsCuadreModalOpen
@@ -56,10 +58,12 @@ export const CierreCajaModal: React.FC = () => {
   if (!isCierreModalOpen || !cashShift) return null;
 
   const openedAtIso = cashShift.openedAt;
-  const shiftSales = sales.filter(s => s.status === 'completada' && s.date >= openedAtIso);
-  const shiftExpenses = expenses.filter(e => e.date >= openedAtIso);
+  const shiftSales = sales.filter(s => s.status !== 'anulada' && s.date >= openedAtIso);
+  const shiftExpenses = expenses.filter(e => e.date >= openedAtIso && e.paymentMethod !== 'credito');
+  const shiftCreditNotes = creditNotes.filter(cn => cn.date >= openedAtIso);
+  const shiftFiadoAbonos = fiados.flatMap(f => f.abonos || []).filter(a => a.date >= openedAtIso);
 
-  // Inflow in cash
+  // Inflow in cash (sales + fiado abonos in cash)
   let cashUsdInflow = 0;
   let cashBsInflow = 0;
   shiftSales.forEach(s => {
@@ -73,26 +77,36 @@ export const CierreCajaModal: React.FC = () => {
     }
   });
 
-  // Outflow in cash
-  const cashUsdOutflow = shiftExpenses
-    .filter(e => e.paymentMethod === 'efectivo_usd')
-    .reduce((acc, e) => acc + e.amountUSD, 0);
-  const cashBsOutflow = shiftExpenses
-    .filter(e => e.paymentMethod === 'efectivo_bs')
-    .reduce((acc, e) => acc + e.amountBs, 0);
+  shiftFiadoAbonos.forEach(a => {
+    if (a.paymentMethod === 'efectivo_usd') {
+      cashUsdInflow += a.amountUSD;
+    } else if (a.paymentMethod === 'efectivo_bs') {
+      cashBsInflow += a.amountBs;
+    }
+  });
+
+  // Outflow in cash (expenses + credit note refunds in cash)
+  const cashUsdOutflow = round2(
+    shiftExpenses.filter(e => e.paymentMethod === 'efectivo_usd').reduce((acc, e) => acc + e.amountUSD, 0) +
+    shiftCreditNotes.filter(cn => cn.refundMethod === 'efectivo_usd').reduce((acc, cn) => acc + cn.totalUSD, 0)
+  );
+  const cashBsOutflow = round2(
+    shiftExpenses.filter(e => e.paymentMethod === 'efectivo_bs').reduce((acc, e) => acc + e.amountBs, 0) +
+    shiftCreditNotes.filter(cn => cn.refundMethod === 'efectivo_bs').reduce((acc, cn) => acc + cn.totalBs, 0)
+  );
 
   const initialUSD = cashShift.initialCashUSD || 0;
   const initialBs = cashShift.initialCashBs || 0;
 
-  const expectedUSD = Number((initialUSD + cashUsdInflow - cashUsdOutflow).toFixed(2));
-  const expectedBs = Number((initialBs + cashBsInflow - cashBsOutflow).toFixed(2));
+  const expectedUSD = round2(initialUSD + cashUsdInflow - cashUsdOutflow);
+  const expectedBs = round2(initialBs + cashBsInflow - cashBsOutflow);
 
-  const parsedCountedUSD = parseFloat(countedUSD) || 0;
-  const parsedCountedBs = parseFloat(countedBs) || 0;
+  const parsedCountedUSD = round2(parseFloat(countedUSD) || 0);
+  const parsedCountedBs = round2(parseFloat(countedBs) || 0);
 
   const hasEnteredCounts = countedUSD !== '' || countedBs !== '';
-  const diffUSD = Number((parsedCountedUSD - expectedUSD).toFixed(2));
-  const diffBs = Number((parsedCountedBs - expectedBs).toFixed(2));
+  const diffUSD = round2(parsedCountedUSD - expectedUSD);
+  const diffBs = round2(parsedCountedBs - expectedBs);
 
   const handleCopyExpected = () => {
     setCountedUSD(expectedUSD.toFixed(2));
@@ -279,8 +293,8 @@ export const CierreCajaModal: React.FC = () => {
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1 space-y-0.5 border-t border-slate-100 pt-1 font-mono">
                     <div>Base: +${formatUSD(initialUSD)}</div>
-                    <div className="text-emerald-700">Ventas: +${formatUSD(cashUsdInflow)}</div>
-                    <div className="text-rose-600">Gastos: -${formatUSD(cashUsdOutflow)}</div>
+                    <div className="text-emerald-700">Ingresos: +${formatUSD(cashUsdInflow)}</div>
+                    <div className="text-rose-600">Egresos/NC: -${formatUSD(cashUsdOutflow)}</div>
                   </div>
                 </div>
 
@@ -292,8 +306,8 @@ export const CierreCajaModal: React.FC = () => {
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1 space-y-0.5 border-t border-slate-100 pt-1 font-mono">
                     <div>Base: +Bs {formatBs(initialBs)}</div>
-                    <div className="text-emerald-700">Ventas: +Bs {formatBs(cashBsInflow)}</div>
-                    <div className="text-rose-600">Gastos: -Bs {formatBs(cashBsOutflow)}</div>
+                    <div className="text-emerald-700">Ingresos: +Bs {formatBs(cashBsInflow)}</div>
+                    <div className="text-rose-600">Egresos/NC: -Bs {formatBs(cashBsOutflow)}</div>
                   </div>
                 </div>
               </div>

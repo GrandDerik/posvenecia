@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Users, X, DollarSign, Search, Check, AlertCircle, Calendar } from 'lucide-react';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs, formatUSD, round2, safeDiv } from '../../utils/exportUtils';
 import { FiadoRecord } from '../../types';
 
 interface VentaFiadaModalProps {
@@ -16,6 +16,7 @@ interface VentaFiadaModalProps {
     clientAddress?: string;
     initialAbonoUSD: number;
     initialAbonoBs: number;
+    abonoCurrency: 'USD' | 'Bs';
     remainingUSD: number;
   }) => void;
 }
@@ -41,22 +42,22 @@ export const VentaFiadaModal: React.FC<VentaFiadaModalProps> = ({
   if (!isOpen) return null;
 
   // Compute calculated amounts
-  const totalBs = totalUSD * bcvRate;
+  const totalBs = round2(totalUSD * bcvRate);
   const numAbono = parseFloat(abonoInput) || 0;
   
   let initialAbonoUSD = 0;
   let initialAbonoBs = 0;
 
   if (abonoCurrency === 'USD') {
-    initialAbonoUSD = Math.min(totalUSD, Math.max(0, numAbono));
-    initialAbonoBs = initialAbonoUSD * bcvRate;
+    initialAbonoUSD = round2(Math.min(totalUSD, Math.max(0, numAbono)));
+    initialAbonoBs = round2(initialAbonoUSD * bcvRate);
   } else {
-    initialAbonoBs = Math.min(totalBs, Math.max(0, numAbono));
-    initialAbonoUSD = initialAbonoBs / bcvRate;
+    initialAbonoBs = round2(Math.min(totalBs, Math.max(0, numAbono)));
+    initialAbonoUSD = round2(safeDiv(initialAbonoBs, bcvRate));
   }
 
-  const remainingUSD = Math.max(0, totalUSD - initialAbonoUSD);
-  const remainingBs = remainingUSD * bcvRate;
+  const remainingUSD = round2(Math.max(0, totalUSD - initialAbonoUSD));
+  const remainingBs = round2(remainingUSD * bcvRate);
 
   // Filter known clients from past fiados
   const matchingClients = existingFiados
@@ -84,6 +85,7 @@ export const VentaFiadaModal: React.FC<VentaFiadaModalProps> = ({
       clientAddress: clientAddress.trim(),
       initialAbonoUSD,
       initialAbonoBs,
+      abonoCurrency,
       remainingUSD
     });
   };

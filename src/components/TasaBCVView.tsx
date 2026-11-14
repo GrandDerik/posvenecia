@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   TrendingUp, 
@@ -18,7 +18,7 @@ import {
   Layers,
   Settings2
 } from 'lucide-react';
-import { formatBs, formatUSD } from '../utils/exportUtils';
+import { formatBs, formatUSD, round2, safeDiv } from '../utils/exportUtils';
 
 export const TasaBCVView: React.FC = () => {
   const { 
@@ -35,12 +35,21 @@ export const TasaBCVView: React.FC = () => {
     setBaseCurrency
   } = useApp();
 
-  // Selected consultation currency
-  const [selectedCurrencyToFetch, setSelectedCurrencyToFetch] = useState<'USD' | 'EUR'>('USD');
-  
-  // Rate inputs for manual editing
-  const [dollarRateInput, setDollarRateInput] = useState(bcvRate.toString());
-  const [euroRateInput, setEuroRateInput] = useState(bcvEuroRate.toString());
+  // Rate inputs for manual/custom editing (kept in sync with Firestore)
+  const [dollarRateInput, setDollarRateInput] = useState(bcvRate.toFixed(2));
+  const [euroRateInput, setEuroRateInput] = useState(bcvEuroRate.toFixed(2));
+
+  useEffect(() => {
+    if (bcvRate > 0) {
+      setDollarRateInput(bcvRate.toFixed(2));
+    }
+  }, [bcvRate]);
+
+  useEffect(() => {
+    if (bcvEuroRate > 0) {
+      setEuroRateInput(bcvEuroRate.toFixed(2));
+    }
+  }, [bcvEuroRate]);
   
   const [rateUpdatedSuccess, setRateUpdatedSuccess] = useState<string | null>(null);
   const [liveSuccessMessage, setLiveSuccessMessage] = useState<string | null>(null);
@@ -56,40 +65,46 @@ export const TasaBCVView: React.FC = () => {
   // IGTF / IVA calculator
   const [calcAmount, setCalcAmount] = useState<string>('100');
 
-  const handleConsultLiveBCV = async () => {
+  const handleConsultDollarBCV = async () => {
     try {
-      if (selectedCurrencyToFetch === 'USD') {
-        const rate = await fetchLiveRate();
-        setDollarRateInput(rate.toFixed(2));
-        setLiveSuccessMessage(`Tasa Dólar BCV oficial obtenida: Bs. ${formatBs(rate)}`);
-      } else {
-        const rate = await fetchLiveEuroRate();
-        setEuroRateInput(rate.toFixed(2));
-        setLiveSuccessMessage(`Tasa Euro BCV oficial obtenida: Bs. ${formatBs(rate)}`);
-      }
+      const rate = await fetchLiveRate();
+      setDollarRateInput(rate.toFixed(2));
+      setLiveSuccessMessage(`¡Tasa Dólar BCV consultada y guardada automáticamente en la nube: Bs. ${formatBs(rate)}!`);
       setTimeout(() => setLiveSuccessMessage(null), 4000);
     } catch {
-      setLiveSuccessMessage(`No se pudo conectar a la API del BCV para ${selectedCurrencyToFetch}. Puede ingresarla manualmente.`);
+      setLiveSuccessMessage('No se pudo conectar a la API del BCV para Dólar ($). Puede fijar una tasa personalizada abajo.');
+      setTimeout(() => setLiveSuccessMessage(null), 4000);
+    }
+  };
+
+  const handleConsultEuroBCV = async () => {
+    try {
+      const rate = await fetchLiveEuroRate();
+      setEuroRateInput(rate.toFixed(2));
+      setLiveSuccessMessage(`¡Tasa Euro BCV consultada y guardada automáticamente en la nube: Bs. ${formatBs(rate)}!`);
+      setTimeout(() => setLiveSuccessMessage(null), 4000);
+    } catch {
+      setLiveSuccessMessage('No se pudo conectar a la API del BCV para Euro (€). Puede fijar una tasa personalizada abajo.');
       setTimeout(() => setLiveSuccessMessage(null), 4000);
     }
   };
 
   const handleUpdateDollarRate = (e: React.FormEvent) => {
     e.preventDefault();
-    const val = parseFloat(dollarRateInput);
+    const val = round2(parseFloat(dollarRateInput));
     if (!isNaN(val) && val > 0) {
       updateBcvRate(val);
-      setRateUpdatedSuccess('¡Tasa Dólar BCV guardada exitosamente!');
+      setRateUpdatedSuccess('¡Tasa Dólar personalizada guardada exitosamente en la nube!');
       setTimeout(() => setRateUpdatedSuccess(null), 3000);
     }
   };
 
   const handleUpdateEuroRate = (e: React.FormEvent) => {
     e.preventDefault();
-    const val = parseFloat(euroRateInput);
+    const val = round2(parseFloat(euroRateInput));
     if (!isNaN(val) && val > 0) {
       updateBcvEuroRate(val);
-      setRateUpdatedSuccess('¡Tasa Euro BCV guardada exitosamente!');
+      setRateUpdatedSuccess('¡Tasa Euro personalizada guardada exitosamente en la nube!');
       setTimeout(() => setRateUpdatedSuccess(null), 3000);
     }
   };
@@ -101,30 +116,30 @@ export const TasaBCVView: React.FC = () => {
   let resultBs = 0;
 
   if (convertFrom === 'USD') {
-    resultUSD = inputAmt;
-    resultBs = inputAmt * bcvRate;
-    resultEUR = bcvEuroRate > 0 ? (resultBs / bcvEuroRate) : 0;
+    resultUSD = round2(inputAmt);
+    resultBs = round2(inputAmt * bcvRate);
+    resultEUR = round2(safeDiv(resultBs, bcvEuroRate, 0));
   } else if (convertFrom === 'EUR') {
-    resultEUR = inputAmt;
-    resultBs = inputAmt * bcvEuroRate;
-    resultUSD = bcvRate > 0 ? (resultBs / bcvRate) : 0;
+    resultEUR = round2(inputAmt);
+    resultBs = round2(inputAmt * bcvEuroRate);
+    resultUSD = round2(safeDiv(resultBs, bcvRate, 0));
   } else {
-    resultBs = inputAmt;
-    resultUSD = bcvRate > 0 ? (inputAmt / bcvRate) : 0;
-    resultEUR = bcvEuroRate > 0 ? (inputAmt / bcvEuroRate) : 0;
+    resultBs = round2(inputAmt);
+    resultUSD = round2(safeDiv(inputAmt, bcvRate, 0));
+    resultEUR = round2(safeDiv(inputAmt, bcvEuroRate, 0));
   }
 
   // Change computation
   const clientBill = parseFloat(billUSD) || 0;
   const purchaseCost = parseFloat(purchaseUSD) || 0;
-  const changeUSD = Math.max(0, clientBill - purchaseCost);
-  const changeBs = changeUSD * bcvRate;
+  const changeUSD = round2(Math.max(0, clientBill - purchaseCost));
+  const changeBs = round2(changeUSD * bcvRate);
 
   // IGTF & IVA computations
   const amountToCalculate = parseFloat(calcAmount) || 0;
-  const igtf3Pct = amountToCalculate * 0.03;
-  const iva16Pct = amountToCalculate * 0.16;
-  const totalWithTax = amountToCalculate + iva16Pct + igtf3Pct;
+  const igtf3Pct = round2(amountToCalculate * 0.03);
+  const iva16Pct = round2(amountToCalculate * 0.16);
+  const totalWithTax = round2(amountToCalculate + iva16Pct + igtf3Pct);
 
   return (
     <div className="max-w-6xl mx-auto px-3 sm:px-6 py-5 space-y-5">
@@ -229,7 +244,7 @@ export const TasaBCVView: React.FC = () => {
         {/* Left Column: Tasa BCV Live & Manual Updater (7 Cols) */}
         <div className="lg:col-span-7 space-y-6">
           
-          {/* Rate Updater Box with Live Sync (Choice of Dollar or Euro) */}
+          {/* Rate Updater Box with Live Sync (Dedicated Buttons for Dollar & Euro) */}
           <div className="bg-white/95 p-5 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <div>
@@ -238,33 +253,30 @@ export const TasaBCVView: React.FC = () => {
                   <span>Consultar Tasa Oficial BCV en Vivo</span>
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Seleccione si desea consultar la cotización oficial del Dólar o del Euro
+                  Consulta independiente y guardado automático en la nube para Dólar ($) o Euro (€)
                 </p>
               </div>
 
-              {/* Botón selector y de consulta en vivo */}
+              {/* Dos botones separados: Consultar Dólar BCV y Consultar Euro BCV */}
               <div className="flex items-center gap-2 flex-wrap">
-                <select
-                  value={selectedCurrencyToFetch}
-                  onChange={(e) => setSelectedCurrencyToFetch(e.target.value as any)}
-                  className="px-2.5 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-bold text-slate-800 cursor-pointer"
+                <button
+                  type="button"
+                  disabled={isFetchingLiveRate}
+                  onClick={handleConsultDollarBCV}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#D96B27] hover:bg-[#C25A1A] disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer whitespace-nowrap"
                 >
-                  <option value="USD">Dólar ($ BCV)</option>
-                  <option value="EUR">Euro (€ BCV)</option>
-                </select>
+                  <RotateCw className={`w-3.5 h-3.5 ${isFetchingLiveRate ? 'animate-spin' : ''}`} />
+                  <span>{isFetchingLiveRate ? 'Consultando $...' : 'Consultar Dólar BCV'}</span>
+                </button>
 
                 <button
                   type="button"
-                  disabled={isFetchingLiveRate || isFetchingLiveEuroRate}
-                  onClick={handleConsultLiveBCV}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] transition-all cursor-pointer whitespace-nowrap"
+                  disabled={isFetchingLiveEuroRate}
+                  onClick={handleConsultEuroBCV}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] transition-all cursor-pointer whitespace-nowrap"
                 >
-                  <RotateCw className={`w-4 h-4 ${(isFetchingLiveRate || isFetchingLiveEuroRate) ? 'animate-spin' : ''}`} />
-                  <span>
-                    {(isFetchingLiveRate || isFetchingLiveEuroRate) 
-                      ? 'Consultando...' 
-                      : `Consultar ${selectedCurrencyToFetch === 'USD' ? 'Dólar' : 'Euro'} BCV`}
-                  </span>
+                  <RotateCw className={`w-3.5 h-3.5 ${isFetchingLiveEuroRate ? 'animate-spin' : ''}`} />
+                  <span>{isFetchingLiveEuroRate ? 'Consultando €...' : 'Consultar Euro BCV'}</span>
                 </button>
               </div>
             </div>
@@ -283,15 +295,15 @@ export const TasaBCVView: React.FC = () => {
               </div>
             )}
 
-            {/* Dual Manual Adjustment Forms */}
+            {/* Dual Manual / Custom Rate Forms */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
               
-              {/* Form 1: Tasa Dólar USD */}
+              {/* Form 1: Tasa Dólar USD Personalizada / Manual */}
               <div className="bg-[#FFF3E8] border border-[#F5D3B3] rounded-2xl p-3.5 space-y-2">
                 <div className="flex items-center justify-between text-xs font-bold text-[#7C3A0B]">
                   <span className="flex items-center gap-1">
                     <DollarSign className="w-4 h-4 text-[#D96B27]" />
-                    Tasa Dólar ($)
+                    Tasa Dólar ($) Personalizada
                   </span>
                   <span className="text-[11px] text-[#9A4B12] font-mono-numbers">Actual: Bs {formatBs(bcvRate)}</span>
                 </div>
@@ -312,17 +324,17 @@ export const TasaBCVView: React.FC = () => {
                     type="submit"
                     className="w-full py-1.5 bg-[#D96B27] hover:bg-[#C25A1A] text-white rounded-xl text-xs font-bold shadow-2xs transition-colors cursor-pointer"
                   >
-                    Guardar Tasa Dólar
+                    Guardar Tasa Dólar Personalizada
                   </button>
                 </form>
               </div>
 
-              {/* Form 2: Tasa Euro EUR */}
+              {/* Form 2: Tasa Euro EUR Personalizada / Manual */}
               <div className="bg-[#EBF3FE] border border-[#C5DCFC] rounded-2xl p-3.5 space-y-2">
                 <div className="flex items-center justify-between text-xs font-bold text-[#1E3A8A]">
                   <span className="flex items-center gap-1">
                     <Euro className="w-4 h-4 text-blue-600" />
-                    Tasa Euro (€)
+                    Tasa Euro (€) Personalizada
                   </span>
                   <span className="text-[11px] text-[#1D4ED8] font-mono-numbers">Actual: Bs {formatBs(bcvEuroRate)}</span>
                 </div>
@@ -343,7 +355,7 @@ export const TasaBCVView: React.FC = () => {
                     type="submit"
                     className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-2xs transition-colors cursor-pointer"
                   >
-                    Guardar Tasa Euro
+                    Guardar Tasa Euro Personalizada
                   </button>
                 </form>
               </div>

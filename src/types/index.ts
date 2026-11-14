@@ -82,6 +82,7 @@ export interface PaymentDetails {
   fiaoClientAddress?: string;
   fiaoInitialAbonoUSD?: number;
   fiaoInitialAbonoBs?: number;
+  fiaoInitialAbonoCurrency?: 'USD' | 'Bs';
   fiaoRemainingUSD?: number;
   casheaInstallments?: number;
   combinedBreakdown?: {
@@ -130,6 +131,7 @@ export interface Sale {
   status: 'completada' | 'anulada' | 'devuelta';
   creditNoteId?: string;
   refundedUSD?: number;
+  returnedQuantities?: Record<string, number>;
   cashierName: string;
   syncStatus?: 'synced' | 'pending_sync';
 }
@@ -149,6 +151,7 @@ export interface CreditNote {
   controlNumber: string; // Ej: "00-00001" (SENIAT)
   saleId: string;
   originalInvoiceNumber: string;
+  originalControlNumber?: string;
   date: string; // ISO string
   clientName: string;
   clientRIF: string;
@@ -214,6 +217,7 @@ export interface Expense {
   date: string;
   invoiceNumber: string;
   controlNumber: string;
+  supplierId?: string;
   supplierName: string;
   supplierRIF: string;
   supplierPhone?: string;
@@ -226,7 +230,8 @@ export interface Expense {
   retencionIVABs: number; // Retención 75% o 100%
   retencionISLRBs: number;
   bcvRate: number;
-  paymentMethod: 'efectivo_usd' | 'efectivo_bs' | 'pago_movil' | 'debito' | 'transferencia';
+  paymentMethod: 'efectivo_usd' | 'efectivo_bs' | 'pago_movil' | 'debito' | 'transferencia' | 'credito';
+  dueDate?: string;
   reference?: string;
   items?: ExpenseItem[];
   costStrategy?: PurchaseCostStrategy;
@@ -348,6 +353,7 @@ export interface BusinessInfo {
 
 export interface CuentaPorPagar {
   id: string;
+  supplierId?: string;
   supplierName: string;
   supplierRIF?: string;
   supplierPhone?: string;
@@ -387,6 +393,7 @@ export interface GastoOperativo {
   date: string; // Fecha de emisión/asignación ISO
   dueDate: string; // Fecha límite de pago ISO
   // Datos fiscales y de contacto del proveedor/emisor:
+  supplierId?: string;
   supplierName?: string;
   supplierRIF?: string;
   supplierPhone?: string;
@@ -452,5 +459,51 @@ export interface CashShift {
   transactionsCount?: number;
   totalExpensesUSD?: number;
   totalExpensesBs?: number;
+  totalCreditNotesUSD?: number;
+  totalCreditNotesBs?: number;
+  totalFiadoAbonosUSD?: number;
+  totalFiadoAbonosBs?: number;
   closedBy?: string;
+}
+
+export type KardexMovementType =
+  | 'entrada_compra'
+  | 'venta'
+  | 'nota_credito'
+  | 'merma'
+  | 'ajuste_manual';
+
+export interface KardexEntry {
+  id: string;
+  date: string;
+  productId: string;
+  productCode: string;
+  productName: string;
+  category: string;
+  type: KardexMovementType;
+  quantityChange: number;
+  previousStock: number;
+  newStock: number;
+  unitCostUSD: number;
+  totalCostUSD: number;
+  valuationMethod: PurchaseCostStrategy;
+  fifoBalanceUSD?: number;
+  avgCostUSD?: number;
+  avgBalanceUSD?: number;
+  reference?: string;
+  notes?: string;
+  userName?: string;
+}
+
+export interface Supplier {
+  id: string;
+  name: string;
+  rif: string;
+  phone: string;
+  address?: string;
+  email?: string;
+  creditDays: number;
+  accumulatedBalanceUSD: number;
+  notes?: string;
+  createdAt: string;
 }

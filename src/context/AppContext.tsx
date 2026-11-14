@@ -22,7 +22,11 @@ import {
   InventoryDischarge,
   InventoryDischargeReason,
   ProductBatch,
-  Abono
+  Abono,
+  KardexEntry,
+  KardexMovementType,
+  PurchaseCostStrategy,
+  Supplier
 } from '../types';
 import { fetchLiveBCVRate, fetchLiveBCVEuroRate } from '../utils/bcvFetcher';
 import {
@@ -46,9 +50,14 @@ import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { auth } from '../config/firebaseConfig';
 import {
   subscribeToStoreRealtime,
+  subscribeToTransactionsRealtime,
+  computeTransactionsDateRange,
+  TransactionsDatePreset,
+  TransactionsDateRange,
   saveSaleAtomic,
   cancelSaleAtomic,
   saveProductToFirestore,
+  saveProductWithKardexAtomic,
   deleteProductFromFirestore,
   adjustProductStockInFirestore,
   saveExpenseToFirestore,
@@ -56,6 +65,8 @@ import {
   saveFiadoToFirestore,
   saveClientToFirestore,
   deleteClientFromFirestore,
+  saveSupplierToFirestore,
+  deleteSupplierFromFirestore,
   saveCuentaPorPagarToFirestore,
   deleteCuentaPorPagarFromFirestore,
   saveGastoOperativoToFirestore,
@@ -77,6 +88,7 @@ import {
   restoreStoreDataToFirestore,
   clearUserFirestoreCollections
 } from '../services/firestoreSyncService';
+import { round2, getLocalDateStr } from '../utils/exportUtils';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
 export type FirestoreSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated';
@@ -85,6 +97,198 @@ const devLog = (...args: unknown[]) => {
   if (import.meta.env.DEV) {
     console.info(...args);
   }
+};
+
+const getNextSequenceNumber = (existingValues: (string | undefined)[], prefix: string): number => {
+  let maxSeq = 0;
+  for (const val of existingValues) {
+    if (!val || !val.startsWith(prefix)) continue;
+    const suffix = val.slice(prefix.length);
+    const parsed = parseInt(suffix, 10);
+    if (!isNaN(parsed) && parsed > maxSeq) {
+      maxSeq = parsed;
+    }
+  }
+  return maxSeq + 1;
+};
+
+const deductFifoBatches = (
+  batches: ProductBatch[] | undefined,
+  qtyToDeduct: number,
+  currentProduct: Product,
+  bcvRate: number,
+  baseCurrency: BaseCurrency
+): {
+  batches: ProductBatch[] | undefined;
+  priceUSD?: number;
+  costUSD?: number;
+  priceBsFixed?: number;
+} => {
+  if (!batches || batches.length === 0 || qtyToDeduct <= 0) {
+    return { batches };
+  }
+  const previousFirstId = batches[0]?.id;
+  let remaining = qtyToDeduct;
+  const nextBatches: ProductBatch[] = [];
+  for (const b of batches) {
+    if (remaining <= 0) {
+      nextBatches.push(b);
+    } else if (b.quantity > remaining) {
+      const nextQty = round2(b.quantity - remaining);
+      if (nextQty > 0) {
+        nextBatches.push({ ...b, quantity: nextQty });
+      }
+      remaining = 0;
+    } else {
+      remaining = round2(remaining - b.quantity);
+    }
+  }
+
+  let nextPriceUSD: number | undefined;
+  let nextCostUSD: number | undefined;
+  let nextPriceBsFixed: number | undefined;
+
+  if (nextBatches.length > 0 && nextBatches[0].id !== previousFirstId) {
+    const activeBatch = nextBatches[0];
+    if (activeBatch.targetPriceUSD && activeBatch.targetPriceUSD > 0 && activeBatch.targetPriceUSD !== currentProduct.priceUSD) {
+      nextPriceUSD = round2(activeBatch.targetPriceUSD);
+      if (baseCurrency === 'VED' && bcvRate > 0) {
+        nextPriceBsFixed = round2(nextPriceUSD * bcvRate);
+      }
+    }
+    if (activeBatch.costUSD > 0 && activeBatch.costUSD !== currentProduct.costUSD) {
+      nextCostUSD = round2(activeBatch.costUSD);
+    }
+  }
+
+  return {
+    batches: nextBatches,
+    priceUSD: nextPriceUSD,
+    costUSD: nextCostUSD,
+    priceBsFixed: nextPriceBsFixed
+  };
+};
+
+const restoreFifoBatches = (
+  batches: ProductBatch[] | undefined,
+  qtyToRestore: number,
+  fallbackProduct: Product,
+  referenceLabel: string
+): ProductBatch[] | undefined => {
+  if (qtyToRestore <= 0) return batches;
+  if (batches === undefined) return undefined;
+  if (batches.length > 0) {
+    const updated = [...batches];
+    updated[0] = {
+      ...updated[0],
+      quantity: round2(updated[0].quantity + qtyToRestore)
+    };
+    return updated;
+  }
+  return [
+    {
+      id: 'batch-ret-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
+      invoiceNumber: referenceLabel,
+      date: new Date().toISOString(),
+      quantity: round2(qtyToRestore),
+      initialQuantity: round2(qtyToRestore),
+      costUSD: round2(fallbackProduct.costUSD || 0),
+      targetPriceUSD: round2(fallbackProduct.priceUSD || 0)
+    }
+  ];
+};
+
+const computeFifoValuationUSD = (prod: Product, stockOverride?: number): number => {
+  const targetStock = stockOverride !== undefined ? stockOverride : (prod.stock || 0);
+  if (prod.batches && prod.batches.length > 0) {
+    return round2(
+      prod.batches.reduce((sum, b) => sum + (Math.max(0, b.quantity || 0) * Math.max(0, b.costUSD || 0)), 0)
+    );
+  }
+  return round2(Math.max(0, targetStock) * Math.max(0, prod.costUSD || 0));
+};
+
+const buildKardexEntry = (params: {
+  product: Product;
+  type: KardexMovementType;
+  quantityChange: number;
+  previousStock: number;
+  newStock: number;
+  unitCostUSD: number;
+  valuationMethod: PurchaseCostStrategy;
+  reference?: string;
+  notes?: string;
+  userName?: string;
+  date?: string;
+}): KardexEntry => {
+  const safeUnitCost = round2(Math.max(0, params.unitCostUSD));
+  const safeAvgCost = round2(Math.max(0, params.product.costUSD || safeUnitCost));
+  const safeNewStock = Math.max(0, round2(params.newStock));
+  return {
+    id: `kdx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    date: params.date || new Date().toISOString(),
+    productId: params.product.id,
+    productCode: params.product.code || '',
+    productName: params.product.name || 'Producto',
+    category: params.product.category || 'General',
+    type: params.type,
+    quantityChange: round2(params.quantityChange),
+    previousStock: round2(params.previousStock),
+    newStock: safeNewStock,
+    unitCostUSD: safeUnitCost,
+    totalCostUSD: round2(Math.abs(params.quantityChange) * safeUnitCost),
+    valuationMethod: params.valuationMethod,
+    fifoBalanceUSD: computeFifoValuationUSD(params.product, safeNewStock),
+    avgCostUSD: safeAvgCost,
+    avgBalanceUSD: round2(safeNewStock * safeAvgCost),
+    reference: params.reference,
+    notes: params.notes,
+    userName: params.userName
+  };
+};
+
+const normalizeRifKey = (rif?: string): string =>
+  (rif || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+const matchSupplierRecord = (
+  suppliersList: Supplier[],
+  supplierId?: string,
+  supplierRIF?: string,
+  supplierName?: string
+): Supplier | undefined => {
+  if (supplierId) {
+    const byId = suppliersList.find(s => s.id === supplierId);
+    if (byId) return byId;
+  }
+  const cleanRif = normalizeRifKey(supplierRIF);
+  if (cleanRif && cleanRif.length > 2 && cleanRif !== 'NA') {
+    const byRif = suppliersList.find(s => normalizeRifKey(s.rif) === cleanRif);
+    if (byRif) return byRif;
+  }
+  const cleanName = (supplierName || '').trim().toLowerCase();
+  if (cleanName) {
+    return suppliersList.find(s => (s.name || '').trim().toLowerCase() === cleanName);
+  }
+  return undefined;
+};
+
+const computeSupplierAccumulatedBalance = (
+  supplier: Supplier,
+  cuentasList: CuentaPorPagar[]
+): number => {
+  const supRif = normalizeRifKey(supplier.rif);
+  const supName = (supplier.name || '').trim().toLowerCase();
+  return round2(
+    cuentasList
+      .filter(c => {
+        if (c.status === 'pagada' || (c.remainingUSD || 0) <= 0.009) return false;
+        if (c.supplierId) return c.supplierId === supplier.id;
+        const cRif = normalizeRifKey(c.supplierRIF);
+        if (supRif && supRif.length > 2 && cRif && cRif === supRif) return true;
+        return supName.length > 0 && (c.supplierName || '').trim().toLowerCase() === supName;
+      })
+      .reduce((sum, c) => sum + (c.remainingUSD || 0), 0)
+  );
 };
 
 /**
@@ -122,6 +326,9 @@ interface AppContextType {
   rateHistory: { date: string; rate: number }[];
   fetchLiveRate: () => Promise<number>;
   isFetchingLiveRate: boolean;
+  bcvLastUpdatedDate: string | null;
+  bcvLastUpdatedAt: string | null;
+  isBcvRateUpdatedToday: boolean;
 
   // BCV Rate (Euro)
   bcvEuroRate: number;
@@ -172,7 +379,11 @@ interface AppContextType {
 
   // Sales
   sales: Sale[];
-  completeSale: (clientData: { name: string; rif: string; phone?: string; address?: string }, paymentDetails: PaymentDetails) => Sale;
+  completeSale: (
+    clientData: { name: string; rif: string; phone?: string; address?: string },
+    paymentDetails: PaymentDetails,
+    fiscalCorrelatives: { invoiceNumber: string; controlNumber: string }
+  ) => Sale;
   cancelSale: (saleId: string) => void;
   updateSale: (sale: Sale) => void;
   deleteSale: (saleId: string, restoreStock?: boolean) => void;
@@ -186,6 +397,10 @@ interface AppContextType {
     reason: string;
     refundMethod: PaymentMethod;
     items: { productId: string; quantity: number }[];
+    creditNoteNumber: string;
+    controlNumber: string;
+    originalInvoiceNumber?: string;
+    originalControlNumber?: string;
   }) => Promise<CreditNote>;
   deleteCreditNote: (id: string) => void;
   isCreditNoteModalOpen: boolean;
@@ -217,6 +432,21 @@ interface AppContextType {
   addExpense: (expense: Omit<Expense, 'id'>) => void;
   updateExpense: (updated: Expense) => void;
   deleteExpense: (id: string) => void;
+
+  // Date-Range Query Optimization & On-Demand Historical Loading (Sales & Expenses)
+  transactionsPreset: TransactionsDatePreset;
+  transactionsDateRange: TransactionsDateRange | null;
+  isLoadingHistory: boolean;
+  setTransactionsDateFilter: (preset: TransactionsDatePreset, customStart?: string, customEnd?: string) => void;
+
+  // Kardex de Inventario
+  kardex: KardexEntry[];
+
+  // Maestro de Proveedores
+  suppliers: Supplier[];
+  addSupplier: (data: Omit<Supplier, 'id' | 'createdAt' | 'accumulatedBalanceUSD'> & { accumulatedBalanceUSD?: number }) => Supplier;
+  updateSupplier: (updated: Supplier) => void;
+  deleteSupplier: (id: string) => void;
 
   // Fiados
   fiados: FiadoRecord[];
@@ -360,9 +590,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // BCV Rate states (synced via Cloud Firestore businessProfile)
   const [bcvRate, setBcvRateState] = useState<number>(INITIAL_BCV_RATE);
-  const [rateHistory, setRateHistory] = useState<{ date: string; rate: number }[]>(() => [
-    { date: new Date().toISOString().split('T')[0], rate: INITIAL_BCV_RATE }
-  ]);
+  const [rateHistory, setRateHistory] = useState<{ date: string; rate: number }[]>([]);
+  const [bcvLastUpdatedDate, setBcvLastUpdatedDate] = useState<string | null>(null);
+  const [bcvLastUpdatedAt, setBcvLastUpdatedAt] = useState<string | null>(null);
   const [isFetchingLiveRate, setIsFetchingLiveRate] = useState(false);
 
   // BCV Euro Rate
@@ -372,6 +602,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Base Currency (USD vs VED)
   const [baseCurrency, setBaseCurrencyState] = useState<BaseCurrency>('USD');
 
+  const todayLocalYMD = getLocalDateStr();
+  const isBcvRateUpdatedToday =
+    bcvLastUpdatedDate === todayLocalYMD ||
+    rateHistory.some(h => h.date === todayLocalYMD);
+
   // Business collections (exclusively populated via live Firestore onSnapshot)
   const [products, setProducts] = useState<Product[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
@@ -380,6 +615,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [clients, setClients] = useState<Client[]>([]);
   const [cuentasPorPagar, setCuentasPorPagar] = useState<CuentaPorPagar[]>([]);
   const [gastosOperativos, setGastosOperativos] = useState<GastoOperativo[]>([]);
+  const [kardex, setKardex] = useState<KardexEntry[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(DEFAULT_BUSINESS_INFO);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
 
@@ -460,11 +697,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Network Status
   const { isOnline } = useNetworkStatus();
 
-  // Realtime Cloud Database (Firestore) status and unsubscribe ref
+  // Realtime Cloud Database (Firestore) status and unsubscribe refs
   const [firestoreSyncStatus, setFirestoreSyncStatus] = useState<FirestoreSyncStatus>('unauthenticated');
   const firestoreUnsubRef = useRef<(() => void) | null>(null);
+  const transactionsUnsubRef = useRef<(() => void) | null>(null);
   const activeFirestoreUidRef = useRef<string | null>(null);
   const syncToGoogleDriveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
+
+  // Transactions Date-Range Optimization State (Default: Mes Actual)
+  const [transactionsPreset, setTransactionsPreset] = useState<TransactionsDatePreset>('current_month');
+  const [transactionsDateRange, setTransactionsDateRange] = useState<TransactionsDateRange | null>(() =>
+    computeTransactionsDateRange('current_month')
+  );
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   // Ref with latest state values
   const latestDataRef = useRef({
@@ -479,6 +724,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customCategories,
     bcvRate,
     bcvEuroRate,
+    rateHistory,
     googleUser,
     cashShift,
     cashShiftHistory
@@ -497,6 +743,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customCategories,
       bcvRate,
       bcvEuroRate,
+      rateHistory,
       googleUser,
       cashShift,
       cashShiftHistory
@@ -521,13 +768,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setGastosOperativos([]);
     setCreditNotes([]);
     setInventoryDischarges([]);
+    setKardex([]);
+    setSuppliers([]);
     setCashShift(null);
     setCashShiftHistory([]);
     setBusinessInfo(DEFAULT_BUSINESS_INFO);
     setCustomCategories([]);
     setBcvRateState(INITIAL_BCV_RATE);
     setBcvEuroRateState(INITIAL_BCV_EURO_RATE);
-    setRateHistory([{ date: new Date().toISOString().split('T')[0], rate: INITIAL_BCV_RATE }]);
+    setRateHistory([]);
+    setBcvLastUpdatedDate(null);
+    setBcvLastUpdatedAt(null);
+    setTransactionsPreset('current_month');
+    setTransactionsDateRange(computeTransactionsDateRange('current_month'));
+    setIsLoadingHistory(false);
     setBaseCurrencyState('USD');
     setManagerPin('1234');
     setLastDriveSyncTime(null);
@@ -563,18 +817,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Exchange Rate & Profile Settings (Live Firestore Sync)
   const updateBcvRate = useCallback((newRate: number) => {
     setBcvRateState(newRate);
-    const todayStr = new Date().toISOString().split('T')[0];
-    setRateHistory(prev => {
-      const updatedHistory = [...prev.filter(h => h.date !== todayStr), { date: todayStr, rate: newRate }];
-      const uid = getActiveUid();
-      if (uid) {
-        saveBusinessProfileToFirestore(uid, {
-          bcvRate: newRate,
-          rateHistory: updatedHistory
-        }).catch(e => console.error('Firestore updateBcvRate error:', e));
-      }
-      return updatedHistory;
-    });
+    const todayStr = getLocalDateStr();
+    const nowIso = new Date().toISOString();
+    const prevHistory = latestDataRef.current.rateHistory || [];
+    const updatedHistory = [...prevHistory.filter(h => h.date !== todayStr), { date: todayStr, rate: newRate }];
+    setRateHistory(updatedHistory);
+    setBcvLastUpdatedDate(todayStr);
+    setBcvLastUpdatedAt(nowIso);
+
+    const uid = getActiveUid();
+    if (uid) {
+      saveBusinessProfileToFirestore(uid, {
+        bcvRate: newRate,
+        rateHistory: updatedHistory,
+        bcvLastUpdatedDate: todayStr,
+        bcvLastUpdatedAt: nowIso
+      }).catch(e => console.error('Firestore updateBcvRate error:', e));
+    }
   }, [getActiveUid]);
 
   const fetchLiveRate = async (): Promise<number> => {
@@ -667,9 +926,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const now = new Date();
     const timeStr = now.toLocaleDateString('es-VE') + ' ' + now.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
 
-    const openedAtIso = cashShift?.openedAt || new Date().toISOString().split('T')[0];
-    const shiftSales = sales.filter(s => s.status === 'completada' && s.date >= openedAtIso);
-    const shiftExpenses = expenses.filter(e => e.date >= openedAtIso);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const openedAtIso = cashShift?.openedAt || startOfToday.toISOString();
+
+    const shiftSales = sales.filter(s => s.status !== 'anulada' && s.date >= openedAtIso);
+    const shiftExpenses = expenses.filter(e => e.date >= openedAtIso && e.paymentMethod !== 'credito');
+    const shiftCreditNotes = creditNotes.filter(cn => cn.date >= openedAtIso);
+    const shiftFiadoAbonos = fiados.flatMap(f => f.abonos || []).filter(a => a.date >= openedAtIso);
 
     let cashUsdInflow = 0;
     let cashBsInflow = 0;
@@ -684,37 +948,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    const cashUsdOutflow = shiftExpenses
+    let fiadoAbonosCashUSD = 0;
+    let fiadoAbonosCashBs = 0;
+    let totalFiadoAbonosUSD = 0;
+    let totalFiadoAbonosBs = 0;
+    shiftFiadoAbonos.forEach(a => {
+      totalFiadoAbonosUSD += a.amountUSD;
+      totalFiadoAbonosBs += a.amountBs;
+      if (a.paymentMethod === 'efectivo_usd') {
+        fiadoAbonosCashUSD += a.amountUSD;
+      } else if (a.paymentMethod === 'efectivo_bs') {
+        fiadoAbonosCashBs += a.amountBs;
+      }
+    });
+
+    const cashUsdExpOutflow = shiftExpenses
       .filter(e => e.paymentMethod === 'efectivo_usd')
       .reduce((acc, e) => acc + e.amountUSD, 0);
-    const cashBsOutflow = shiftExpenses
+    const cashBsExpOutflow = shiftExpenses
       .filter(e => e.paymentMethod === 'efectivo_bs')
       .reduce((acc, e) => acc + e.amountBs, 0);
+
+    const cashUsdRefundOutflow = shiftCreditNotes
+      .filter(cn => cn.refundMethod === 'efectivo_usd')
+      .reduce((acc, cn) => acc + cn.totalUSD, 0);
+    const cashBsRefundOutflow = shiftCreditNotes
+      .filter(cn => cn.refundMethod === 'efectivo_bs')
+      .reduce((acc, cn) => acc + cn.totalBs, 0);
 
     const initialUSD = cashShift?.initialCashUSD || 0;
     const initialBs = cashShift?.initialCashBs || 0;
 
-    const expectedCashUSD = Number((initialUSD + cashUsdInflow - cashUsdOutflow).toFixed(2));
-    const expectedCashBs = Number((initialBs + cashBsInflow - cashBsOutflow).toFixed(2));
+    const expectedCashUSD = round2(initialUSD + cashUsdInflow + fiadoAbonosCashUSD - cashUsdExpOutflow - cashUsdRefundOutflow);
+    const expectedCashBs = round2(initialBs + cashBsInflow + fiadoAbonosCashBs - cashBsExpOutflow - cashBsRefundOutflow);
 
-    const safeCountedUSD = Number(countedUSD) || 0;
-    const safeCountedBs = Number(countedBs) || 0;
+    const safeCountedUSD = round2(Number(countedUSD) || 0);
+    const safeCountedBs = round2(Number(countedBs) || 0);
 
-    const diffUSD = Number((safeCountedUSD - expectedCashUSD).toFixed(2));
-    const diffBs = Number((safeCountedBs - expectedCashBs).toFixed(2));
+    const diffUSD = round2(safeCountedUSD - expectedCashUSD);
+    const diffBs = round2(safeCountedBs - expectedCashBs);
 
-    const totalSalesUSD = Number(shiftSales.reduce((acc, s) => acc + s.totalUSD, 0).toFixed(2));
-    const totalSalesBs = Number(shiftSales.reduce((acc, s) => acc + s.totalBs, 0).toFixed(2));
+    const totalCreditNotesUSD = round2(shiftCreditNotes.reduce((acc, cn) => acc + cn.totalUSD, 0));
+    const totalCreditNotesBs = round2(shiftCreditNotes.reduce((acc, cn) => acc + cn.totalBs, 0));
+
+    const totalSalesUSD = round2(shiftSales.reduce((acc, s) => acc + s.totalUSD, 0) - totalCreditNotesUSD);
+    const totalSalesBs = round2(shiftSales.reduce((acc, s) => acc + s.totalBs, 0) - totalCreditNotesBs);
     const transactionsCount = shiftSales.length;
-    const totalExpensesUSD = Number(shiftExpenses.reduce((acc, e) => acc + e.amountUSD, 0).toFixed(2));
-    const totalExpensesBs = Number(shiftExpenses.reduce((acc, e) => acc + e.amountBs, 0).toFixed(2));
+    const totalExpensesUSD = round2(shiftExpenses.reduce((acc, e) => acc + e.amountUSD, 0));
+    const totalExpensesBs = round2(shiftExpenses.reduce((acc, e) => acc + e.amountBs, 0));
 
     const salesBreakdown: Record<string, { usd: number; bs: number }> = {};
     shiftSales.forEach(s => {
       const m = s.paymentMethod;
       if (!salesBreakdown[m]) salesBreakdown[m] = { usd: 0, bs: 0 };
-      salesBreakdown[m].usd = Number((salesBreakdown[m].usd + s.totalUSD).toFixed(2));
-      salesBreakdown[m].bs = Number((salesBreakdown[m].bs + s.totalBs).toFixed(2));
+      salesBreakdown[m].usd = round2(salesBreakdown[m].usd + s.totalUSD);
+      salesBreakdown[m].bs = round2(salesBreakdown[m].bs + s.totalBs);
     });
 
     const closedShift: CashShift = {
@@ -743,7 +1031,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       salesBreakdown,
       transactionsCount,
       totalExpensesUSD,
-      totalExpensesBs
+      totalExpensesBs,
+      totalCreditNotesUSD,
+      totalCreditNotesBs,
+      totalFiadoAbonosUSD: round2(totalFiadoAbonosUSD),
+      totalFiadoAbonosBs: round2(totalFiadoAbonosBs)
     };
 
     setCashShift(closedShift);
@@ -765,7 +1057,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return closedShift;
-  }, [cashShift, sales, expenses, getActiveUid, googleUser?.name, setIsCierreModalOpen]);
+  }, [cashShift, sales, expenses, creditNotes, fiados, getActiveUid, googleUser?.name, setIsCierreModalOpen]);
 
   /**
    * Build current database payload for optional Google Drive / JSON export
@@ -982,6 +1274,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clients: payload.clients || [],
       cuentasPorPagar: payload.cuentasPorPagar || [],
       gastosOperativos: payload.gastosOperativos || [],
+      suppliers: payload.suppliers || [],
       cashShiftHistory: payload.cashShiftHistory || [],
       businessInfo: payload.businessInfo || DEFAULT_BUSINESS_INFO,
       bcvRate: payload.bcvRate || bcvRate,
@@ -992,6 +1285,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return true;
   }, [bcvEuroRate, bcvRate, getActiveUid]);
+
+  const setTransactionsDateFilter = useCallback(
+    (preset: TransactionsDatePreset, customStart?: string, customEnd?: string) => {
+      const nextRange = computeTransactionsDateRange(preset, customStart, customEnd);
+      setTransactionsPreset(preset);
+      setTransactionsDateRange(nextRange);
+    },
+    []
+  );
 
   /**
    * Attaches live onSnapshot subscriptions strictly scoped to users/{uid}/...
@@ -1015,14 +1317,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setProducts(newProds);
         setFirestoreSyncStatus('synced');
       },
-      onSales: (newSales) => setSales(newSales),
-      onExpenses: (newExpenses) => setExpenses(newExpenses),
       onFiados: (newFiados) => setFiados(newFiados),
       onClients: (newClients) => setClients(newClients),
       onCuentasPorPagar: (newCPP) => setCuentasPorPagar(newCPP),
       onGastosOperativos: (newGastos) => setGastosOperativos(newGastos),
       onCreditNotes: (newNotes) => setCreditNotes(newNotes),
       onInventoryDischarges: (newDischarges) => setInventoryDischarges(newDischarges),
+      onKardex: (entries) => setKardex(entries),
+      onSuppliers: (list) => setSuppliers(list),
       onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
       onCashRegisterStatus: (status: CashRegisterStatusDoc) => {
         devLog(`[PosVenecia Realtime] Caja sincronizada en vivo: ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
@@ -1034,6 +1336,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (typeof profile.bcvEuroRate === 'number') setBcvEuroRateState(profile.bcvEuroRate);
         if (profile.baseCurrency) setBaseCurrencyState(profile.baseCurrency);
         if (profile.rateHistory) setRateHistory(profile.rateHistory);
+        if (profile.bcvLastUpdatedDate) {
+          setBcvLastUpdatedDate(profile.bcvLastUpdatedDate);
+        } else if (profile.rateHistory?.some(h => h.date === getLocalDateStr())) {
+          setBcvLastUpdatedDate(getLocalDateStr());
+        } else {
+          setBcvLastUpdatedDate(null);
+        }
+        setBcvLastUpdatedAt(profile.bcvLastUpdatedAt || null);
         if (profile.customCategories) setCustomCategories(profile.customCategories);
         if (profile.managerPin) setManagerPin(profile.managerPin);
       },
@@ -1044,6 +1354,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setFirestoreSyncStatus('synced');
   }, []);
+
+  // Re-subscribes ONLY `sales` and `expenses` when user switches date filter or logs in,
+  // ensuring active cash shift boundaries are always covered without streaming unbounded months.
+  const activeShiftOpenedYMD = cashShift?.isOpen && cashShift.openedAt
+    ? getLocalDateStr(cashShift.openedAt)
+    : null;
+
+  useEffect(() => {
+    const uid = googleUser?.uid;
+    if (!uid) {
+      if (transactionsUnsubRef.current) {
+        transactionsUnsubRef.current();
+        transactionsUnsubRef.current = null;
+      }
+      setIsLoadingHistory(false);
+      return;
+    }
+
+    if (transactionsUnsubRef.current) {
+      transactionsUnsubRef.current();
+      transactionsUnsubRef.current = null;
+    }
+
+    let effectiveRange = transactionsDateRange;
+    if (
+      effectiveRange &&
+      activeShiftOpenedYMD &&
+      (transactionsPreset === 'current_month' || transactionsPreset === 'today') &&
+      activeShiftOpenedYMD < effectiveRange.startDate
+    ) {
+      effectiveRange = { ...effectiveRange, startDate: activeShiftOpenedYMD };
+    }
+
+    setIsLoadingHistory(true);
+    let salesReady = false;
+    let expensesReady = false;
+    const markReady = () => {
+      if (salesReady && expensesReady) {
+        setIsLoadingHistory(false);
+      }
+    };
+
+    transactionsUnsubRef.current = subscribeToTransactionsRealtime(uid, effectiveRange, {
+      onSales: (newSales) => {
+        setSales(newSales);
+        salesReady = true;
+        markReady();
+      },
+      onExpenses: (newExpenses) => {
+        setExpenses(newExpenses);
+        expensesReady = true;
+        markReady();
+      },
+      onError: (err) => {
+        console.warn('[PosVenecia Firestore Transactions] Error:', err);
+        setIsLoadingHistory(false);
+      }
+    });
+
+    return () => {
+      if (transactionsUnsubRef.current) {
+        transactionsUnsubRef.current();
+        transactionsUnsubRef.current = null;
+      }
+    };
+  }, [googleUser?.uid, transactionsDateRange, transactionsPreset, activeShiftOpenedYMD]);
 
   /**
    * Firebase Auth initialization & real-time Firestore subscription (Strictly single-mount)
@@ -1075,6 +1451,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           firestoreUnsubRef.current();
           firestoreUnsubRef.current = null;
         }
+        if (transactionsUnsubRef.current) {
+          transactionsUnsubRef.current();
+          transactionsUnsubRef.current = null;
+        }
         activeFirestoreUidRef.current = null;
         setGoogleUser(null);
         setFirestoreSyncStatus('unauthenticated');
@@ -1088,6 +1468,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (firestoreUnsubRef.current) {
         firestoreUnsubRef.current();
         firestoreUnsubRef.current = null;
+      }
+      if (transactionsUnsubRef.current) {
+        transactionsUnsubRef.current();
+        transactionsUnsubRef.current = null;
       }
       activeFirestoreUidRef.current = null;
     };
@@ -1137,6 +1521,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (firestoreUnsubRef.current) {
         firestoreUnsubRef.current();
         firestoreUnsubRef.current = null;
+      }
+      if (transactionsUnsubRef.current) {
+        transactionsUnsubRef.current();
+        transactionsUnsubRef.current = null;
       }
       activeFirestoreUidRef.current = null;
       await logOutGoogle();
@@ -1188,7 +1576,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ...products.map(p => p.category)
   ])).filter(Boolean);
 
-  // Product CRUD with real-time Firestore sync
+  // Product CRUD with real-time Firestore sync + immutable Kardex trace
   const addProduct = (prodData: Omit<Product, 'id'>) => {
     const uid = getActiveUid();
     if (!uid) return;
@@ -1197,7 +1585,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: 'prod-' + Date.now()
     };
     setProducts(prev => [newProd, ...prev]);
-    saveProductToFirestore(uid, newProd).catch(e =>
+
+    const isPhysical = !newProd.isService && newProd.itemType !== 'servicio';
+    let kEntry: KardexEntry | undefined = undefined;
+    if (isPhysical && newProd.stock > 0) {
+      kEntry = buildKardexEntry({
+        product: newProd,
+        type: 'ajuste_manual',
+        quantityChange: newProd.stock,
+        previousStock: 0,
+        newStock: newProd.stock,
+        unitCostUSD: newProd.costUSD || 0,
+        valuationMethod: (newProd.batches && newProd.batches.length > 0) ? 'fifo' : 'average_cost',
+        reference: 'ALTA-PRODUCTO',
+        notes: 'Stock inicial al registrar producto en catálogo',
+        userName: googleUser?.name
+      });
+      setKardex(prev => [kEntry!, ...prev]);
+    }
+
+    saveProductWithKardexAtomic(uid, newProd, kEntry).catch(e =>
       console.error('[PosVenecia Firestore] Error en addProduct:', e)
     );
   };
@@ -1205,8 +1612,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateProduct = (updated: Product) => {
     const uid = getActiveUid();
     if (!uid) return;
+    const prevProd = products.find(p => p.id === updated.id);
     setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
-    saveProductToFirestore(uid, updated).catch(e =>
+
+    const isPhysical = !updated.isService && updated.itemType !== 'servicio';
+    let kEntry: KardexEntry | undefined = undefined;
+    if (isPhysical && prevProd && round2(prevProd.stock) !== round2(updated.stock)) {
+      const diff = round2(updated.stock - prevProd.stock);
+      kEntry = buildKardexEntry({
+        product: updated,
+        type: 'ajuste_manual',
+        quantityChange: diff,
+        previousStock: prevProd.stock,
+        newStock: updated.stock,
+        unitCostUSD: updated.costUSD || prevProd.costUSD || 0,
+        valuationMethod: (updated.batches && updated.batches.length > 0) ? 'fifo' : 'average_cost',
+        reference: 'EDICION-PRODUCTO',
+        notes: 'Ajuste de existencia desde ficha de producto',
+        userName: googleUser?.name
+      });
+      setKardex(prev => [kEntry!, ...prev]);
+    }
+
+    saveProductWithKardexAtomic(uid, updated, kEntry).catch(e =>
       console.error('[PosVenecia Firestore] Error en updateProduct:', e)
     );
   };
@@ -1225,22 +1653,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adjustStock = (id: string, newStock: number): boolean => {
-    let found = false;
-    const safeStock = Math.max(0, newStock);
-    setProducts(prev => {
-      const exists = prev.some(p => p.id === id);
-      if (!exists) return prev;
-      found = true;
-      return prev.map(p => p.id === id ? { ...p, stock: safeStock } : p);
-    });
+    const target = products.find(p => p.id === id);
+    if (!target) return false;
+    const safeStock = Math.max(0, round2(newStock));
+    const updatedTarget = { ...target, stock: safeStock };
+    setProducts(prev => prev.map(p => p.id === id ? updatedTarget : p));
+
+    const isPhysical = !target.isService && target.itemType !== 'servicio';
+    let kEntry: KardexEntry | undefined = undefined;
+    if (isPhysical && round2(target.stock) !== safeStock) {
+      kEntry = buildKardexEntry({
+        product: updatedTarget,
+        type: 'ajuste_manual',
+        quantityChange: round2(safeStock - target.stock),
+        previousStock: target.stock,
+        newStock: safeStock,
+        unitCostUSD: target.costUSD || 0,
+        valuationMethod: (target.batches && target.batches.length > 0) ? 'fifo' : 'average_cost',
+        reference: 'AJUSTE-RAPIDO',
+        notes: 'Ajuste manual (+/-) directo desde catálogo',
+        userName: googleUser?.name
+      });
+      setKardex(prev => [kEntry!, ...prev]);
+    }
 
     const uid = getActiveUid();
-    if (found && uid) {
-      adjustProductStockInFirestore(uid, id, safeStock).catch(e =>
+    if (uid) {
+      adjustProductStockInFirestore(uid, id, safeStock, kEntry).catch(e =>
         console.error('[PosVenecia Firestore] Error en adjustProductStock:', e)
       );
     }
-    return found;
+    return true;
   };
 
   const addQuickService = (serviceData: {
@@ -1336,7 +1779,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Sales operations
   const completeSale = (
     clientData: { name: string; rif: string; phone?: string; address?: string },
-    paymentDetails: PaymentDetails
+    paymentDetails: PaymentDetails,
+    fiscalCorrelatives: { invoiceNumber: string; controlNumber: string }
   ): Sale => {
     const uid = getActiveUid();
     if (!uid) {
@@ -1352,6 +1796,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw new Error('La caja se encuentra cerrada. Debe abrir la caja para iniciar la jornada y procesar ventas.');
     }
 
+    const cleanInvoice = (fiscalCorrelatives?.invoiceNumber || '').trim().toUpperCase();
+    const cleanControl = (fiscalCorrelatives?.controlNumber || '').trim().toUpperCase();
+
+    if (!cleanInvoice) {
+      throw new Error('Debe ingresar manualmente el Número de Factura físico antes de cobrar.');
+    }
+    if (!cleanControl) {
+      throw new Error('Debe ingresar manualmente el Número de Control SENIAT físico antes de cobrar.');
+    }
+
+    const duplicateInvoice = sales.some(
+      s => (s.invoiceNumber || '').trim().toUpperCase() === cleanInvoice
+    );
+    if (duplicateInvoice) {
+      throw new Error(`El Número de Factura "${cleanInvoice}" ya fue registrado anteriormente. Verifique su talonario.`);
+    }
+
+    const duplicateControl = sales.some(
+      s => (s.controlNumber || '').trim().toUpperCase() === cleanControl
+    );
+    if (duplicateControl) {
+      throw new Error(`El Número de Control SENIAT "${cleanControl}" ya fue registrado anteriormente. Verifique su talonario.`);
+    }
+
     if (isCompletingSaleRef.current) {
       console.warn('[PosVenecia] Intento de venta concurrente bloqueado (double-submit protection).');
       throw new Error('Ya se está procesando una venta. Espere un momento.');
@@ -1359,41 +1827,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isCompletingSaleRef.current = true;
 
     try {
-      let subtotalUSD = 0;
-      let exemptUSD = 0;
-      let taxableUSD = 0;
+      let rawSubtotalUSD = 0;
+      let rawExemptUSD = 0;
+      let rawTaxableUSD = 0;
 
       cart.forEach(item => {
-        const itemTotal = item.quantity * item.unitPriceUSD;
-        subtotalUSD += itemTotal;
-        if (item.product.isExemptFromIVA) {
-          exemptUSD += itemTotal;
+        const itemTotal = round2(item.quantity * item.unitPriceUSD);
+        rawSubtotalUSD += itemTotal;
+        if (!applyIVA || item.product.isExemptFromIVA) {
+          rawExemptUSD += itemTotal;
         } else {
-          taxableUSD += itemTotal;
+          rawTaxableUSD += itemTotal;
         }
       });
 
-      const ivaUSD = applyIVA ? Number((taxableUSD * 0.16).toFixed(2)) : 0;
+      const subtotalUSD = round2(rawSubtotalUSD);
+      const exemptUSD = round2(rawExemptUSD);
+      const taxableUSD = round2(rawTaxableUSD);
+
+      const ivaUSD = applyIVA ? round2(taxableUSD * 0.16) : 0;
       let igtfUSD = 0;
       if (applyIGTF && paymentDetails.method === 'efectivo_usd') {
-        igtfUSD = Number(((subtotalUSD + ivaUSD) * 0.03).toFixed(2));
+        igtfUSD = round2((subtotalUSD + ivaUSD) * 0.03);
       } else if (applyIGTF && paymentDetails.method === 'pago_combinado' && paymentDetails.combinedBreakdown?.usdCash) {
-        igtfUSD = Number((paymentDetails.combinedBreakdown.usdCash * 0.03).toFixed(2));
+        igtfUSD = round2(paymentDetails.combinedBreakdown.usdCash * 0.03);
       }
 
-      const totalUSD = Number((subtotalUSD + ivaUSD + igtfUSD).toFixed(2));
-      const subtotalBs = Number((subtotalUSD * bcvRate).toFixed(2));
-      const exemptBs = Number((exemptUSD * bcvRate).toFixed(2));
-      const taxableBs = Number((taxableUSD * bcvRate).toFixed(2));
-      const ivaBs = Number((ivaUSD * bcvRate).toFixed(2));
-      const igtfBs = Number((igtfUSD * bcvRate).toFixed(2));
-      const totalBs = Number((totalUSD * bcvRate).toFixed(2));
-
-      const terminalPrefix = `FACT-${terminalId}-`;
-      const terminalSales = sales.filter(s => s.invoiceNumber && s.invoiceNumber.startsWith(terminalPrefix));
-      const nextSeq = terminalSales.length + 1;
-      const invoiceNumber = `FACT-${terminalId}-${String(nextSeq).padStart(6, '0')}`;
-      const controlNumber = `00-${String(sales.length + 1).padStart(5, '0')}`;
+      const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
+      const subtotalBs = round2(subtotalUSD * bcvRate);
+      const exemptBs = round2(exemptUSD * bcvRate);
+      const taxableBs = round2(taxableUSD * bcvRate);
+      const ivaBs = round2(ivaUSD * bcvRate);
+      const igtfBs = round2(igtfUSD * bcvRate);
+      const totalBs = round2(totalUSD * bcvRate);
 
       const snapshotItems: CartItem[] = cart.map(item => ({
         ...item,
@@ -1403,8 +1869,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const newSale: Sale = {
         id: 'sale-' + Date.now(),
         date: new Date().toISOString(),
-        invoiceNumber,
-        controlNumber,
+        invoiceNumber: cleanInvoice,
+        controlNumber: cleanControl,
         clientName: clientData.name || 'Consumidor Final',
         clientRIF: clientData.rif || 'V-00000000',
         clientPhone: clientData.phone,
@@ -1426,6 +1892,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         paymentMethod: paymentDetails.method,
         paymentDetails,
         status: 'completada',
+        returnedQuantities: {},
         cashierName: googleUser?.name || `Caja ${terminalId}`,
         syncStatus: 'pending_sync'
       };
@@ -1443,45 +1910,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         quantity
       }));
 
-      // Optimistic in-memory update (EXACTLY ONCE)
-      if (stockDeductions.length > 0) {
-        setProducts(prevProducts =>
-          prevProducts.map(prod => {
-            const qtyToDeduct = deductionMap.get(prod.id);
-            if (qtyToDeduct !== undefined && qtyToDeduct > 0) {
-              let updatedBatches = prod.batches ? [...prod.batches] : undefined;
-              if (updatedBatches && updatedBatches.length > 0) {
-                let remainingToDeduct = qtyToDeduct;
-                const nextBatches: ProductBatch[] = [];
-                for (const b of updatedBatches) {
-                  if (remainingToDeduct <= 0) {
-                    nextBatches.push(b);
-                  } else if (b.quantity > remainingToDeduct) {
-                    nextBatches.push({ ...b, quantity: Number((b.quantity - remainingToDeduct).toFixed(2)) });
-                    remainingToDeduct = 0;
-                  } else {
-                    remainingToDeduct -= b.quantity;
-                  }
-                }
-                updatedBatches = nextBatches;
-              }
+      const productBatchUpdates: Array<{
+        productId: string;
+        batches?: ProductBatch[];
+        priceUSD?: number;
+        costUSD?: number;
+        priceBsFixed?: number;
+      }> = [];
+      const saleKardexEntries: KardexEntry[] = [];
 
-              return {
-                ...prod,
-                stock: Math.max(0, prod.stock - qtyToDeduct),
-                batches: updatedBatches
-              };
+      if (stockDeductions.length > 0) {
+        const nextProducts = products.map(prod => {
+          const qtyToDeduct = deductionMap.get(prod.id);
+          if (qtyToDeduct !== undefined && qtyToDeduct > 0) {
+            const prevFifoVal = computeFifoValuationUSD(prod, prod.stock);
+            const fifoResult = deductFifoBatches(prod.batches, qtyToDeduct, prod, bcvRate, baseCurrency);
+            const nextStock = Math.max(0, round2(prod.stock - qtyToDeduct));
+            if (prod.batches && prod.batches.length > 0) {
+              productBatchUpdates.push({
+                productId: prod.id,
+                batches: fifoResult.batches,
+                priceUSD: fifoResult.priceUSD,
+                costUSD: fifoResult.costUSD,
+                priceBsFixed: fifoResult.priceBsFixed
+              });
             }
-            return prod;
-          })
-        );
+            const updatedProd: Product = {
+              ...prod,
+              stock: nextStock,
+              batches: fifoResult.batches,
+              ...(fifoResult.priceUSD !== undefined ? { priceUSD: fifoResult.priceUSD } : {}),
+              ...(fifoResult.costUSD !== undefined ? { costUSD: fifoResult.costUSD } : {}),
+              ...(fifoResult.priceBsFixed !== undefined ? { priceBsFixed: fifoResult.priceBsFixed } : {})
+            };
+            const hasFifoBatches = Boolean(prod.batches && prod.batches.length > 0);
+            const nextFifoVal = computeFifoValuationUSD(updatedProd, nextStock);
+            const unitCostForKardex = hasFifoBatches && qtyToDeduct > 0 && prevFifoVal > nextFifoVal
+              ? round2((prevFifoVal - nextFifoVal) / qtyToDeduct)
+              : (prod.costUSD || 0);
+
+            saleKardexEntries.push(
+              buildKardexEntry({
+                product: updatedProd,
+                type: 'venta',
+                quantityChange: -qtyToDeduct,
+                previousStock: prod.stock,
+                newStock: nextStock,
+                unitCostUSD: unitCostForKardex,
+                valuationMethod: hasFifoBatches ? 'fifo' : 'average_cost',
+                reference: cleanInvoice,
+                notes: `Venta POS a ${newSale.clientName}`,
+                userName: newSale.cashierName,
+                date: newSale.date
+              })
+            );
+            return updatedProd;
+          }
+          return prod;
+        });
+        setProducts(nextProducts);
+        if (saleKardexEntries.length > 0) {
+          setKardex(prev => [...saleKardexEntries, ...prev]);
+        }
       }
 
       let createdFiado: FiadoRecord | undefined = undefined;
       if (paymentDetails.method === 'fiao' || (paymentDetails.method === 'pago_combinado' && (paymentDetails.combinedBreakdown?.fiaoRemaining || 0) > 0)) {
-        const remainingDebt = paymentDetails.method === 'fiao'
-          ? (paymentDetails.fiaoRemainingUSD ?? totalUSD)
-          : (paymentDetails.combinedBreakdown?.fiaoRemaining || 0);
+        const remainingDebt = round2(
+          paymentDetails.method === 'fiao'
+            ? (paymentDetails.fiaoRemainingUSD ?? totalUSD)
+            : (paymentDetails.combinedBreakdown?.fiaoRemaining || 0)
+        );
+        const initialAbonoUSD = paymentDetails.method === 'fiao' ? round2(paymentDetails.fiaoInitialAbonoUSD || 0) : 0;
+        const initialAbonoBs = paymentDetails.method === 'fiao'
+          ? round2(paymentDetails.fiaoInitialAbonoBs || initialAbonoUSD * bcvRate)
+          : 0;
+
+        const initialAbonos: Abono[] = initialAbonoUSD > 0
+          ? [{
+              id: 'abono-ini-' + Date.now(),
+              date: newSale.date,
+              amountUSD: initialAbonoUSD,
+              amountBs: initialAbonoBs,
+              bcvRate,
+              paymentMethod: paymentDetails.fiaoInitialAbonoCurrency === 'Bs' ? 'efectivo_bs' : 'efectivo_usd',
+              notes: 'Abono inicial al momento de la venta'
+            }]
+          : [];
 
         createdFiado = {
           id: 'fiado-' + Date.now(),
@@ -1492,10 +2007,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           clientPhone: clientData.phone || '0414-0000000',
           clientAddress: clientData.address,
           date: newSale.date,
-          originalDebtUSD: remainingDebt,
+          originalDebtUSD: paymentDetails.method === 'fiao' ? totalUSD : remainingDebt,
           remainingDebtUSD: remainingDebt,
-          status: 'pendiente',
-          abonos: []
+          status: remainingDebt <= 0.009 ? 'saldado' : (initialAbonoUSD > 0 ? 'parcial' : 'pendiente'),
+          abonos: initialAbonos
         };
         setFiados(prev => [createdFiado!, ...prev]);
       }
@@ -1505,7 +2020,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clearCart();
 
       // Atomic Cloud Firestore persistence under users/{uid}/...
-      saveSaleAtomic(uid, newSale, stockDeductions, createdFiado).then(() => {
+      saveSaleAtomic(uid, newSale, stockDeductions, createdFiado, productBatchUpdates, saleKardexEntries).then(() => {
         devLog(`[PosVenecia Firestore] Venta ${newSale.invoiceNumber} confirmada en Firestore.`);
         setSales(prev => prev.map(s => s.id === newSale.id ? { ...s, syncStatus: 'synced' } : s));
       }).catch(e => {
@@ -1531,22 +2046,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setSales(prev => prev.map(s => s.id === saleId ? { ...s, status: 'anulada' } : s));
 
-    if (targetSale.items && targetSale.items.length > 0) {
-      setProducts(prevProducts => {
-        const updated = [...prevProducts];
-        targetSale.items.forEach(cartItem => {
-          if (!cartItem.product.isService && cartItem.product.itemType !== 'servicio') {
-            const idx = updated.findIndex(p => p.id === cartItem.product.id);
-            if (idx !== -1) {
-              updated[idx] = {
-                ...updated[idx],
-                stock: updated[idx].stock + cartItem.quantity
-              };
-            }
+    const restorationMap = new Map<string, number>();
+    (targetSale.items || []).forEach(cartItem => {
+      if (!cartItem.product.isService && cartItem.product.itemType !== 'servicio' && cartItem.product.id) {
+        restorationMap.set(
+          cartItem.product.id,
+          (restorationMap.get(cartItem.product.id) || 0) + cartItem.quantity
+        );
+      }
+    });
+
+    const productBatchUpdates: Array<{ productId: string; batches?: ProductBatch[] }> = [];
+    const cancelKardexEntries: KardexEntry[] = [];
+    if (restorationMap.size > 0) {
+      const nextProducts = products.map(p => {
+        const qty = restorationMap.get(p.id);
+        if (qty && qty > 0) {
+          const restoredBatches = restoreFifoBatches(p.batches, qty, p, `ANUL-${targetSale.invoiceNumber}`);
+          if (restoredBatches !== undefined) {
+            productBatchUpdates.push({ productId: p.id, batches: restoredBatches });
           }
-        });
-        return updated;
+          const updatedProd: Product = {
+            ...p,
+            stock: round2(p.stock + qty),
+            ...(restoredBatches !== undefined ? { batches: restoredBatches } : {})
+          };
+          cancelKardexEntries.push(
+            buildKardexEntry({
+              product: updatedProd,
+              type: 'ajuste_manual',
+              quantityChange: qty,
+              previousStock: p.stock,
+              newStock: updatedProd.stock,
+              unitCostUSD: p.costUSD || 0,
+              valuationMethod: (updatedProd.batches && updatedProd.batches.length > 0) ? 'fifo' : 'average_cost',
+              reference: `ANUL-${targetSale.invoiceNumber}`,
+              notes: `Reintegro por anulación de factura ${targetSale.invoiceNumber}`,
+              userName: googleUser?.name
+            })
+          );
+          return updatedProd;
+        }
+        return p;
       });
+      setProducts(nextProducts);
+      if (cancelKardexEntries.length > 0) {
+        setKardex(prev => [...cancelKardexEntries, ...prev]);
+      }
     }
 
     const associatedFiado = fiados.find(f => f.saleId === saleId);
@@ -1554,10 +2100,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const uid = getActiveUid();
     if (uid) {
-      const stockRestorations = (targetSale.items || [])
-        .filter(item => !item.product.isService && item.product.itemType !== 'servicio')
-        .map(item => ({ productId: item.product.id, quantity: item.quantity }));
-      cancelSaleAtomic(uid, targetSale, stockRestorations, associatedFiado?.id).catch(e =>
+      const stockRestorations = Array.from(restorationMap.entries()).map(([productId, quantity]) => ({
+        productId,
+        quantity
+      }));
+      cancelSaleAtomic(uid, targetSale, stockRestorations, associatedFiado?.id, productBatchUpdates, cancelKardexEntries).catch(e =>
         console.error('Firestore atomic cancelSale error:', e)
       );
     }
@@ -1587,20 +2134,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (restorationMap.size > 0) {
-        setProducts(prev => {
-          const updated = prev.map(p => {
-            const qty = restorationMap.get(p.id);
-            return qty ? { ...p, stock: p.stock + qty } : p;
-          });
-          if (uid) {
-            updated.forEach(p => {
-              if (restorationMap.has(p.id)) {
-                saveProductToFirestore(uid, p).catch(() => {});
-              }
-            });
-          }
-          return updated;
+        const updatedProducts = products.map(p => {
+          const qty = restorationMap.get(p.id);
+          if (!qty) return p;
+          const restoredBatches = restoreFifoBatches(p.batches, qty, p, `DEL-${targetSale.invoiceNumber}`);
+          return {
+            ...p,
+            stock: round2(p.stock + qty),
+            ...(restoredBatches !== undefined ? { batches: restoredBatches } : {})
+          };
         });
+        setProducts(updatedProducts);
+        if (uid) {
+          updatedProducts.forEach(p => {
+            if (restorationMap.has(p.id)) {
+              saveProductToFirestore(uid, p).catch(() => {});
+            }
+          });
+        }
       }
     }
 
@@ -1639,6 +2190,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reason: string;
     refundMethod: PaymentMethod;
     items: { productId: string; quantity: number }[];
+    creditNoteNumber: string;
+    controlNumber: string;
+    originalInvoiceNumber?: string;
+    originalControlNumber?: string;
   }): Promise<CreditNote> => {
     if (isCreatingCreditNoteRef.current) {
       throw new Error('Ya se está procesando una nota de crédito. Espere un momento.');
@@ -1651,8 +2206,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Venta no encontrada.');
       }
 
+      if (originalSale.status === 'anulada') {
+        throw new Error('No se puede emitir una nota de crédito sobre una factura anulada.');
+      }
+
       if (data.items.length === 0) {
         throw new Error('Debe seleccionar al menos un producto para la devolución.');
+      }
+
+      const cleanNCNumber = (data.creditNoteNumber || '').trim().toUpperCase();
+      const cleanNCControl = (data.controlNumber || '').trim().toUpperCase();
+      const cleanAffectedInvoice = (data.originalInvoiceNumber ?? originalSale.invoiceNumber ?? '').trim().toUpperCase();
+      const cleanAffectedControl = (data.originalControlNumber ?? originalSale.controlNumber ?? '').trim().toUpperCase();
+
+      if (!cleanNCNumber) {
+        throw new Error('Debe ingresar manualmente el Número de Nota de Crédito físico.');
+      }
+      if (!cleanNCControl) {
+        throw new Error('Debe ingresar manualmente el Número de Control SENIAT de la Nota de Crédito.');
+      }
+      if (!cleanAffectedInvoice) {
+        throw new Error('Debe ingresar el Número de Factura afectada.');
+      }
+      if (!cleanAffectedControl) {
+        throw new Error('Debe ingresar el Número de Control fiscal de la factura afectada.');
+      }
+
+      const duplicateNCNumber = creditNotes.some(
+        n => (n.creditNoteNumber || '').trim().toUpperCase() === cleanNCNumber
+      );
+      if (duplicateNCNumber) {
+        throw new Error(`El Número de Nota de Crédito "${cleanNCNumber}" ya fue registrado anteriormente.`);
+      }
+
+      const duplicateNCControl = creditNotes.some(
+        n => (n.controlNumber || '').trim().toUpperCase() === cleanNCControl
+      );
+      if (duplicateNCControl) {
+        throw new Error(`El Número de Control SENIAT "${cleanNCControl}" ya fue utilizado en otra nota de crédito.`);
+      }
+
+      // Compute cumulative previously returned quantities per product (use persisted map, fallback to creditNotes history for legacy sales)
+      const priorReturnedMap: Record<string, number> = {};
+      if (originalSale.returnedQuantities) {
+        Object.entries(originalSale.returnedQuantities).forEach(([pid, q]) => {
+          priorReturnedMap[pid] = Math.max(0, Number(q) || 0);
+        });
+      } else {
+        creditNotes
+          .filter(nc => nc.saleId === originalSale.id)
+          .forEach(nc => {
+            nc.items.forEach(ncItem => {
+              priorReturnedMap[ncItem.productId] = (priorReturnedMap[ncItem.productId] || 0) + ncItem.quantity;
+            });
+          });
       }
 
       let refundedSubtotalUSD = 0;
@@ -1661,22 +2268,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const ncItems: CreditNoteItem[] = [];
       const stockRestorations: { productId: string; quantity: number }[] = [];
+      const nextReturnedQuantities: Record<string, number> = { ...priorReturnedMap };
 
       for (const itemReq of data.items) {
         const originalItem = originalSale.items.find(i => i.product.id === itemReq.productId);
         if (!originalItem) continue;
 
-        const qty = Math.min(itemReq.quantity, originalItem.quantity);
-        if (qty <= 0) continue;
+        const alreadyReturned = priorReturnedMap[originalItem.product.id] || 0;
+        const maxReturnable = Math.max(0, round2(originalItem.quantity - alreadyReturned));
+
+        if (maxReturnable <= 0) {
+          throw new Error(`El producto "${originalItem.product.name}" ya fue devuelto en su totalidad (${originalItem.quantity} und).`);
+        }
+
+        const requestedQty = Number(itemReq.quantity) || 0;
+        if (requestedQty <= 0) continue;
+
+        if (requestedQty > maxReturnable) {
+          throw new Error(
+            `La cantidad a devolver de "${originalItem.product.name}" (${requestedQty}) supera el saldo disponible (${maxReturnable} de ${originalItem.quantity} vendidas; ya devueltas: ${alreadyReturned}).`
+          );
+        }
+
+        const qty = requestedQty;
+        nextReturnedQuantities[originalItem.product.id] = round2(alreadyReturned + qty);
 
         const unitPriceUSD = originalItem.unitPriceUSD;
-        const totalItemUSD = Number((qty * unitPriceUSD).toFixed(2));
-        refundedSubtotalUSD += totalItemUSD;
+        const totalItemUSD = round2(qty * unitPriceUSD);
+        refundedSubtotalUSD = round2(refundedSubtotalUSD + totalItemUSD);
 
         if (originalItem.product.isExemptFromIVA) {
-          refundedExemptUSD += totalItemUSD;
+          refundedExemptUSD = round2(refundedExemptUSD + totalItemUSD);
         } else {
-          refundedTaxableUSD += totalItemUSD;
+          refundedTaxableUSD = round2(refundedTaxableUSD + totalItemUSD);
         }
 
         ncItems.push({
@@ -1700,44 +2324,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('No se seleccionaron productos válidos para devolución.');
       }
 
-      const originalSubtotal = originalSale.subtotalUSD > 0 ? originalSale.subtotalUSD : 1;
-      const refundRatio = Math.min(1, refundedSubtotalUSD / originalSubtotal);
-      const refundedIvaUSD = originalSale.ivaUSD ? Number((originalSale.ivaUSD * refundRatio).toFixed(2)) : 0;
-      const refundedIgtfUSD = originalSale.igtfUSD ? Number((originalSale.igtfUSD * refundRatio).toFixed(2)) : 0;
-      const refundedTotalUSD = Number((refundedSubtotalUSD + refundedIvaUSD + refundedIgtfUSD).toFixed(2));
+      const remainingIvaBudget = round2(Math.max(0, originalSale.ivaUSD - creditNotes
+        .filter(nc => nc.saleId === originalSale.id)
+        .reduce((sum, nc) => sum + (nc.ivaUSD || 0), 0)));
+      const refundedIvaUSD = originalSale.ivaUSD > 0
+        ? Math.min(remainingIvaBudget, round2(refundedTaxableUSD * 0.16))
+        : 0;
+
+      const remainingIgtfBudget = round2(Math.max(0, originalSale.igtfUSD - creditNotes
+        .filter(nc => nc.saleId === originalSale.id)
+        .reduce((sum, nc) => sum + (nc.igtfUSD || 0), 0)));
+      const refundedIgtfUSD = originalSale.igtfUSD > 0 && data.refundMethod === 'efectivo_usd'
+        ? Math.min(remainingIgtfBudget, round2((refundedSubtotalUSD + refundedIvaUSD) * 0.03))
+        : 0;
+
+      const refundedTotalUSD = round2(refundedSubtotalUSD + refundedIvaUSD + refundedIgtfUSD);
 
       const bcv = originalSale.bcvRate || bcvRate;
-      const refundedTotalBs = Number((refundedTotalUSD * bcv).toFixed(2));
-
-      const terminalPrefix = `NC-${terminalId}-`;
-      const terminalNCs = creditNotes.filter(n => n.creditNoteNumber.startsWith(terminalPrefix));
-      const nextSeq = terminalNCs.length + 1;
-      const creditNoteNumber = `NC-${terminalId}-${String(nextSeq).padStart(6, '0')}`;
-      const controlNumber = `NC00-${String(creditNotes.length + 1).padStart(5, '0')}`;
+      const refundedTotalBs = round2(refundedTotalUSD * bcv);
 
       const newCreditNote: CreditNote = {
         id: 'nc-' + Date.now(),
-        creditNoteNumber,
-        controlNumber,
+        creditNoteNumber: cleanNCNumber,
+        controlNumber: cleanNCControl,
         saleId: originalSale.id,
-        originalInvoiceNumber: originalSale.invoiceNumber,
+        originalInvoiceNumber: cleanAffectedInvoice,
+        originalControlNumber: cleanAffectedControl,
         date: new Date().toISOString(),
         clientName: originalSale.clientName || 'Consumidor Final',
         clientRIF: originalSale.clientRIF || 'V-00000000',
         clientPhone: originalSale.clientPhone,
         clientAddress: originalSale.clientAddress,
         items: ncItems,
-        subtotalUSD: Number(refundedSubtotalUSD.toFixed(2)),
-        exemptUSD: Number(refundedExemptUSD.toFixed(2)),
-        taxableUSD: Number(refundedTaxableUSD.toFixed(2)),
+        subtotalUSD: round2(refundedSubtotalUSD),
+        exemptUSD: round2(refundedExemptUSD),
+        taxableUSD: round2(refundedTaxableUSD),
         ivaUSD: refundedIvaUSD,
         igtfUSD: refundedIgtfUSD,
         totalUSD: refundedTotalUSD,
-        subtotalBs: Number((refundedSubtotalUSD * bcv).toFixed(2)),
-        exemptBs: Number((refundedExemptUSD * bcv).toFixed(2)),
-        taxableBs: Number((refundedTaxableUSD * bcv).toFixed(2)),
-        ivaBs: Number((refundedIvaUSD * bcv).toFixed(2)),
-        igtfBs: Number((refundedIgtfUSD * bcv).toFixed(2)),
+        subtotalBs: round2(refundedSubtotalUSD * bcv),
+        exemptBs: round2(refundedExemptUSD * bcv),
+        taxableBs: round2(refundedTaxableUSD * bcv),
+        ivaBs: round2(refundedIvaUSD * bcv),
+        igtfBs: round2(refundedIgtfUSD * bcv),
         totalBs: refundedTotalBs,
         bcvRate: bcv,
         refundMethod: data.refundMethod,
@@ -1745,24 +2374,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cashierName: googleUser?.name || 'Cajero'
       };
 
+      const productBatchUpdates: Array<{ productId: string; batches?: ProductBatch[] }> = [];
+      const ncKardexEntries: KardexEntry[] = [];
       if (stockRestorations.length > 0) {
-        setProducts(prevProducts => {
-          const map = new Map(stockRestorations.map(s => [s.productId, s.quantity]));
-          return prevProducts.map(p => {
-            const addQty = map.get(p.id);
-            if (addQty && addQty > 0) {
-              return { ...p, stock: p.stock + addQty };
+        const restMap = new Map<string, number>();
+        stockRestorations.forEach(s => restMap.set(s.productId, (restMap.get(s.productId) || 0) + s.quantity));
+        const nextProducts = products.map(p => {
+          const addQty = restMap.get(p.id);
+          if (addQty && addQty > 0) {
+            const restoredBatches = restoreFifoBatches(p.batches, addQty, p, cleanNCNumber);
+            if (restoredBatches !== undefined) {
+              productBatchUpdates.push({ productId: p.id, batches: restoredBatches });
             }
-            return p;
-          });
+            const updatedProd: Product = {
+              ...p,
+              stock: round2(p.stock + addQty),
+              ...(restoredBatches !== undefined ? { batches: restoredBatches } : {})
+            };
+            ncKardexEntries.push(
+              buildKardexEntry({
+                product: updatedProd,
+                type: 'nota_credito',
+                quantityChange: addQty,
+                previousStock: p.stock,
+                newStock: updatedProd.stock,
+                unitCostUSD: p.costUSD || 0,
+                valuationMethod: (updatedProd.batches && updatedProd.batches.length > 0) ? 'fifo' : 'average_cost',
+                reference: cleanNCNumber,
+                notes: `Devolución s/factura ${cleanAffectedInvoice} (${data.reason})`,
+                userName: newCreditNote.cashierName,
+                date: newCreditNote.date
+              })
+            );
+            return updatedProd;
+          }
+          return p;
         });
+        setProducts(nextProducts);
+        if (ncKardexEntries.length > 0) {
+          setKardex(prev => [...ncKardexEntries, ...prev]);
+        }
       }
+
+      const associatedFiado = fiados.find(f => f.saleId === originalSale.id);
+      let updatedFiado: FiadoRecord | undefined = undefined;
+      if (associatedFiado && associatedFiado.status !== 'saldado') {
+        const nextRemaining = round2(Math.max(0, associatedFiado.remainingDebtUSD - refundedTotalUSD));
+        updatedFiado = {
+          ...associatedFiado,
+          remainingDebtUSD: nextRemaining,
+          status: nextRemaining <= 0.009 ? 'saldado' : associatedFiado.status,
+          notes: `${associatedFiado.notes ? `${associatedFiado.notes} | ` : ''}[NC ${cleanNCNumber}] Devolución -$${refundedTotalUSD.toFixed(2)}`
+        };
+        setFiados(prev => prev.map(f => f.id === updatedFiado!.id ? updatedFiado! : f));
+      }
+
+      const isFullyReturned = originalSale.items.every(
+        item => (nextReturnedQuantities[item.product.id] || 0) >= item.quantity
+      );
 
       const updatedOriginalSale: Sale = {
         ...originalSale,
-        status: 'devuelta',
+        status: isFullyReturned ? 'devuelta' : originalSale.status,
+        returnedQuantities: nextReturnedQuantities,
         creditNoteId: newCreditNote.id,
-        refundedUSD: (originalSale.refundedUSD || 0) + refundedTotalUSD
+        refundedUSD: round2((originalSale.refundedUSD || 0) + refundedTotalUSD)
       };
       setSales(prev => prev.map(s => s.id === originalSale.id ? updatedOriginalSale : s));
       setCreditNotes(prev => [newCreditNote, ...prev]);
@@ -1770,7 +2446,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const uid = getActiveUid();
       if (uid) {
-        await saveCreditNoteAtomic(uid, newCreditNote, stockRestorations, updatedOriginalSale);
+        await saveCreditNoteAtomic(uid, newCreditNote, stockRestorations, updatedOriginalSale, updatedFiado, productBatchUpdates, ncKardexEntries);
       }
 
       return newCreditNote;
@@ -1807,10 +2483,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const unitCostUSD = (product.costUSD && product.costUSD > 0) ? product.costUSD : product.priceUSD;
-      const totalCostUSD = Number((unitCostUSD * qty).toFixed(2));
-      const totalCostBs = Number((totalCostUSD * bcvRate).toFixed(2));
+      const totalCostUSD = round2(unitCostUSD * qty);
+      const totalCostBs = round2(totalCostUSD * bcvRate);
 
-      const seq = inventoryDischarges.length + 1;
+      const discPrefix = `SAL-${terminalId}-`;
+      const seq = getNextSequenceNumber(inventoryDischarges.map(d => d.dischargeNumber), discPrefix);
       const dischargeNumber = `SAL-${terminalId}-${String(seq).padStart(5, '0')}`;
 
       const discharge: InventoryDischarge = {
@@ -1842,7 +2519,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         type: 'eventual',
         month: new Date().toLocaleDateString('es-VE', { month: 'long', year: 'numeric' }),
         date: new Date().toISOString(),
-        dueDate: new Date().toISOString().split('T')[0],
+        dueDate: getLocalDateStr(),
         amountUSD: totalCostUSD,
         bcvRate,
         amountBs: totalCostBs,
@@ -1853,14 +2530,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notes: `Generado automáticamente por desincorporación de stock (${data.reason})`
       };
 
-      setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: Math.max(0, p.stock - qty) } : p));
+      const fifoRes = deductFifoBatches(product.batches, qty, product, bcvRate, baseCurrency);
+      const updatedBatches = product.batches && product.batches.length > 0 ? fifoRes.batches : undefined;
+      const updatedProd: Product = {
+        ...product,
+        stock: Math.max(0, round2(product.stock - qty)),
+        ...(updatedBatches !== undefined ? { batches: updatedBatches } : {})
+      };
+
+      const dischargeKardex = buildKardexEntry({
+        product: updatedProd,
+        type: 'merma',
+        quantityChange: -qty,
+        previousStock: product.stock,
+        newStock: updatedProd.stock,
+        unitCostUSD,
+        valuationMethod: updatedBatches && updatedBatches.length > 0 ? 'fifo' : 'average_cost',
+        reference: discharge.dischargeNumber,
+        notes: `${data.reason}${data.notes ? `: ${data.notes}` : ''}`,
+        userName: discharge.responsibleName,
+        date: discharge.date
+      });
+
+      setProducts(prev => prev.map(p => p.id === product.id ? updatedProd : p));
       setInventoryDischarges(prev => [discharge, ...prev]);
       setGastosOperativos(prev => [lossExpense, ...prev]);
+      setKardex(prev => [dischargeKardex, ...prev]);
       setLastCompletedDischarge(discharge);
 
       const uid = getActiveUid();
       if (uid) {
-        await saveInventoryDischargeAtomic(uid, discharge, lossExpense);
+        await saveInventoryDischargeAtomic(uid, discharge, lossExpense, undefined, updatedBatches, dischargeKardex);
       }
 
       return discharge;
@@ -1873,82 +2573,160 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Expenses & Purchases operations
   const addExpense = (expData: Omit<Expense, 'id'>) => {
-    if (!cashShift?.isOpen) {
+    const isCreditPurchase = expData.paymentMethod === 'credito';
+    if (!isCreditPurchase && !cashShift?.isOpen) {
       setIsAperturaModalOpen(true);
-      throw new Error('La caja se encuentra cerrada. Debe abrir la caja para registrar compras o egresos.');
+      throw new Error('La caja se encuentra cerrada. Debe abrir la caja para registrar compras o egresos en efectivo.');
     }
 
+    const matchedSup = matchSupplierRecord(suppliers, expData.supplierId, expData.supplierRIF, expData.supplierName);
+    const nowMs = Date.now();
     const newExp: Expense = {
       ...expData,
-      id: 'exp-' + Date.now()
+      id: 'exp-' + nowMs,
+      supplierId: expData.supplierId || matchedSup?.id,
+      amountUSD: round2(expData.amountUSD),
+      amountBs: round2(expData.amountBs),
+      baseImponibleBs: round2(expData.baseImponibleBs),
+      ivaBs: round2(expData.ivaBs),
+      retencionIVABs: round2(expData.retencionIVABs),
+      retencionISLRBs: round2(expData.retencionISLRBs)
     };
 
-    let updatedProductsList: Product[] = [];
+    const updatedProductsList: Product[] = [];
+    const purchaseKardexEntries: KardexEntry[] = [];
 
     if (newExp.items && newExp.items.length > 0) {
-      setProducts(prevProducts => {
-        const productMap = new Map(prevProducts.map(p => [p.id, { ...p }]));
-        const impacted: Product[] = [];
+      const productMap = new Map(products.map(p => [p.id, { ...p }]));
 
-        for (const item of newExp.items!) {
-          const prod = productMap.get(item.productId);
-          if (!prod) continue;
+      for (const item of newExp.items) {
+        const prod = productMap.get(item.productId);
+        if (!prod) continue;
 
-          const incomingQty = Math.max(0, item.quantity);
-          const incomingCostUSD = Math.max(0, item.unitCostUSD);
-          const previousStock = prod.stock || 0;
-          prod.stock = previousStock + incomingQty;
+        const incomingQty = Math.max(0, item.quantity);
+        const incomingCostUSD = round2(Math.max(0, item.unitCostUSD));
+        const previousStock = prod.stock || 0;
+        prod.stock = round2(previousStock + incomingQty);
 
-          if (item.strategy === 'fifo') {
-            const newBatch: ProductBatch = {
-              id: 'batch-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-              invoiceNumber: newExp.invoiceNumber,
-              supplierName: newExp.supplierName,
-              date: newExp.date,
-              quantity: incomingQty,
-              initialQuantity: incomingQty,
-              costUSD: incomingCostUSD,
-              targetPriceUSD: item.newPriceUSD || prod.priceUSD
-            };
-
-            prod.batches = [...(prod.batches || []), newBatch];
-            prod.purchaseNote = `Lote Factura ${newExp.invoiceNumber} (${incomingQty} unids a $${incomingCostUSD.toFixed(2)})`;
-          } else {
+        if (item.strategy === 'fifo') {
+          if (!prod.costUSD || prod.costUSD <= 0) {
             prod.costUSD = incomingCostUSD;
-            if (item.newPriceUSD && item.newPriceUSD > 0) {
-              prod.priceUSD = item.newPriceUSD;
-            } else {
-              const previousCost = (item.previousCostUSD !== undefined && item.previousCostUSD > 0)
-                ? item.previousCostUSD
-                : (prod.costUSD > 0 ? prod.costUSD : incomingCostUSD);
-              const previousPrice = (item.previousPriceUSD !== undefined && item.previousPriceUSD > 0)
-                ? item.previousPriceUSD
-                : prod.priceUSD;
-              const margin = previousCost > 0 ? (previousPrice - previousCost) / previousCost : 0.30;
-              prod.priceUSD = Number((incomingCostUSD * (1 + Math.max(0, margin))).toFixed(2));
-            }
+          }
+          const newBatch: ProductBatch = {
+            id: 'batch-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+            invoiceNumber: newExp.invoiceNumber,
+            supplierName: newExp.supplierName,
+            date: newExp.date,
+            quantity: incomingQty,
+            initialQuantity: incomingQty,
+            costUSD: incomingCostUSD,
+            targetPriceUSD: item.newPriceUSD && item.newPriceUSD > 0 ? round2(item.newPriceUSD) : prod.priceUSD
+          };
 
-            if (baseCurrency === 'VED') {
-              prod.priceBsFixed = Number((prod.priceUSD * bcvRate).toFixed(2));
-            }
+          prod.batches = [...(prod.batches || []), newBatch];
+          prod.purchaseNote = `Lote Factura ${newExp.invoiceNumber} (${incomingQty} unids a $${incomingCostUSD.toFixed(2)})`;
+        } else {
+          const previousCost = (item.previousCostUSD !== undefined && item.previousCostUSD > 0)
+            ? item.previousCostUSD
+            : (prod.costUSD > 0 ? prod.costUSD : incomingCostUSD);
+          const previousPrice = (item.previousPriceUSD !== undefined && item.previousPriceUSD > 0)
+            ? item.previousPriceUSD
+            : prod.priceUSD;
 
-            prod.purchaseNote = `Actualizado Factura ${newExp.invoiceNumber} - Costo $${incomingCostUSD.toFixed(2)} / Venta $${prod.priceUSD.toFixed(2)}`;
+          const weightedAvgCost = (previousStock + incomingQty) > 0
+            ? round2(((previousStock * previousCost) + (incomingQty * incomingCostUSD)) / (previousStock + incomingQty))
+            : incomingCostUSD;
+
+          prod.costUSD = weightedAvgCost > 0 ? weightedAvgCost : incomingCostUSD;
+          if (item.newPriceUSD && item.newPriceUSD > 0) {
+            prod.priceUSD = round2(item.newPriceUSD);
+          } else {
+            const margin = previousCost > 0 ? (previousPrice - previousCost) / previousCost : 0.30;
+            prod.priceUSD = round2(incomingCostUSD * (1 + Math.max(0, margin)));
           }
 
-          impacted.push(prod);
+          if (baseCurrency === 'VED') {
+            prod.priceBsFixed = round2(prod.priceUSD * bcvRate);
+          }
+
+          prod.purchaseNote = `Actualizado Factura ${newExp.invoiceNumber} - Costo Prom. $${prod.costUSD.toFixed(2)} / Venta $${prod.priceUSD.toFixed(2)}`;
         }
 
-        updatedProductsList = impacted;
-        return Array.from(productMap.values());
-      });
+        updatedProductsList.push(prod);
+
+        if (!prod.isService && prod.itemType !== 'servicio' && incomingQty > 0) {
+          purchaseKardexEntries.push(
+            buildKardexEntry({
+              product: prod,
+              type: 'entrada_compra',
+              quantityChange: incomingQty,
+              previousStock,
+              newStock: prod.stock,
+              unitCostUSD: incomingCostUSD,
+              valuationMethod: item.strategy,
+              reference: newExp.invoiceNumber,
+              notes: `Compra a ${newExp.supplierName} (${item.strategy === 'fifo' ? 'Lote FIFO' : 'Costo Promedio'})`,
+              userName: googleUser?.name,
+              date: newExp.date
+            })
+          );
+        }
+      }
+
+      setProducts(Array.from(productMap.values()));
+      if (purchaseKardexEntries.length > 0) {
+        setKardex(prev => [...purchaseKardexEntries, ...prev]);
+      }
+    }
+
+    let linkedCuenta: CuentaPorPagar | undefined = undefined;
+    let updatedSupplierForExpense: Supplier | undefined = undefined;
+    if (isCreditPurchase) {
+      const defaultDue = new Date();
+      defaultDue.setDate(defaultDue.getDate() + (matchedSup?.creditDays || 15));
+      const cuentaCategory: CuentaPorPagar['category'] =
+        newExp.category === 'Servicios' || newExp.category === 'Alquiler' || newExp.category === 'Mantenimiento'
+          ? newExp.category
+          : (newExp.category === 'Mercancía' ? 'Mercancía' : 'Otros');
+
+      linkedCuenta = {
+        id: 'cpp-' + nowMs,
+        supplierId: newExp.supplierId,
+        supplierName: newExp.supplierName,
+        supplierRIF: newExp.supplierRIF,
+        supplierPhone: newExp.supplierPhone,
+        invoiceNumber: newExp.invoiceNumber,
+        controlNumber: newExp.controlNumber,
+        date: newExp.date,
+        dueDate: newExp.dueDate || defaultDue.toISOString(),
+        category: cuentaCategory,
+        description: newExp.description || `Factura a Crédito ${newExp.invoiceNumber}`,
+        totalAmountUSD: round2(newExp.amountUSD),
+        paidAmountUSD: 0,
+        remainingUSD: round2(newExp.amountUSD),
+        status: 'pendiente',
+        notes: 'Generado automáticamente desde Libro de Compras (Factura a Crédito)',
+        abonos: []
+      };
+      newExp.linkedCuentaId = linkedCuenta.id;
+      const nextCuentas = [linkedCuenta, ...cuentasPorPagar];
+      setCuentasPorPagar(nextCuentas);
+
+      if (matchedSup) {
+        updatedSupplierForExpense = {
+          ...matchedSup,
+          accumulatedBalanceUSD: computeSupplierAccumulatedBalance(matchedSup, nextCuentas)
+        };
+        setSuppliers(prev => prev.map(s => s.id === updatedSupplierForExpense!.id ? updatedSupplierForExpense! : s));
+      }
     }
 
     setExpenses(prev => [newExp, ...prev]);
 
     const uid = getActiveUid();
     if (uid) {
-      if (updatedProductsList.length > 0) {
-        saveExpenseWithInventoryAtomic(uid, newExp, updatedProductsList).catch(e =>
+      if (updatedProductsList.length > 0 || linkedCuenta || purchaseKardexEntries.length > 0 || updatedSupplierForExpense) {
+        saveExpenseWithInventoryAtomic(uid, newExp, updatedProductsList, linkedCuenta, purchaseKardexEntries, updatedSupplierForExpense).catch(e =>
           console.error('Firestore atomic saveExpenseWithInventoryAtomic error:', e)
         );
       } else {
@@ -1987,33 +2765,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reference?: string,
     notes?: string
   ) => {
+    const target = fiados.find(f => f.id === fiadoId);
+    if (!target || target.remainingDebtUSD <= 0) return;
+
+    const payUSD = Math.min(target.remainingDebtUSD, Math.max(0.01, round2(amountUSD)));
+    const newRemaining = round2(Math.max(0, target.remainingDebtUSD - payUSD));
+    const newAbono: Abono = {
+      id: 'abono-' + Date.now(),
+      date: new Date().toISOString(),
+      amountUSD: payUSD,
+      amountBs: round2(payUSD * bcvRate),
+      bcvRate,
+      paymentMethod: method,
+      reference,
+      notes
+    };
+    const updatedFiado: FiadoRecord = {
+      ...target,
+      remainingDebtUSD: newRemaining,
+      status: newRemaining <= 0.009 ? 'saldado' : 'parcial',
+      abonos: [newAbono, ...(target.abonos || [])]
+    };
+
+    setFiados(prev => prev.map(f => f.id === fiadoId ? updatedFiado : f));
+
     const uid = getActiveUid();
-    setFiados(prev => prev.map(f => {
-      if (f.id === fiadoId) {
-        const newRemaining = Math.max(0, f.remainingDebtUSD - amountUSD);
-        const newAbono = {
-          id: 'abono-' + Date.now(),
-          date: new Date().toISOString(),
-          amountUSD,
-          amountBs: amountUSD * bcvRate,
-          bcvRate,
-          paymentMethod: method,
-          reference,
-          notes
-        };
-        const updatedFiado: FiadoRecord = {
-          ...f,
-          remainingDebtUSD: newRemaining,
-          status: newRemaining <= 0 ? 'saldado' : 'parcial',
-          abonos: [newAbono, ...f.abonos]
-        };
-        if (uid) {
-          saveFiadoToFirestore(uid, updatedFiado).catch(e => console.error('Firestore fiado abono error:', e));
-        }
-        return updatedFiado;
-      }
-      return f;
-    }));
+    if (uid) {
+      saveFiadoToFirestore(uid, updatedFiado).catch(e => console.error('Firestore fiado abono error:', e));
+    }
   };
 
   const createManualFiado = (data: {
@@ -2044,40 +2823,122 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Maestro de Proveedores CRUD
+  const addSupplier = (
+    data: Omit<Supplier, 'id' | 'createdAt' | 'accumulatedBalanceUSD'> & { accumulatedBalanceUSD?: number }
+  ): Supplier => {
+    const newSup: Supplier = {
+      ...data,
+      id: 'sup-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
+      creditDays: Math.max(0, Math.floor(Number(data.creditDays) || 0)),
+      accumulatedBalanceUSD: round2(Number(data.accumulatedBalanceUSD) || 0),
+      createdAt: new Date().toISOString()
+    };
+    const syncedBalance = computeSupplierAccumulatedBalance(newSup, cuentasPorPagar);
+    if (syncedBalance > 0 && newSup.accumulatedBalanceUSD === 0) {
+      newSup.accumulatedBalanceUSD = syncedBalance;
+    }
+    setSuppliers(prev => [newSup, ...prev].sort((a, b) => a.name.localeCompare(b.name)));
+    const uid = getActiveUid();
+    if (uid) {
+      saveSupplierToFirestore(uid, newSup).catch(e => console.error('Firestore addSupplier error:', e));
+    }
+    return newSup;
+  };
+
+  const updateSupplier = (updated: Supplier) => {
+    setSuppliers(prev =>
+      prev.map(s => (s.id === updated.id ? updated : s)).sort((a, b) => a.name.localeCompare(b.name))
+    );
+    const uid = getActiveUid();
+    if (uid) {
+      saveSupplierToFirestore(uid, updated).catch(e => console.error('Firestore updateSupplier error:', e));
+    }
+  };
+
+  const deleteSupplier = (id: string) => {
+    setSuppliers(prev => prev.filter(s => s.id !== id));
+    const uid = getActiveUid();
+    if (uid) {
+      deleteSupplierFromFirestore(uid, id).catch(e => console.error('Firestore deleteSupplier error:', e));
+    }
+  };
+
   // Cuentas por Pagar (Proveedores)
   const addCuentaPorPagar = (data: Omit<CuentaPorPagar, 'id' | 'paidAmountUSD' | 'remainingUSD' | 'status' | 'abonos'>) => {
+    const matchedSup = matchSupplierRecord(suppliers, data.supplierId, data.supplierRIF, data.supplierName);
     const newCuenta: CuentaPorPagar = {
       ...data,
+      supplierId: data.supplierId || matchedSup?.id,
       id: 'cpp-' + Date.now(),
       paidAmountUSD: 0,
       remainingUSD: data.totalAmountUSD,
       status: 'pendiente',
       abonos: []
     };
-    setCuentasPorPagar(prev => [newCuenta, ...prev]);
+    const nextCuentas = [newCuenta, ...cuentasPorPagar];
+    setCuentasPorPagar(nextCuentas);
+
+    let updatedSupplier: Supplier | undefined = undefined;
+    if (matchedSup) {
+      updatedSupplier = {
+        ...matchedSup,
+        accumulatedBalanceUSD: computeSupplierAccumulatedBalance(matchedSup, nextCuentas)
+      };
+      setSuppliers(prev => prev.map(s => s.id === updatedSupplier!.id ? updatedSupplier! : s));
+    }
+
     const uid = getActiveUid();
     if (uid) {
-      saveCuentaPorPagarToFirestore(uid, newCuenta).catch(e => console.error('Firestore addCuentaPorPagar error:', e));
+      saveCuentaPorPagarToFirestore(uid, newCuenta, updatedSupplier).catch(e => console.error('Firestore addCuentaPorPagar error:', e));
     }
   };
 
   const updateCuentaPorPagar = (updated: CuentaPorPagar) => {
-    setCuentasPorPagar(prev => prev.map(c => c.id === updated.id ? updated : c));
+    const matchedSup = matchSupplierRecord(suppliers, updated.supplierId, updated.supplierRIF, updated.supplierName);
+    const nextCuenta = matchedSup && !updated.supplierId ? { ...updated, supplierId: matchedSup.id } : updated;
+    const nextCuentas = cuentasPorPagar.map(c => c.id === nextCuenta.id ? nextCuenta : c);
+    setCuentasPorPagar(nextCuentas);
+
+    let updatedSupplier: Supplier | undefined = undefined;
+    if (matchedSup) {
+      updatedSupplier = {
+        ...matchedSup,
+        accumulatedBalanceUSD: computeSupplierAccumulatedBalance(matchedSup, nextCuentas)
+      };
+      setSuppliers(prev => prev.map(s => s.id === updatedSupplier!.id ? updatedSupplier! : s));
+    }
+
     const uid = getActiveUid();
     if (uid) {
-      saveCuentaPorPagarToFirestore(uid, updated).catch(e => console.error('Firestore updateCuentaPorPagar error:', e));
+      saveCuentaPorPagarToFirestore(uid, nextCuenta, updatedSupplier).catch(e => console.error('Firestore updateCuentaPorPagar error:', e));
     }
   };
 
   const deleteCuentaPorPagar = (id: string) => {
+    const target = cuentasPorPagar.find(c => c.id === id);
     tombstonesRef.current.deletedCuentaIds = [
       ...(tombstonesRef.current.deletedCuentaIds || []),
       id
     ];
-    setCuentasPorPagar(prev => prev.filter(c => c.id !== id));
+    const nextCuentas = cuentasPorPagar.filter(c => c.id !== id);
+    setCuentasPorPagar(nextCuentas);
+
+    let updatedSupplier: Supplier | undefined = undefined;
+    if (target) {
+      const matchedSup = matchSupplierRecord(suppliers, target.supplierId, target.supplierRIF, target.supplierName);
+      if (matchedSup) {
+        updatedSupplier = {
+          ...matchedSup,
+          accumulatedBalanceUSD: computeSupplierAccumulatedBalance(matchedSup, nextCuentas)
+        };
+        setSuppliers(prev => prev.map(s => s.id === updatedSupplier!.id ? updatedSupplier! : s));
+      }
+    }
+
     const uid = getActiveUid();
     if (uid) {
-      deleteCuentaPorPagarFromFirestore(uid, id).catch(e => console.error('Firestore deleteCuentaPorPagar error:', e));
+      deleteCuentaPorPagarFromFirestore(uid, id, updatedSupplier).catch(e => console.error('Firestore deleteCuentaPorPagar error:', e));
     }
   };
 
@@ -2132,6 +2993,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: nowIso,
       invoiceNumber: target.invoiceNumber || 'CPP-ABONO',
       controlNumber: target.controlNumber || '00-00000',
+      supplierId: target.supplierId,
       supplierName: target.supplierName,
       supplierRIF: target.supplierRIF || 'N/A',
       supplierPhone: target.supplierPhone,
@@ -2151,12 +3013,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       linkedCuentaId: target.id
     };
 
-    setCuentasPorPagar(prev => prev.map(c => c.id === cuentaId ? updatedCuenta : c));
+    const nextCuentas = cuentasPorPagar.map(c => c.id === cuentaId ? updatedCuenta : c);
+    setCuentasPorPagar(nextCuentas);
     setExpenses(prev => [cashOutflowExpense, ...prev]);
+
+    let updatedSupplier: Supplier | undefined = undefined;
+    const matchedSup = matchSupplierRecord(suppliers, target.supplierId, target.supplierRIF, target.supplierName);
+    if (matchedSup) {
+      updatedSupplier = {
+        ...matchedSup,
+        accumulatedBalanceUSD: computeSupplierAccumulatedBalance(matchedSup, nextCuentas)
+      };
+      setSuppliers(prev => prev.map(s => s.id === updatedSupplier!.id ? updatedSupplier! : s));
+    }
 
     const uid = getActiveUid();
     if (uid) {
-      saveCuentaWithCashOutflowAtomic(uid, updatedCuenta, cashOutflowExpense).catch(e =>
+      saveCuentaWithCashOutflowAtomic(uid, updatedCuenta, cashOutflowExpense, updatedSupplier).catch(e =>
         console.error('Firestore abono cpp atomic error:', e)
       );
     }
@@ -2403,6 +3276,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setClients([]);
     setCuentasPorPagar([]);
     setGastosOperativos([]);
+    setSuppliers([]);
     setCreditNotes([]);
     setInventoryDischarges([]);
     setCashShift(null);
@@ -2437,6 +3311,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rateHistory,
         fetchLiveRate,
         isFetchingLiveRate,
+        bcvLastUpdatedDate,
+        bcvLastUpdatedAt,
+        isBcvRateUpdatedToday,
         bcvEuroRate,
         updateBcvEuroRate,
         fetchLiveEuroRate,
@@ -2495,6 +3372,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addExpense,
         updateExpense,
         deleteExpense,
+        transactionsPreset,
+        transactionsDateRange,
+        isLoadingHistory,
+        setTransactionsDateFilter,
+        kardex,
+        suppliers,
+        addSupplier,
+        updateSupplier,
+        deleteSupplier,
         fiados,
         addAbonoToFiado,
         createManualFiado,

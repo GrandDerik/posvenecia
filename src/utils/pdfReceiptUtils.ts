@@ -1,7 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Sale, Expense, BusinessInfo, CashShift, CreditNote } from '../types';
-import { formatBs, formatUSD } from './exportUtils';
+import { Sale, Expense, BusinessInfo, CashShift, CreditNote, Abono } from '../types';
+import { formatBs, formatUSD, getLocalDateStr, round2, safeDiv } from './exportUtils';
 
 // 1. Reporte Z / Cierre Diario SENIAT
 export const generateReporteZPDF = (
@@ -49,7 +49,7 @@ export const generateReporteZPDF = (
   y += 4;
   doc.text(`TASA BCV OFICIAL: Bs. ${bcvRate.toFixed(2)}`, pageWidth / 2, y, { align: 'center' });
   y += 4;
-  doc.text(`N° CIERRE: Z-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-01`, pageWidth / 2, y, { align: 'center' });
+  doc.text(`N° CIERRE: Z-${getLocalDateStr().replace(/-/g, '')}-01`, pageWidth / 2, y, { align: 'center' });
   y += 4;
 
   doc.setLineWidth(0.3);
@@ -164,7 +164,7 @@ export const generateReporteZPDF = (
   y += 4;
   doc.text('*** FIN DEL REPORTE Z ***', pageWidth / 2, y, { align: 'center' });
 
-  doc.save(`Reporte_Z_Cierre_Diario_${new Date().toISOString().split('T')[0]}.pdf`);
+  doc.save(`Reporte_Z_Cierre_Diario_${getLocalDateStr()}.pdf`);
 };
 
 // 2. Comprobante Digital (PDF) Ticket de Venta Térmico
@@ -538,7 +538,7 @@ export const generateComprobanteCierrePDF = (
   doc.text('FIRMA DEL CAJERO / OPERADOR', 57, y + 4, { align: 'center' });
   doc.text('FIRMA DEL ADMINISTRADOR / SUPERVISOR', pageWidth - 57, y + 4, { align: 'center' });
 
-  const fileName = `Reporte_Cierre_Caja_${new Date().toISOString().split('T')[0]}_Turno_${shift.id.slice(-6)}.pdf`;
+  const fileName = `Reporte_Cierre_Caja_${getLocalDateStr()}_Turno_${shift.id.slice(-6)}.pdf`;
 
   if (action === 'print') {
     doc.autoPrint();
@@ -618,7 +618,12 @@ export const generateTicketNotaCreditoPDF = (
   doc.setFont('helvetica', 'normal');
   doc.text(`CONTROL SENIAT: ${creditNote.controlNumber}`, pageWidth / 2, y, { align: 'center' });
   y += 4;
-  doc.text(`AFECTA A FACTURA: ${creditNote.originalInvoiceNumber}`, pageWidth / 2, y, { align: 'center' });
+  doc.text(
+    `AFECTA FACTURA: ${creditNote.originalInvoiceNumber}${creditNote.originalControlNumber ? ` (CTRL: ${creditNote.originalControlNumber})` : ''}`,
+    pageWidth / 2,
+    y,
+    { align: 'center' }
+  );
   y += 4;
   doc.text(`FECHA: ${new Date(creditNote.date).toLocaleString('es-VE')}`, pageWidth / 2, y, { align: 'center' });
   y += 4;
@@ -708,6 +713,345 @@ export const generateTicketNotaCreditoPDF = (
   doc.setTextColor(0);
 
   const fileName = `Nota_Credito_${creditNote.creditNoteNumber}.pdf`;
+
+  if (action === 'print') {
+    doc.autoPrint();
+    const blobUrl = doc.output('bloburl');
+    const printFrame = document.createElement('iframe');
+    printFrame.style.position = 'fixed';
+    printFrame.style.right = '0';
+    printFrame.style.bottom = '0';
+    printFrame.style.width = '0';
+    printFrame.style.height = '0';
+    printFrame.style.border = '0';
+    printFrame.src = blobUrl as any;
+    document.body.appendChild(printFrame);
+
+    const cleanup = () => {
+      setTimeout(() => {
+        if (document.body.contains(printFrame)) {
+          document.body.removeChild(printFrame);
+        }
+      }, 2000);
+    };
+
+    printFrame.onload = () => {
+      try {
+        printFrame.contentWindow?.focus();
+        printFrame.contentWindow?.print();
+      } catch (e) {
+        console.warn('Error invoking print dialog on iframe:', e);
+      } finally {
+        cleanup();
+      }
+    };
+  } else {
+    doc.save(fileName);
+  }
+};
+
+// 6. Corte Parcial de Caja (Cierre X — Auditoría sin Cierre de Jornada)
+export const generateCorteParcialXPDF = (
+  params: {
+    cashShift: CashShift | null;
+    isCashRegisterOpen: boolean;
+    sales: Sale[];
+    expenses: Expense[];
+    creditNotes: CreditNote[];
+    fiadoAbonos: Abono[];
+    bcvRate: number;
+    businessInfo: BusinessInfo;
+    cashierName?: string;
+  },
+  action: 'save' | 'print' = 'save'
+) => {
+  const {
+    cashShift,
+    isCashRegisterOpen,
+    sales,
+    expenses,
+    creditNotes,
+    fiadoAbonos,
+    bcvRate,
+    businessInfo,
+    cashierName
+  } = params;
+
+  const doc = new jsPDF({
+    unit: 'mm',
+    format: 'a4',
+    orientation: 'portrait'
+  });
+
+  const pageWidth = 210;
+  let y = 16;
+
+  // Header Box
+  doc.setFillColor(239, 246, 255);
+  doc.roundedRect(14, y, pageWidth - 28, 25, 3, 3, 'F');
+  doc.setDrawColor(147, 197, 253);
+  doc.roundedRect(14, y, pageWidth - 28, 25, 3, 3, 'D');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13.5);
+  doc.setTextColor(11, 21, 40);
+  doc.text((businessInfo.name || 'POSVENECIA').toUpperCase(), 20, y + 8);
+
+  doc.setFontSize(8.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(71, 85, 105);
+  doc.text(`RIF: ${businessInfo.rif || 'N/A'} | TELF: ${businessInfo.phone || 'N/A'}`, 20, y + 14);
+  doc.text(`DIRECCIÓN: ${(businessInfo.address || 'Venezuela').substring(0, 72)}`, 20, y + 19.5);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(29, 78, 216);
+  doc.text('CORTE PARCIAL DE CAJA (CIERRE X)', pageWidth - 20, y + 9, { align: 'right' });
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    isCashRegisterOpen ? 'AUDITORÍA DE TURNO ACTIVO (CAJA ABIERTA)' : 'RESUMEN DEL DÍA (CAJA CERRADA)',
+    pageWidth - 20,
+    y + 14.5,
+    { align: 'right' }
+  );
+  doc.text(`TASA BCV: Bs. ${bcvRate.toFixed(2)}`, pageWidth - 20, y + 20, { align: 'right' });
+
+  y += 30;
+
+  // Compute exact method flows (including pago_combinado & fiado abonos & NC refunds)
+  let cashUsdSales = 0;
+  let cashBsSales = 0;
+  let pmSalesBs = 0;
+  let debitoSalesBs = 0;
+  let transferenciaSalesBs = 0;
+  let fiaoTotalUSD = 0;
+  let casheaTotalUSD = 0;
+
+  sales.forEach(s => {
+    if (s.paymentMethod === 'efectivo_usd') {
+      cashUsdSales += s.totalUSD;
+    } else if (s.paymentMethod === 'efectivo_bs') {
+      cashBsSales += s.totalBs;
+    } else if (s.paymentMethod === 'pago_movil') {
+      pmSalesBs += s.totalBs;
+    } else if (s.paymentMethod === 'debito') {
+      debitoSalesBs += s.totalBs;
+    } else if (s.paymentMethod === 'transferencia') {
+      transferenciaSalesBs += s.totalBs;
+    } else if (s.paymentMethod === 'cashea') {
+      casheaTotalUSD += s.totalUSD;
+    } else if (s.paymentMethod === 'fiao') {
+      fiaoTotalUSD += s.paymentDetails?.fiaoRemainingUSD ?? s.totalUSD;
+    } else if (s.paymentMethod === 'pago_combinado' && s.paymentDetails?.combinedBreakdown) {
+      const cb = s.paymentDetails.combinedBreakdown;
+      cashUsdSales += cb.usdCash || 0;
+      cashBsSales += cb.bsCash || 0;
+      pmSalesBs += cb.pagoMovil || 0;
+      debitoSalesBs += cb.debito || 0;
+      transferenciaSalesBs += cb.transferencia || 0;
+      fiaoTotalUSD += cb.fiaoRemaining || 0;
+    }
+  });
+
+  fiadoAbonos.forEach(a => {
+    if (a.paymentMethod === 'efectivo_usd') cashUsdSales += a.amountUSD;
+    else if (a.paymentMethod === 'efectivo_bs') cashBsSales += a.amountBs;
+    else if (a.paymentMethod === 'pago_movil') pmSalesBs += a.amountBs;
+    else if (a.paymentMethod === 'debito') debitoSalesBs += a.amountBs;
+    else if (a.paymentMethod === 'transferencia') transferenciaSalesBs += a.amountBs;
+  });
+
+  const cashUsdRefund = creditNotes.filter(cn => cn.refundMethod === 'efectivo_usd').reduce((a, cn) => a + cn.totalUSD, 0);
+  const cashBsRefund = creditNotes.filter(cn => cn.refundMethod === 'efectivo_bs').reduce((a, cn) => a + cn.totalBs, 0);
+  const pmRefundBs = creditNotes.filter(cn => cn.refundMethod === 'pago_movil').reduce((a, cn) => a + cn.totalBs, 0);
+  const debitoRefundBs = creditNotes.filter(cn => cn.refundMethod === 'debito').reduce((a, cn) => a + cn.totalBs, 0);
+  const transferenciaRefundBs = creditNotes.filter(cn => cn.refundMethod === 'transferencia').reduce((a, cn) => a + cn.totalBs, 0);
+
+  const cashUsdExp = round2(expenses.filter(e => e.paymentMethod === 'efectivo_usd').reduce((a, e) => a + e.amountUSD, 0) + cashUsdRefund);
+  const cashBsExp = round2(expenses.filter(e => e.paymentMethod === 'efectivo_bs').reduce((a, e) => a + e.amountBs, 0) + cashBsRefund);
+  const pmExpBs = round2(expenses.filter(e => e.paymentMethod === 'pago_movil').reduce((a, e) => a + e.amountBs, 0) + pmRefundBs);
+  const debitoExpBs = round2(expenses.filter(e => e.paymentMethod === 'debito').reduce((a, e) => a + e.amountBs, 0) + debitoRefundBs);
+  const transferenciaExpBs = round2(expenses.filter(e => e.paymentMethod === 'transferencia').reduce((a, e) => a + e.amountBs, 0) + transferenciaRefundBs);
+
+  const initialUSD = isCashRegisterOpen ? (cashShift?.initialCashUSD || 0) : 0;
+  const initialBs = isCashRegisterOpen ? (cashShift?.initialCashBs || 0) : 0;
+
+  const cashUsdNet = round2(cashUsdSales - cashUsdExp);
+  const cashBsNet = round2(cashBsSales - cashBsExp);
+  const drawerCashUSD = round2(initialUSD + cashUsdNet);
+  const drawerCashBs = round2(initialBs + cashBsNet);
+
+  const pmNetBs = round2(pmSalesBs - pmExpBs);
+  const debitoNetBs = round2(debitoSalesBs - debitoExpBs);
+  const transferenciaNetBs = round2(transferenciaSalesBs - transferenciaExpBs);
+
+  const igtfTotalUSD = round2(sales.reduce((a, s) => a + (s.igtfUSD || 0), 0));
+  const igtfTotalBs = round2(sales.reduce((a, s) => a + (s.igtfBs || 0), 0));
+
+  const totalSalesGrossUSD = round2(sales.reduce((a, s) => a + s.totalUSD, 0));
+  const totalAbonosUSD = round2(fiadoAbonos.reduce((a, ab) => a + ab.amountUSD, 0));
+  const totalExpUSD = round2(expenses.reduce((a, e) => a + e.amountUSD, 0));
+  const totalNcUSD = round2(creditNotes.reduce((a, cn) => a + cn.totalUSD, 0));
+  const netConsolidatedUSD = round2(totalSalesGrossUSD + totalAbonosUSD - totalExpUSD - totalNcUSD);
+  const netConsolidatedBs = round2(netConsolidatedUSD * bcvRate);
+
+  const nowStr = new Date().toLocaleString('es-VE');
+
+  // Shift Metadata Table
+  autoTable(doc, {
+    startY: y,
+    theme: 'grid',
+    headStyles: { fillColor: [11, 21, 40], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+    bodyStyles: { fontSize: 8, textColor: [30, 41, 59] },
+    head: [['Apertura del Turno', 'Fecha/Hora Corte X', 'Operador / Cajero', 'Fondo Inicial Gaveta']],
+    body: [
+      [
+        cashShift?.openedDateFormatted || (cashShift?.openedAt ? new Date(cashShift.openedAt).toLocaleString('es-VE') : 'Jornada del Día'),
+        nowStr,
+        cashierName || cashShift?.openedBy || 'Cajero en Turno',
+        `$ ${formatUSD(initialUSD)}  |  Bs. ${formatBs(initialBs)}`
+      ]
+    ],
+    margin: { left: 14, right: 14 }
+  });
+
+  // @ts-ignore
+  y = doc.lastAutoTable.finalY + 8;
+
+  // Section 1: Drawer Cash Audit (USD & Bs)
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(11, 21, 40);
+  doc.text('1. Auditoría de Efectivo en Gaveta (USD y Bolívares)', 14, y);
+  y += 3;
+
+  autoTable(doc, {
+    startY: y,
+    theme: 'grid',
+    headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+    bodyStyles: { fontSize: 8 },
+    head: [['Moneda en Gaveta', 'Fondo Inicial', '+ Ingresos (Ventas/Abonos)', '- Egresos / NC', '= Esperado en Gaveta']],
+    body: [
+      [
+        'Efectivo Dólares ($ USD)',
+        `$ ${formatUSD(initialUSD)}`,
+        `+$ ${formatUSD(cashUsdSales)}`,
+        `-$ ${formatUSD(cashUsdExp)}`,
+        `$ ${formatUSD(drawerCashUSD)}`
+      ],
+      [
+        'Efectivo Bolívares (Bs.)',
+        `Bs. ${formatBs(initialBs)}`,
+        `+Bs. ${formatBs(cashBsSales)}`,
+        `-Bs. ${formatBs(cashBsExp)}`,
+        `Bs. ${formatBs(drawerCashBs)}`
+      ]
+    ],
+    margin: { left: 14, right: 14 }
+  });
+
+  // @ts-ignore
+  y = doc.lastAutoTable.finalY + 8;
+
+  // Section 2: Electronic & Credit Channels
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(11, 21, 40);
+  doc.text('2. Desglose por Canales Electrónicos y Crédito del Turno', 14, y);
+  y += 3;
+
+  const pmCount = sales.filter(s => s.paymentMethod === 'pago_movil' || (s.paymentMethod === 'pago_combinado' && (s.paymentDetails?.combinedBreakdown?.pagoMovil ?? 0) > 0)).length;
+  const debitoCount = sales.filter(s => s.paymentMethod === 'debito' || (s.paymentMethod === 'pago_combinado' && (s.paymentDetails?.combinedBreakdown?.debito ?? 0) > 0)).length;
+  const transfCount = sales.filter(s => s.paymentMethod === 'transferencia' || (s.paymentMethod === 'pago_combinado' && (s.paymentDetails?.combinedBreakdown?.transferencia ?? 0) > 0)).length;
+  const fiaoCount = sales.filter(s => s.paymentMethod === 'fiao' || (s.paymentMethod === 'pago_combinado' && (s.paymentDetails?.combinedBreakdown?.fiaoRemaining ?? 0) > 0)).length;
+  const casheaCount = sales.filter(s => s.paymentMethod === 'cashea').length;
+
+  autoTable(doc, {
+    startY: y,
+    theme: 'striped',
+    headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8 },
+    bodyStyles: { fontSize: 8 },
+    head: [['Canal / Método', 'Operaciones', 'Cobrado Bruto', 'Egresos / NC', 'Neto en Bolívares', 'Equivalente USD']],
+    body: [
+      ['Pago Móvil', pmCount.toString(), `Bs. ${formatBs(pmSalesBs)}`, `-Bs. ${formatBs(pmExpBs)}`, `Bs. ${formatBs(pmNetBs)}`, `$ ${formatUSD(safeDiv(pmNetBs, bcvRate))}`],
+      ['Punto de Venta (Débito)', debitoCount.toString(), `Bs. ${formatBs(debitoSalesBs)}`, `-Bs. ${formatBs(debitoExpBs)}`, `Bs. ${formatBs(debitoNetBs)}`, `$ ${formatUSD(safeDiv(debitoNetBs, bcvRate))}`],
+      ['Transferencia Bancaria', transfCount.toString(), `Bs. ${formatBs(transferenciaSalesBs)}`, `-Bs. ${formatBs(transferenciaExpBs)}`, `Bs. ${formatBs(transferenciaNetBs)}`, `$ ${formatUSD(safeDiv(transferenciaNetBs, bcvRate))}`],
+      ['Crédito / Fiao (Por Cobrar)', fiaoCount.toString(), `$ ${formatUSD(fiaoTotalUSD)}`, '-', `Bs. ${formatBs(fiaoTotalUSD * bcvRate)}`, `$ ${formatUSD(fiaoTotalUSD)}`],
+      ['Cashea (Cuotas)', casheaCount.toString(), `$ ${formatUSD(casheaTotalUSD)}`, '-', `Bs. ${formatBs(casheaTotalUSD * bcvRate)}`, `$ ${formatUSD(casheaTotalUSD)}`]
+    ],
+    margin: { left: 14, right: 14 }
+  });
+
+  // @ts-ignore
+  y = doc.lastAutoTable.finalY + 8;
+
+  // Section 3: Summary Totals
+  autoTable(doc, {
+    startY: y,
+    theme: 'grid',
+    headStyles: { fillColor: [11, 21, 40], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5 },
+    bodyStyles: { fontSize: 8.5 },
+    head: [['Resumen Consolidado del Corte X', 'Monto USD', 'Equivalente Bs (BCV)']],
+    body: [
+      [`Ventas Brutas (${sales.length} facturas)`, `$ ${formatUSD(totalSalesGrossUSD)}`, `Bs. ${formatBs(totalSalesGrossUSD * bcvRate)}`],
+      [`Abonos a Fiados Recibidos (${fiadoAbonos.length})`, `+$ ${formatUSD(totalAbonosUSD)}`, `+Bs. ${formatBs(totalAbonosUSD * bcvRate)}`],
+      [`Notas de Crédito Emitidas (${creditNotes.length})`, `-$ ${formatUSD(totalNcUSD)}`, `-Bs. ${formatBs(totalNcUSD * bcvRate)}`],
+      [`Egresos y Pagos de Caja (${expenses.length})`, `-$ ${formatUSD(totalExpUSD)}`, `-Bs. ${formatBs(totalExpUSD * bcvRate)}`],
+      ['IGTF 3% Percibido en Divisas', `$ ${formatUSD(igtfTotalUSD)}`, `Bs. ${formatBs(igtfTotalBs)}`],
+      ['FLUJOS NETOS DEL TURNO (SIN FONDO BASE)', `$ ${formatUSD(netConsolidatedUSD)}`, `Bs. ${formatBs(netConsolidatedBs)}`]
+    ],
+    margin: { left: 14, right: 14 }
+  });
+
+  // @ts-ignore
+  y = doc.lastAutoTable.finalY + 8;
+
+  // Payment Mobile references list if space & refs exist
+  const pmRefSales = sales.filter(
+    s => s.paymentMethod === 'pago_movil' || (s.paymentMethod === 'pago_combinado' && (s.paymentDetails?.combinedBreakdown?.pagoMovil ?? 0) > 0)
+  );
+  if (pmRefSales.length > 0 && y < 235) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(11, 21, 40);
+    doc.text(`3. Referencias de Pago Móvil (${pmRefSales.length})`, 14, y);
+    y += 3;
+
+    autoTable(doc, {
+      startY: y,
+      theme: 'striped',
+      headStyles: { fillColor: [51, 65, 85], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5 },
+      bodyStyles: { fontSize: 7.5 },
+      head: [['Factura', 'Cliente', 'Banco', 'Referencia', 'Monto Bs']],
+      body: pmRefSales.slice(0, 12).map(s => [
+        s.invoiceNumber,
+        s.clientName.substring(0, 26),
+        (s.paymentDetails?.pagoMovilBank || 'Banco').substring(0, 22),
+        s.paymentDetails?.pagoMovilRef || s.paymentDetails?.combinedBreakdown?.pagoMovilRef || 'N/A',
+        `Bs. ${formatBs(s.paymentMethod === 'pago_combinado' ? (s.paymentDetails?.combinedBreakdown?.pagoMovil || 0) : s.totalBs)}`
+      ]),
+      margin: { left: 14, right: 14 }
+    });
+    // @ts-ignore
+    y = doc.lastAutoTable.finalY + 6;
+  }
+
+  // Disclaimer footer
+  y = Math.min(276, Math.max(y + 8, 258));
+  doc.setDrawColor(203, 213, 225);
+  doc.line(14, y, pageWidth - 14, y);
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    'DOCUMENTO DE AUDITORÍA INTERNA (CIERRE X): La caja continúa abierta y operativa hasta emitir el Cierre Z definitivo.',
+    pageWidth / 2,
+    y + 5,
+    { align: 'center' }
+  );
+
+  const fileName = `Corte_Parcial_Cierre_X_${getLocalDateStr()}.pdf`;
 
   if (action === 'print') {
     doc.autoPrint();

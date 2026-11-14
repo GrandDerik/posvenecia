@@ -69,6 +69,7 @@ export const ComprobanteNotaCreditoModal: React.FC<ComprobanteNotaCreditoModalPr
               <p className="text-[9px] text-slate-500">CONTROL SENIAT: {creditNote.controlNumber}</p>
               <p className="text-[9px] font-bold text-slate-700 bg-rose-50 py-0.5 rounded">
                 AFECTA A FACTURA: {creditNote.originalInvoiceNumber}
+                {creditNote.originalControlNumber ? ` (Ctrl: ${creditNote.originalControlNumber})` : ''}
               </p>
               <p className="text-[9px] text-slate-500">{new Date(creditNote.date).toLocaleString('es-VE')}</p>
               <p className="text-[9px] text-emerald-700 font-bold">TASA BCV: Bs. {creditNote.bcvRate.toFixed(2)}</p>

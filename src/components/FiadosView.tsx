@@ -18,7 +18,7 @@ import {
   Receipt
 } from 'lucide-react';
 import { FiadoRecord, PaymentMethod } from '../types';
-import { formatBs, formatUSD } from '../utils/exportUtils';
+import { formatBs, formatUSD, round2, safeDiv } from '../utils/exportUtils';
 
 export const FiadosView: React.FC = () => {
   const { fiados, addAbonoToFiado, createManualFiado, bcvRate, businessInfo } = useApp();
@@ -81,7 +81,8 @@ export const FiadosView: React.FC = () => {
     const rawVal = parseFloat(abonoAmountInput) || 0;
     if (rawVal <= 0) return;
 
-    const amountUSD = abonoCurrency === 'USD' ? rawVal : rawVal / bcvRate;
+    const amountUSD = abonoCurrency === 'USD' ? round2(rawVal) : round2(safeDiv(rawVal, bcvRate));
+    if (amountUSD <= 0) return;
     addAbonoToFiado(selectedFiadoForAbono.id, amountUSD, abonoMethod, abonoRef, abonoNotes);
     setSelectedFiadoForAbono(null);
   };
