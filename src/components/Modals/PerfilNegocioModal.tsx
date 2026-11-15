@@ -149,10 +149,16 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
   const [pinConfirmation, setPinConfirmation] = useState('');
   const [resetError, setResetError] = useState('');
   const [resetSuccessFeedback, setResetSuccessFeedback] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Sync modal form with live Cloud Firestore businessInfo whenever modal opens
   useEffect(() => {
     if (!isOpen) return;
+    setLogoError(null);
+    setSaveError(null);
+    setIsSaving(false);
     setFormData({
       name: businessInfo.name,
       rif: businessInfo.rif,
@@ -196,24 +202,30 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    if (file.size > 4 * 1024 * 1024) {
-      alert('La imagen no debe superar los 4MB');
+    if (!file.type.startsWith('image/')) {
+      setLogoError('El archivo seleccionado no es una imagen válida.');
       return;
     }
+    if (file.size > 4 * 1024 * 1024) {
+      setLogoError('La imagen original no debe superar los 4MB.');
+      return;
+    }
+    setLogoError(null);
     const reader = new FileReader();
     reader.onloadend = () => {
       if (typeof reader.result !== 'string') return;
       const rawDataUrl = reader.result;
-      // Compress/resize logo automatically so it fits safely within Firestore's 1MB document limit
+      // Compress/resize logo automatically so it fits safely within Firestore rules limit (<=350KB)
       const img = new Image();
       img.onload = () => {
         const MAX_DIM = 400;
         let { width, height } = img;
         if (width > MAX_DIM || height > MAX_DIM) {
           const ratio = Math.min(MAX_DIM / width, MAX_DIM / height);
-          width = Math.round(width * ratio);
-          height = Math.round(height * ratio);
+          width = Math.max(1, Math.round(width * ratio));
+          height = Math.max(1, Math.round(height * ratio));
         }
         const canvas = document.createElement('canvas');
         canvas.width = width;
@@ -221,17 +233,34 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(img, 0, 0, width, height);
-          const compressed = canvas.toDataURL('image/webp', 0.82);
+          let compressed = canvas.toDataURL('image/webp', 0.80);
+          if (!compressed.startsWith('data:image/webp') || compressed.length > 340000) {
+            const jpegFallback = canvas.toDataURL('image/jpeg', 0.78);
+            if (jpegFallback.length < compressed.length || !compressed.startsWith('data:image/webp')) {
+              compressed = jpegFallback;
+            }
+          }
+          const finalUrl = compressed.length < rawDataUrl.length ? compressed : rawDataUrl;
+          if (finalUrl.length > 340000) {
+            setLogoError('El logo supera los 340KB incluso comprimido. Usa una imagen más ligera.');
+            return;
+          }
           setFormData(prev => ({
             ...prev,
-            logoUrl: compressed.length < rawDataUrl.length ? compressed : rawDataUrl
+            logoUrl: finalUrl
           }));
-        } else {
+        } else if (rawDataUrl.length <= 340000) {
           setFormData(prev => ({ ...prev, logoUrl: rawDataUrl }));
+        } else {
+          setLogoError('El logo supera los 340KB permitidos por Cloud Firestore.');
         }
       };
       img.onerror = () => {
-        setFormData(prev => ({ ...prev, logoUrl: rawDataUrl }));
+        if (rawDataUrl.length <= 340000) {
+          setFormData(prev => ({ ...prev, logoUrl: rawDataUrl }));
+        } else {
+          setLogoError('No se pudo comprimir el logo seleccionado.');
+        }
       };
       img.src = rawDataUrl;
     };
@@ -317,25 +346,38 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
     setIsAddingBank(false);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+    if (formData.logoUrl && formData.logoUrl.length > 340000) {
+      setSaveError('El logo excede el límite permitido (340KB). Quita o reemplaza la imagen antes de guardar.');
+      return;
+    }
+
     const defaultPM = pagoMovilAccounts.find(a => a.isDefault) || pagoMovilAccounts[0];
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await updateBusinessInfo({
+        ...formData,
+        pagoMovilBank: defaultPM?.bank || formData.pagoMovilBank,
+        pagoMovilPhone: defaultPM?.phone || formData.pagoMovilPhone,
+        pagoMovilCI: defaultPM?.ci || formData.pagoMovilCI,
+        pagoMovilAccounts,
+        posTerminals,
+        bankAccounts
+      });
 
-    updateBusinessInfo({
-      ...formData,
-      pagoMovilBank: defaultPM?.bank || formData.pagoMovilBank,
-      pagoMovilPhone: defaultPM?.phone || formData.pagoMovilPhone,
-      pagoMovilCI: defaultPM?.ci || formData.pagoMovilCI,
-      pagoMovilAccounts,
-      posTerminals,
-      bankAccounts
-    });
-
-    setShowSavedFeedback(true);
-    setTimeout(() => {
-      setShowSavedFeedback(false);
-      onClose();
-    }, 900);
+      setShowSavedFeedback(true);
+      setTimeout(() => {
+        setShowSavedFeedback(false);
+        onClose();
+      }, 900);
+    } catch (err: any) {
+      setSaveError(err?.message || 'No se pudo guardar el perfil del negocio en Cloud Firestore.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleOpenResetDialog = (mode: 'clean_zero' | 'restore_demo') => {
@@ -345,26 +387,35 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
     setIsResetConfirmOpen(true);
   };
 
-  const handleExecuteReset = (e: React.FormEvent) => {
+  const handleExecuteReset = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     const pin = pinConfirmation.trim();
     if (pin !== managerPin && pin.toUpperCase() !== 'REINICIAR' && pin !== '0000') {
       setResetError(`Clave incorrecta. Ingrese la clave de gerente (${managerPin}) o escriba REINICIAR.`);
       return;
     }
     
-    updateBusinessInfo(formData);
-    factoryReset(resetMode);
-    
-    setResetSuccessFeedback(true);
-    setTimeout(() => {
-      setResetSuccessFeedback(false);
-      setIsResetConfirmOpen(false);
-      onClose();
-      if (resetMode === 'clean_zero') {
-        setActiveTab('productos');
-      }
-    }, 1100);
+    setIsSaving(true);
+    setResetError('');
+    try {
+      await updateBusinessInfo(formData);
+      await factoryReset(resetMode);
+      
+      setResetSuccessFeedback(true);
+      setTimeout(() => {
+        setResetSuccessFeedback(false);
+        setIsResetConfirmOpen(false);
+        onClose();
+        if (resetMode === 'clean_zero') {
+          setActiveTab('productos');
+        }
+      }, 1100);
+    } catch (err: any) {
+      setResetError(err?.message || 'Error al reiniciar los datos en Cloud Firestore.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -531,6 +582,9 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                         </button>
                       )}
                     </div>
+                    {logoError && (
+                      <p className="text-[11px] font-bold text-rose-600 mt-1">{logoError}</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1303,6 +1357,13 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
             </div>
           )}
 
+          {saveError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{saveError}</span>
+            </div>
+          )}
+
           {/* Action Footer */}
           <div className="pt-3 border-t border-slate-200 flex items-center justify-between">
             <span className="text-[11px] text-slate-500">
@@ -1312,15 +1373,17 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                disabled={isSaving}
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-xs font-bold transition-colors cursor-pointer"
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
               >
                 Cerrar
               </button>
               
               <button
                 type="submit"
-                className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                disabled={isSaving}
+                className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-blue-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
               >
                 {showSavedFeedback ? (
                   <>
@@ -1330,7 +1393,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                 ) : (
                   <>
                     <Check className="w-4 h-4" />
-                    <span>Guardar Cambios</span>
+                    <span>{isSaving ? 'Guardando...' : 'Guardar Cambios'}</span>
                   </>
                 )}
               </button>
@@ -1388,17 +1451,19 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                   <div className="grid grid-cols-2 gap-2 pt-1">
                     <button
                       type="button"
+                      disabled={isSaving}
                       onClick={() => setIsResetConfirmOpen(false)}
-                      className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                      className="py-2 px-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                     >
                       Cancelar
                     </button>
                     <button
                       type="submit"
-                      className="py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-md transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      disabled={isSaving}
+                      className="py-2 px-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                     >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Confirmar</span>
+                      <RotateCcw className={`w-3.5 h-3.5 ${isSaving ? 'animate-spin' : ''}`} />
+                      <span>{isSaving ? 'Procesando...' : 'Confirmar'}</span>
                     </button>
                   </div>
                 )}

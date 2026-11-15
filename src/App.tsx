@@ -17,7 +17,7 @@ import { NotaCreditoModal } from './components/Modals/NotaCreditoModal';
 import { DesincorporarStockModal } from './components/Modals/DesincorporarStockModal';
 import { ComprobanteNotaCreditoModal } from './components/Modals/ComprobanteNotaCreditoModal';
 import { LoginView } from './components/LoginView';
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import { formatBs } from './utils/exportUtils';
 
 const AppContent: React.FC = () => {
@@ -36,7 +36,9 @@ const AppContent: React.FC = () => {
     selectedSaleForCreditNote,
     setSelectedSaleForCreditNote,
     lastCompletedCreditNote,
-    setLastCompletedCreditNote
+    setLastCompletedCreditNote,
+    notification,
+    dismissNotification
   } = useApp();
 
   if (isAuthLoading) {
@@ -65,6 +67,45 @@ const AppContent: React.FC = () => {
     <div className="min-h-screen flex flex-col relative bg-[#EEF2F7] text-slate-900">
       {/* Top Navbar with BCV ticker and tabs */}
       <Navbar />
+
+      {/* Global Dismissible Notification Banner / Toast */}
+      {notification && (
+        <div
+          role="alert"
+          className="fixed top-20 right-4 left-4 sm:left-auto sm:max-w-md z-50 animate-in fade-in slide-in-from-top-2"
+        >
+          <div
+            className={`rounded-2xl p-3.5 shadow-xl border flex items-start gap-3 text-xs ${
+              notification.type === 'error'
+                ? 'bg-rose-50 border-rose-300 text-rose-900'
+                : notification.type === 'warning'
+                ? 'bg-amber-50 border-amber-300 text-amber-950'
+                : notification.type === 'success'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                : 'bg-blue-50 border-blue-300 text-blue-950'
+            }`}
+          >
+            <span className="shrink-0 mt-0.5">
+              {notification.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-600" />}
+              {notification.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-600" />}
+              {notification.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+              {notification.type === 'info' && <Info className="w-4 h-4 text-blue-600" />}
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="font-extrabold leading-snug">{notification.title}</div>
+              <div className="mt-0.5 opacity-90 leading-relaxed break-words">{notification.message}</div>
+            </div>
+            <button
+              type="button"
+              onClick={dismissNotification}
+              aria-label="Cerrar notificación"
+              className="p-1 rounded-lg hover:bg-black/5 shrink-0 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Tab Content */}
       <main className="flex-1 pb-12">

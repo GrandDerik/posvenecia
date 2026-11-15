@@ -128,6 +128,10 @@ export const ContabilidadView: React.FC = () => {
   const [salesPage, setSalesPage] = useState<number>(1);
   const [expensesPage, setExpensesPage] = useState<number>(1);
   const [ncPage, setNcPage] = useState<number>(1);
+  const [abonoCuentaError, setAbonoCuentaError] = useState<string | null>(null);
+  const [isSubmittingAbonoCuenta, setIsSubmittingAbonoCuenta] = useState(false);
+  const [abonoGastoError, setAbonoGastoError] = useState<string | null>(null);
+  const [isSubmittingAbonoGasto, setIsSubmittingAbonoGasto] = useState(false);
 
   useEffect(() => {
     setSalesPage(1);
@@ -273,21 +277,31 @@ export const ContabilidadView: React.FC = () => {
     setCuentaAbonoMethod('transferencia');
     setCuentaAbonoRef('');
     setCuentaAbonoNotes('');
+    setAbonoCuentaError(null);
+    setIsSubmittingAbonoCuenta(false);
   };
 
-  const handleSaveAbonoCuenta = (e: React.FormEvent) => {
+  const handleSaveAbonoCuenta = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cuentaForAbono) return;
+    if (!cuentaForAbono || isSubmittingAbonoCuenta) return;
     const amt = parseFloat(cuentaAbonoAmount) || 0;
     if (amt <= 0) return;
-    addAbonoToCuentaPorPagar(
-      cuentaForAbono.id,
-      Math.min(amt, cuentaForAbono.remainingUSD),
-      cuentaAbonoMethod,
-      cuentaAbonoRef.trim() || undefined,
-      cuentaAbonoNotes.trim() || undefined
-    );
-    setCuentaForAbono(null);
+    setIsSubmittingAbonoCuenta(true);
+    setAbonoCuentaError(null);
+    try {
+      await addAbonoToCuentaPorPagar(
+        cuentaForAbono.id,
+        Math.min(amt, cuentaForAbono.remainingUSD),
+        cuentaAbonoMethod,
+        cuentaAbonoRef.trim() || undefined,
+        cuentaAbonoNotes.trim() || undefined
+      );
+      setCuentaForAbono(null);
+    } catch (err: any) {
+      setAbonoCuentaError(err?.message || 'No se pudo registrar el abono en Cloud Firestore.');
+    } finally {
+      setIsSubmittingAbonoCuenta(false);
+    }
   };
 
   const handleOpenEditGastoOp = (g: GastoOperativo) => {
@@ -330,22 +344,32 @@ export const ContabilidadView: React.FC = () => {
     setGastoAbonoMethod(g.paymentMethod || 'efectivo_usd');
     setGastoAbonoRef('');
     setGastoAbonoNotes('');
+    setAbonoGastoError(null);
+    setIsSubmittingAbonoGasto(false);
   };
 
-  const handleSaveAbonoGasto = (e: React.FormEvent) => {
+  const handleSaveAbonoGasto = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!gastoForAbono) return;
+    if (!gastoForAbono || isSubmittingAbonoGasto) return;
     const remaining = gastoForAbono.remainingUSD ?? Math.max(0, gastoForAbono.amountUSD - (gastoForAbono.paidAmountUSD || 0));
     const amt = parseFloat(gastoAbonoAmount) || 0;
     if (amt <= 0) return;
-    markGastoOperativoPagado(
-      gastoForAbono.id,
-      gastoAbonoMethod,
-      gastoAbonoRef.trim() || undefined,
-      Math.min(amt, remaining),
-      gastoAbonoNotes.trim() || undefined
-    );
-    setGastoForAbono(null);
+    setIsSubmittingAbonoGasto(true);
+    setAbonoGastoError(null);
+    try {
+      await markGastoOperativoPagado(
+        gastoForAbono.id,
+        gastoAbonoMethod,
+        gastoAbonoRef.trim() || undefined,
+        Math.min(amt, remaining),
+        gastoAbonoNotes.trim() || undefined
+      );
+      setGastoForAbono(null);
+    } catch (err: any) {
+      setAbonoGastoError(err?.message || 'No se pudo registrar el abono del gasto en Cloud Firestore.');
+    } finally {
+      setIsSubmittingAbonoGasto(false);
+    }
   };
 
   const handleConfirmDelete = () => {
@@ -3309,13 +3333,19 @@ export const ContabilidadView: React.FC = () => {
                 <label className="block font-bold text-slate-700 mb-1">Observación</label>
                 <input type="text" value={cuentaAbonoNotes} onChange={e => setCuentaAbonoNotes(e.target.value)} placeholder="Ej: Abono parcial factura..." className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl" />
               </div>
+              {abonoCuentaError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{abonoCuentaError}</span>
+                </div>
+              )}
             </div>
 
             <div className="p-3 bg-[#F8FAFC] border-t border-[#DCE4F0] flex justify-end gap-2">
-              <button type="button" onClick={() => setCuentaForAbono(null)} className="px-4 py-2 bg-white border border-[#DCE4F0] text-slate-700 rounded-xl text-xs font-bold cursor-pointer">Cancelar</button>
-              <button type="submit" className="px-4 py-2 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)]">
+              <button type="button" disabled={isSubmittingAbonoCuenta} onClick={() => setCuentaForAbono(null)} className="px-4 py-2 bg-white border border-[#DCE4F0] text-slate-700 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50">Cancelar</button>
+              <button type="submit" disabled={isSubmittingAbonoCuenta} className="px-4 py-2 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)]">
                 <Check className="w-3.5 h-3.5" />
-                <span>Confirmar Abono</span>
+                <span>{isSubmittingAbonoCuenta ? 'Confirmando...' : 'Confirmar Abono'}</span>
               </button>
             </div>
           </form>
@@ -3469,13 +3499,19 @@ export const ContabilidadView: React.FC = () => {
                   <label className="block font-bold text-slate-700 mb-1">Observación</label>
                   <input type="text" value={gastoAbonoNotes} onChange={e => setGastoAbonoNotes(e.target.value)} placeholder="Ej: Abono parcial de insumos..." className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl" />
                 </div>
+                {abonoGastoError && (
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{abonoGastoError}</span>
+                  </div>
+                )}
               </div>
 
               <div className="p-3 bg-[#F8FAFC] border-t border-[#DCE4F0] flex justify-end gap-2">
-                <button type="button" onClick={() => setGastoForAbono(null)} className="px-4 py-2 bg-white border border-[#DCE4F0] text-slate-700 rounded-xl text-xs font-bold cursor-pointer">Cancelar</button>
-                <button type="submit" className="px-4 py-2 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)]">
+                <button type="button" disabled={isSubmittingAbonoGasto} onClick={() => setGastoForAbono(null)} className="px-4 py-2 bg-white border border-[#DCE4F0] text-slate-700 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50">Cancelar</button>
+                <button type="submit" disabled={isSubmittingAbonoGasto} className="px-4 py-2 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)]">
                   <Check className="w-3.5 h-3.5" />
-                  <span>Confirmar Abono</span>
+                  <span>{isSubmittingAbonoGasto ? 'Confirmando...' : 'Confirmar Abono'}</span>
                 </button>
               </div>
             </form>

@@ -47,10 +47,13 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     lastDriveSyncTime,
     cashShift,
     cashShiftHistory,
-    restoreDatabase
+    restoreDatabase,
+    getFullDatabasePayload
   } = useApp();
 
   const [isSyncingLocal, setIsSyncingLocal] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [downloadFeedback, setDownloadFeedback] = useState<string | null>(null);
 
@@ -69,76 +72,81 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
 
   if (!isOpen) return null;
 
-  const currentPayload: BackupDataPayload = {
-    version: '1.2',
-    timestamp: new Date().toISOString(),
-    businessInfo,
-    bcvRate,
-    products,
-    sales,
-    expenses,
-    fiados,
-    cuentasPorPagar,
-    gastosOperativos,
-    clients,
-    cashShift,
-    cashShiftHistory
-  };
-
-  const handleDownloadExcel = () => {
+  const handleDownloadExcel = async () => {
+    setIsExporting(true);
     try {
+      const full = await getFullDatabasePayload();
       const filename = downloadComprehensiveAccountingExcel({
-        sales,
-        expenses,
-        products,
-        fiados,
-        cuentasPorPagar,
-        gastosOperativos,
-        cashShiftHistory,
-        bcvRate,
-        businessInfo
+        sales: full.sales,
+        expenses: full.expenses,
+        products: full.products,
+        fiados: full.fiados,
+        cuentasPorPagar: full.cuentasPorPagar,
+        gastosOperativos: full.gastosOperativos,
+        cashShiftHistory: full.cashShiftHistory,
+        suppliers: full.suppliers,
+        creditNotes: full.creditNotes,
+        inventoryDischarges: full.inventoryDischarges,
+        kardex: full.kardex,
+        bcvRate: full.bcvRate,
+        businessInfo: full.businessInfo
       });
-      setDownloadFeedback(`Descargado con éxito: ${filename}`);
+      setDownloadFeedback(`Descargado con éxito (histórico completo): ${filename}`);
       scheduleTimer(() => setDownloadFeedback(null), 4000);
     } catch (err: any) {
-      setDownloadFeedback(`Error al generar reporte Excel: ${err.message}`);
+      setDownloadFeedback(`Error al generar reporte Excel: ${err?.message || 'Error desconocido'}`);
       scheduleTimer(() => setDownloadFeedback(null), 5000);
+    } finally {
+      setIsExporting(false);
     }
   };
 
-  const handleDownloadJSON = () => {
+  const handleDownloadJSON = async () => {
+    setIsExporting(true);
     try {
-      const filename = downloadSystemBackupJSON(currentPayload);
-      setDownloadFeedback(`Copia JSON descargada: ${filename}`);
+      const full = await getFullDatabasePayload();
+      const filename = downloadSystemBackupJSON(full);
+      setDownloadFeedback(`Copia JSON completa descargada: ${filename}`);
       scheduleTimer(() => setDownloadFeedback(null), 4000);
     } catch (err: any) {
-      setDownloadFeedback(`Error al generar backup: ${err.message}`);
+      setDownloadFeedback(`Error al generar backup: ${err?.message || 'Error desconocido'}`);
       scheduleTimer(() => setDownloadFeedback(null), 5000);
+    } finally {
+      setIsExporting(false);
     }
   };
 
   const handleRestoreJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
 
+    setIsRestoring(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const content = event.target?.result as string;
         const parsed = JSON.parse(content) as BackupDataPayload;
 
-        if (!parsed.products || !parsed.sales) {
-          throw new Error('El archivo no tiene el formato de copia de seguridad de PosVenecia.');
+        if (!parsed || !Array.isArray(parsed.products) || !Array.isArray(parsed.sales)) {
+          throw new Error('El archivo no tiene el formato válido de copia de seguridad de PosVenecia.');
         }
 
         await restoreDatabase(parsed);
 
-        setDownloadFeedback('¡Copia de seguridad restaurada e importada con éxito!');
+        setDownloadFeedback('¡Copia de seguridad completa restaurada en Cloud Firestore con éxito!');
         scheduleTimer(() => setDownloadFeedback(null), 4000);
       } catch (err: any) {
-        setDownloadFeedback(`Error al restaurar: ${err.message}`);
+        setDownloadFeedback(`Error al restaurar: ${err?.message || 'Error desconocido'}`);
         scheduleTimer(() => setDownloadFeedback(null), 5000);
+      } finally {
+        setIsRestoring(false);
       }
+    };
+    reader.onerror = () => {
+      setIsRestoring(false);
+      setDownloadFeedback('Error al leer el archivo JSON seleccionado.');
+      scheduleTimer(() => setDownloadFeedback(null), 5000);
     };
     reader.readAsText(file);
   };
@@ -384,11 +392,12 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
 
           <button
             type="button"
+            disabled={isExporting || isRestoring}
             onClick={handleDownloadExcel}
-            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-extrabold shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
           >
             <Download className="w-4 h-4" />
-            <span>Descargar Libro Contable Completo (.xlsx)</span>
+            <span>{isExporting ? 'Recopilando histórico desde Firestore...' : 'Descargar Libro Contable Completo (.xlsx)'}</span>
           </button>
         </div>
 
@@ -411,19 +420,21 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
             <button
               type="button"
+              disabled={isExporting || isRestoring}
               onClick={handleDownloadJSON}
-              className="flex-1 py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              className="flex-1 py-2 px-3 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Descargar Backup (.json)</span>
+              <span>{isExporting ? 'Generando Backup...' : 'Descargar Backup (.json)'}</span>
             </button>
 
-            <label className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-slate-200">
+            <label className={`flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors border border-slate-200 ${(isExporting || isRestoring) ? 'opacity-50 pointer-events-none' : 'cursor-pointer'}`}>
               <Upload className="w-3.5 h-3.5 text-slate-600" />
-              <span>Restaurar desde (.json)</span>
+              <span>{isRestoring ? 'Restaurando en la nube...' : 'Restaurar desde (.json)'}</span>
               <input
                 type="file"
                 accept=".json"
+                disabled={isExporting || isRestoring}
                 onChange={handleRestoreJSON}
                 className="hidden"
               />

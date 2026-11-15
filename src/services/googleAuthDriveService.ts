@@ -15,7 +15,12 @@ import {
   GastoOperativo, 
   Client, 
   BusinessInfo,
-  CashShift
+  CashShift,
+  Supplier,
+  CreditNote,
+  InventoryDischarge,
+  KardexEntry,
+  BaseCurrency
 } from '../types';
 
 export { auth };
@@ -142,6 +147,12 @@ export interface AppDatabasePayload {
   businessInfo: BusinessInfo;
   bcvRate: number;
   bcvEuroRate: number;
+  baseCurrency?: BaseCurrency;
+  rateHistory?: { date: string; rate: number }[];
+  bcvLastUpdatedDate?: string | null;
+  bcvLastUpdatedAt?: string | null;
+  customCategories?: string[];
+  managerPin?: string;
   products: Product[];
   sales: Sale[];
   expenses: Expense[];
@@ -149,6 +160,10 @@ export interface AppDatabasePayload {
   cuentasPorPagar: CuentaPorPagar[];
   gastosOperativos: GastoOperativo[];
   clients: Client[];
+  suppliers?: Supplier[];
+  creditNotes?: CreditNote[];
+  inventoryDischarges?: InventoryDischarge[];
+  kardex?: KardexEntry[];
   cashShift?: CashShift | null;
   cashShiftHistory?: CashShift[];
   tombstones?: DatabaseTombstones;
@@ -199,7 +214,7 @@ export const initAuth = (
 export const signInWithGoogle = async (): Promise<{ user: User; accessToken: string }> => {
   if (!isFirebaseConfigured) {
     throw new Error(
-      'Para sincronizar con Google Drive, configura las variables VITE_FIREBASE_* en tu panel de Vercel o archivo .env. Mientras tanto, tu punto de venta funciona al 100% de forma local con IndexedDB y puedes exportar copias en JSON y Excel.'
+      'Firebase Auth/Firestore no está configurado en este entorno. Configura las variables VITE_FIREBASE_* para conectar tu cuenta de Google y sincronizar en tiempo real.'
     );
   }
   if (isSigningIn) {
@@ -260,6 +275,25 @@ export const logOutGoogle = async (): Promise<void> => {
   const curUser = auth.currentUser;
   if (curUser) {
     persistAccessTokenForUser(curUser.uid, null);
+  }
+  try {
+    const clearByPrefix = (storage: Storage | undefined) => {
+      if (!storage) return;
+      const toRemove: string[] = [];
+      for (let i = 0; i < storage.length; i++) {
+        const k = storage.key(i);
+        if (k && (k.startsWith('posvenecia_') || k.startsWith('tupunto_'))) {
+          toRemove.push(k);
+        }
+      }
+      toRemove.forEach((k) => storage.removeItem(k));
+    };
+    if (typeof window !== 'undefined') {
+      clearByPrefix(window.sessionStorage);
+      clearByPrefix(window.localStorage);
+    }
+  } catch {
+    // Ignore storage cleanup restrictions
   }
   await signOut(auth);
   cachedAccessToken = null;
@@ -549,6 +583,12 @@ export const mergeDatabasePayloads = (
   local: AppDatabasePayload,
   remote: AppDatabasePayload
 ): AppDatabasePayload => {
+  if (local.userUid && remote.userUid && local.userUid !== remote.userUid) {
+    throw new Error(
+      'Conflicto de aislamiento de cuenta: el respaldo en Google Drive pertenece a un UID de usuario diferente y no puede combinarse con la cuenta activa.'
+    );
+  }
+
   // 1. Tombstone consolidation
   const deletedProductIds = new Set([
     ...(local.tombstones?.deletedProductIds || []),
@@ -701,15 +741,46 @@ export const mergeDatabasePayloads = (
     activeShift = local.cashShift || remote.cashShift || null;
   }
 
-  // 10. Final payload with combined tombstones
+  // 10. Merge Suppliers, CreditNotes, InventoryDischarges, Kardex, CustomCategories & RateHistory
+  const suppliersMap = new Map<string, Supplier>();
+  (remote.suppliers || []).forEach(s => { if (s?.id) suppliersMap.set(s.id, s); });
+  (local.suppliers || []).forEach(s => { if (s?.id) suppliersMap.set(s.id, s); });
+
+  const creditNotesMap = new Map<string, CreditNote>();
+  (remote.creditNotes || []).forEach(cn => { if (cn?.id) creditNotesMap.set(cn.id, cn); });
+  (local.creditNotes || []).forEach(cn => { if (cn?.id) creditNotesMap.set(cn.id, cn); });
+
+  const dischargesMap = new Map<string, InventoryDischarge>();
+  (remote.inventoryDischarges || []).forEach(d => { if (d?.id) dischargesMap.set(d.id, d); });
+  (local.inventoryDischarges || []).forEach(d => { if (d?.id) dischargesMap.set(d.id, d); });
+
+  const kardexMap = new Map<string, KardexEntry>();
+  (remote.kardex || []).forEach(k => { if (k?.id) kardexMap.set(k.id, k); });
+  (local.kardex || []).forEach(k => { if (k?.id) kardexMap.set(k.id, k); });
+
+  const mergedCategories = Array.from(
+    new Set([...(remote.customCategories || []), ...(local.customCategories || [])])
+  ).filter(Boolean);
+
+  const rateHistoryMap = new Map<string, { date: string; rate: number }>();
+  (remote.rateHistory || []).forEach(h => { if (h?.date) rateHistoryMap.set(h.date, h); });
+  (local.rateHistory || []).forEach(h => { if (h?.date) rateHistoryMap.set(h.date, h); });
+
+  // 11. Final payload with combined tombstones
   return {
-    version: '2.1',
+    version: '2.2',
     updatedAt: new Date().toISOString(),
     userEmail: local.userEmail || remote.userEmail,
     userUid: local.userUid || remote.userUid,
     businessInfo: local.businessInfo || remote.businessInfo,
     bcvRate: local.bcvRate || remote.bcvRate,
     bcvEuroRate: local.bcvEuroRate || remote.bcvEuroRate,
+    baseCurrency: local.baseCurrency || remote.baseCurrency,
+    rateHistory: Array.from(rateHistoryMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
+    bcvLastUpdatedDate: local.bcvLastUpdatedDate || remote.bcvLastUpdatedDate || null,
+    bcvLastUpdatedAt: local.bcvLastUpdatedAt || remote.bcvLastUpdatedAt || null,
+    customCategories: mergedCategories,
+    managerPin: local.managerPin || remote.managerPin,
     products: mergedProducts,
     sales: mergedSales,
     expenses: mergedExpenses,
@@ -717,6 +788,12 @@ export const mergeDatabasePayloads = (
     clients: mergedClients,
     cuentasPorPagar: mergedCPP,
     gastosOperativos: mergedGastos,
+    suppliers: Array.from(suppliersMap.values()),
+    creditNotes: Array.from(creditNotesMap.values()),
+    inventoryDischarges: Array.from(dischargesMap.values()),
+    kardex: Array.from(kardexMap.values()).sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    ),
     cashShift: activeShift,
     cashShiftHistory: mergedShiftHistory,
     tombstones: {

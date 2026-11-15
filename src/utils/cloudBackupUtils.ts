@@ -1,12 +1,37 @@
 import * as XLSX from 'xlsx';
-import { Product, Sale, Expense, FiadoRecord, CuentaPorPagar, Client, BusinessInfo, GastoOperativo, GoogleAccount, CashShift } from '../types';
-import { formatBs, formatUSD, getLocalDateStr } from './exportUtils';
+import {
+  Product,
+  Sale,
+  Expense,
+  FiadoRecord,
+  CuentaPorPagar,
+  Client,
+  BusinessInfo,
+  GastoOperativo,
+  GoogleAccount,
+  CashShift,
+  Supplier,
+  CreditNote,
+  InventoryDischarge,
+  KardexEntry,
+  BaseCurrency
+} from '../types';
+import { getLocalDateStr, getProductPriceBs, getProductPriceUSD } from './exportUtils';
 
 export interface BackupDataPayload {
   version: string;
   timestamp: string;
+  userUid?: string;
+  userEmail?: string;
   businessInfo: BusinessInfo;
   bcvRate: number;
+  bcvEuroRate?: number;
+  baseCurrency?: BaseCurrency;
+  rateHistory?: { date: string; rate: number }[];
+  bcvLastUpdatedDate?: string | null;
+  bcvLastUpdatedAt?: string | null;
+  customCategories?: string[];
+  managerPin?: string;
   products: Product[];
   sales: Sale[];
   expenses: Expense[];
@@ -14,6 +39,10 @@ export interface BackupDataPayload {
   cuentasPorPagar: CuentaPorPagar[];
   gastosOperativos?: GastoOperativo[];
   clients: Client[];
+  suppliers?: Supplier[];
+  creditNotes?: CreditNote[];
+  inventoryDischarges?: InventoryDischarge[];
+  kardex?: KardexEntry[];
   cashShift?: CashShift | null;
   cashShiftHistory?: CashShift[];
   googleAccount?: GoogleAccount;
@@ -21,7 +50,7 @@ export interface BackupDataPayload {
 
 /**
  * Generates and downloads a complete Excel workbook with all accounting, operational,
- * product history, sales, expenses, income/outflow, and debt records.
+ * product history, sales, expenses, income/outflow, Kardex, suppliers, and debt records.
  */
 export const downloadComprehensiveAccountingExcel = (data: {
   sales: Sale[];
@@ -31,6 +60,10 @@ export const downloadComprehensiveAccountingExcel = (data: {
   cuentasPorPagar: CuentaPorPagar[];
   gastosOperativos?: GastoOperativo[];
   cashShiftHistory?: CashShift[];
+  suppliers?: Supplier[];
+  creditNotes?: CreditNote[];
+  inventoryDischarges?: InventoryDischarge[];
+  kardex?: KardexEntry[];
   bcvRate: number;
   businessInfo: BusinessInfo;
 }) => {
@@ -92,8 +125,10 @@ export const downloadComprehensiveAccountingExcel = (data: {
     'Nombre': p.name,
     'Categoría': p.category,
     'Costo USD': p.costUSD,
-    'Precio USD': p.priceUSD,
-    'Precio Bs (Tasa BCV)': Number((p.priceUSD * data.bcvRate).toFixed(2)),
+    'Costo Bs Fijo': p.costBsFixed ?? '-',
+    'Precio USD': Number(getProductPriceUSD(p, data.bcvRate).toFixed(4)),
+    'Precio Bs (Tasa BCV)': getProductPriceBs(p, data.bcvRate),
+    'Moneda Fija': p.priceCurrency || 'USD',
     'Stock': (p.isService || p.itemType === 'servicio') ? 'Ilimitado' : p.stock,
     'Stock Mínimo': (p.isService || p.itemType === 'servicio') ? '-' : p.minStock,
     'Unidad': p.unit,
@@ -202,6 +237,75 @@ export const downloadComprehensiveAccountingExcel = (data: {
     }));
     const wsShifts = XLSX.utils.json_to_sheet(shiftData);
     XLSX.utils.book_append_sheet(wb, wsShifts, 'Cierres_de_Caja');
+  }
+
+  // 8. Sheet: Notas de Crédito (Devoluciones)
+  if (data.creditNotes && data.creditNotes.length > 0) {
+    const ncData = data.creditNotes.map((cn, idx) => ({
+      'N°': idx + 1,
+      'Fecha': new Date(cn.date).toLocaleDateString('es-VE'),
+      'Nota Crédito': cn.creditNoteNumber,
+      'N° Control NC': cn.controlNumber,
+      'Factura Afectada': cn.originalInvoiceNumber,
+      'Control Afectado': cn.originalControlNumber || '-',
+      'Cliente': cn.clientName,
+      'RIF': cn.clientRIF,
+      'Total USD': cn.totalUSD,
+      'Total Bs': cn.totalBs,
+      'Motivo': cn.reason,
+      'Método Reembolso': cn.refundMethod.replace('_', ' ').toUpperCase()
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ncData), 'Notas_de_Credito');
+  }
+
+  // 9. Sheet: Proveedores
+  if (data.suppliers && data.suppliers.length > 0) {
+    const supData = data.suppliers.map((sup, idx) => ({
+      'N°': idx + 1,
+      'Nombre': sup.name,
+      'RIF': sup.rif,
+      'Teléfono': sup.phone,
+      'Días Crédito': sup.creditDays,
+      'Saldo Pendiente USD': sup.accumulatedBalanceUSD,
+      'Dirección': sup.address || '-'
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(supData), 'Proveedores');
+  }
+
+  // 10. Sheet: Kardex de Inventario
+  if (data.kardex && data.kardex.length > 0) {
+    const kardexData = data.kardex.map((k, idx) => ({
+      'N°': idx + 1,
+      'Fecha': new Date(k.date).toLocaleString('es-VE'),
+      'Código': k.productCode,
+      'Producto': k.productName,
+      'Movimiento': k.type,
+      'Cantidad': k.quantityChange,
+      'Stock Anterior': k.previousStock,
+      'Stock Nuevo': k.newStock,
+      'Costo Unit USD': k.unitCostUSD,
+      'Costo Total USD': k.totalCostUSD,
+      'Método': k.valuationMethod,
+      'Balance FIFO USD': k.fifoBalanceUSD ?? '',
+      'Referencia': k.reference || '-'
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kardexData), 'Kardex_Inventario');
+  }
+
+  // 11. Sheet: Salidas y Mermas
+  if (data.inventoryDischarges && data.inventoryDischarges.length > 0) {
+    const discData = data.inventoryDischarges.map((d, idx) => ({
+      'N°': idx + 1,
+      'Fecha': new Date(d.date).toLocaleDateString('es-VE'),
+      'Comprobante': d.dischargeNumber,
+      'Producto': d.productName,
+      'Cantidad': d.quantity,
+      'Motivo': d.reason,
+      'Pérdida USD': d.totalLossUSD,
+      'Pérdida Bs': d.totalLossBs,
+      'Responsable': d.responsibleName
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(discData), 'Mermas_y_Salidas');
   }
 
   // Save Excel file

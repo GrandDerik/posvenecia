@@ -62,6 +62,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const [itemStrategy, setItemStrategy] = useState<PurchaseCostStrategy>('fifo');
   const [customNewPriceUSD, setCustomNewPriceUSD] = useState('');
   const [showItemSection, setShowItemSection] = useState(true);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products]);
   const safeBcvRate = typeof bcvRate === 'number' && !isNaN(bcvRate) && bcvRate > 0 ? bcvRate : 1;
@@ -272,6 +274,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setItemCostCurrency('USD');
       setItemStrategy('fifo');
       setCustomNewPriceUSD('');
+      setFormError(null);
+      setIsSubmitting(false);
     } else if (isOpen && !editingExpense) {
       setSelectedSupplierId('');
       setSaveAsNewSupplier(false);
@@ -299,6 +303,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setItemCostCurrency('USD');
       setItemStrategy('fifo');
       setCustomNewPriceUSD('');
+      setFormError(null);
+      setIsSubmitting(false);
     }
   }, [isOpen, editingExpense]);
 
@@ -333,9 +339,9 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const retencionIVABs = round2(applyRetencionIVA ? (ivaBs * 0.75) : 0); // 75% retention standard SENIAT
   const retencionISLRBs = round2(baseImponibleBs * 0.02); // 2% ISLR retention
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supplierName.trim() || rawAmount <= 0) return;
+    if (!supplierName.trim() || rawAmount <= 0 || isSubmitting) return;
 
     // Determine default global strategy if items exist
     const defaultStrategy = purchasedItems.length > 0 
@@ -346,71 +352,79 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       ? new Date(`${dueDate}T23:59:59`).toISOString()
       : undefined;
 
-    let finalSupplierId = selectedSupplierId || undefined;
-    if (!editingExpense && !finalSupplierId && saveAsNewSupplier && supplierName.trim()) {
-      const createdSup = addSupplier({
-        name: supplierName.trim(),
-        rif: supplierRIF.trim(),
-        phone: supplierPhone.trim(),
-        creditDays: 15,
-        accumulatedBalanceUSD: 0
-      });
-      finalSupplierId = createdSup.id;
-    }
+    setIsSubmitting(true);
+    setFormError(null);
+    try {
+      let finalSupplierId = selectedSupplierId || undefined;
+      if (!editingExpense && !finalSupplierId && saveAsNewSupplier && supplierName.trim()) {
+        const createdSup = addSupplier({
+          name: supplierName.trim(),
+          rif: supplierRIF.trim(),
+          phone: supplierPhone.trim(),
+          creditDays: 15,
+          accumulatedBalanceUSD: 0
+        });
+        finalSupplierId = createdSup.id;
+      }
 
-    if (editingExpense) {
-      updateExpense({
-        ...editingExpense,
-        invoiceNumber: invoiceNumber.trim() || editingExpense.invoiceNumber,
-        controlNumber: controlNumber.trim() || editingExpense.controlNumber,
-        supplierId: finalSupplierId ?? editingExpense.supplierId,
-        supplierName: supplierName.trim(),
-        supplierRIF: supplierRIF.trim(),
-        supplierPhone: supplierPhone.trim() || undefined,
-        description: description.trim() || editingExpense.description,
-        category,
-        amountUSD,
-        amountBs,
-        baseImponibleBs,
-        ivaBs,
-        retencionIVABs,
-        retencionISLRBs,
-        bcvRate: effectiveBcvRate,
-        enteredCurrency: currency,
-        paymentMethod,
-        dueDate: normalizedDueDate ?? editingExpense.dueDate,
-        reference,
-        items: purchasedItems.length > 0 ? purchasedItems : undefined,
-        costStrategy: defaultStrategy
-      });
-    } else {
-      addExpense({
-        date: new Date().toISOString(),
-        invoiceNumber: invoiceNumber.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`,
-        controlNumber: controlNumber.trim() || `00-${Math.floor(1000 + Math.random() * 9000)}`,
-        supplierId: finalSupplierId,
-        supplierName: supplierName.trim(),
-        supplierRIF: supplierRIF.trim(),
-        supplierPhone: supplierPhone.trim() || undefined,
-        description: description.trim() || (purchasedItems.length > 0 ? `Compra de ${purchasedItems.length} artículo(s) con entrada a inventario` : `Gasto en ${category}`),
-        category,
-        amountUSD,
-        amountBs,
-        baseImponibleBs,
-        ivaBs,
-        retencionIVABs,
-        retencionISLRBs,
-        bcvRate: effectiveBcvRate,
-        enteredCurrency: currency,
-        paymentMethod,
-        dueDate: normalizedDueDate,
-        reference: paymentMethod === 'credito' ? (reference.trim() || 'CRÉDITO') : reference,
-        items: purchasedItems.length > 0 ? purchasedItems : undefined,
-        costStrategy: defaultStrategy
-      });
-    }
+      if (editingExpense) {
+        await updateExpense({
+          ...editingExpense,
+          invoiceNumber: invoiceNumber.trim() || editingExpense.invoiceNumber,
+          controlNumber: controlNumber.trim() || editingExpense.controlNumber,
+          supplierId: finalSupplierId ?? editingExpense.supplierId,
+          supplierName: supplierName.trim(),
+          supplierRIF: supplierRIF.trim(),
+          supplierPhone: supplierPhone.trim() || undefined,
+          description: description.trim() || editingExpense.description,
+          category,
+          amountUSD,
+          amountBs,
+          baseImponibleBs,
+          ivaBs,
+          retencionIVABs,
+          retencionISLRBs,
+          bcvRate: effectiveBcvRate,
+          enteredCurrency: currency,
+          paymentMethod,
+          dueDate: normalizedDueDate ?? editingExpense.dueDate,
+          reference,
+          items: purchasedItems.length > 0 ? purchasedItems : undefined,
+          costStrategy: defaultStrategy
+        });
+      } else {
+        await addExpense({
+          date: new Date().toISOString(),
+          invoiceNumber: invoiceNumber.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`,
+          controlNumber: controlNumber.trim() || `00-${Math.floor(1000 + Math.random() * 9000)}`,
+          supplierId: finalSupplierId,
+          supplierName: supplierName.trim(),
+          supplierRIF: supplierRIF.trim(),
+          supplierPhone: supplierPhone.trim() || undefined,
+          description: description.trim() || (purchasedItems.length > 0 ? `Compra de ${purchasedItems.length} artículo(s) con entrada a inventario` : `Gasto en ${category}`),
+          category,
+          amountUSD,
+          amountBs,
+          baseImponibleBs,
+          ivaBs,
+          retencionIVABs,
+          retencionISLRBs,
+          bcvRate: effectiveBcvRate,
+          enteredCurrency: currency,
+          paymentMethod,
+          dueDate: normalizedDueDate,
+          reference: paymentMethod === 'credito' ? (reference.trim() || 'CRÉDITO') : reference,
+          items: purchasedItems.length > 0 ? purchasedItems : undefined,
+          costStrategy: defaultStrategy
+        });
+      }
 
-    onClose();
+      onClose();
+    } catch (err: any) {
+      setFormError(err?.message || 'No se pudo guardar la factura de compra en Cloud Firestore.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -1047,24 +1061,34 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
             )}
           </div>
 
+          {formError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
           {/* Footer Actions */}
           <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={onClose}
-              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer disabled:opacity-50"
             >
               Cancelar
             </button>
             {isCashRegisterOpen || editingExpense || paymentMethod === 'credito' ? (
               <button
                 type="submit"
-                disabled={!supplierName.trim() || rawAmount <= 0}
+                disabled={!supplierName.trim() || rawAmount <= 0 || isSubmitting}
                 className="flex items-center gap-1.5 px-5 py-2.5 bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer transition-colors"
               >
                 <Check className="w-4 h-4" />
                 <span>
-                  {editingExpense
+                  {isSubmitting
+                    ? 'Guardando en la nube...'
+                    : editingExpense
                     ? 'Guardar Cambios de Factura'
                     : paymentMethod === 'credito'
                     ? `Guardar Factura a Crédito ${purchasedItems.length > 0 ? `(+${purchasedItems.length} Artículos)` : ''}`

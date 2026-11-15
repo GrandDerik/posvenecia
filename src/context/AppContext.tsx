@@ -55,6 +55,7 @@ import {
   TransactionsDatePreset,
   TransactionsDateRange,
   saveSaleAtomic,
+  updateSaleInFirestore,
   cancelSaleAtomic,
   saveProductToFirestore,
   saveProductWithKardexAtomic,
@@ -83,15 +84,63 @@ import {
   deleteInventoryDischargeFromFirestore,
   saveExpenseWithInventoryAtomic,
   saveGastoWithCashOutflowAtomic,
-  saveCuentaWithCashOutflowAtomic,
+  addAbonoToFiadoTransaction,
+  addAbonoToCuentaPorPagarTransaction,
+  markGastoOperativoPagadoTransaction,
   deleteSaleFromFirestore,
+  fetchFullStoreSnapshotForBackup,
   restoreStoreDataToFirestore,
   clearUserFirestoreCollections
 } from '../services/firestoreSyncService';
+import { BackupDataPayload } from '../utils/cloudBackupUtils';
 import { round2, round6, getLocalDateStr, getProductPriceUSD } from '../utils/exportUtils';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
 export type FirestoreSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated';
+
+export interface AppNotification {
+  id: string;
+  type: 'error' | 'warning' | 'success' | 'info';
+  title: string;
+  message: string;
+}
+
+export const translateFirebaseError = (err: unknown): string => {
+  const rawMsg = err instanceof Error ? err.message : String(err || '');
+  let innerMsg = rawMsg;
+
+  if (rawMsg.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(rawMsg);
+      if (parsed && typeof parsed.error === 'string') {
+        innerMsg = parsed.error;
+      }
+    } catch {
+      // Keep rawMsg
+    }
+  }
+
+  const lower = innerMsg.toLowerCase();
+  if (lower.includes('missing or insufficient permissions') || lower.includes('permission-denied')) {
+    return 'No tienes permisos suficientes en Cloud Firestore para esta operación. Verifica que tu sesión de Google esté activa y pertenezca a esta cuenta.';
+  }
+  if (lower.includes('unauthenticated') || lower.includes('no hay sesión')) {
+    return 'Tu sesión expiró o no has iniciado sesión con Google. Inicia sesión nuevamente.';
+  }
+  if (lower.includes('aborted') || lower.includes('failed-precondition') || lower.includes('concurrent')) {
+    return 'Conflicto de concurrencia con otro dispositivo. Intenta guardar nuevamente en un instante.';
+  }
+  if (lower.includes('unavailable') || lower.includes('network') || lower.includes('offline') || lower.includes('failed to fetch')) {
+    return 'Sin conexión estable con Cloud Firestore. Verifica tu internet antes de continuar.';
+  }
+  if (lower.includes('resource-exhausted') || lower.includes('quota')) {
+    return 'Límite temporal de almacenamiento o tamaño de documento excedido en Firestore.';
+  }
+  if (lower.includes('exceeds the maximum allowed size') || lower.includes('too large')) {
+    return 'El documento (por ejemplo, una imagen muy pesada) supera el tamaño máximo permitido.';
+  }
+  return innerMsg || 'Ocurrió un error inesperado al sincronizar con Cloud Firestore.';
+};
 
 const devLog = (...args: unknown[]) => {
   if (import.meta.env.DEV) {
@@ -112,62 +161,7 @@ const getNextSequenceNumber = (existingValues: (string | undefined)[], prefix: s
   return maxSeq + 1;
 };
 
-const deductFifoBatches = (
-  batches: ProductBatch[] | undefined,
-  qtyToDeduct: number,
-  currentProduct: Product,
-  bcvRate: number,
-  baseCurrency: BaseCurrency
-): {
-  batches: ProductBatch[] | undefined;
-  priceUSD?: number;
-  costUSD?: number;
-  priceBsFixed?: number;
-} => {
-  if (!batches || batches.length === 0 || qtyToDeduct <= 0) {
-    return { batches };
-  }
-  const previousFirstId = batches[0]?.id;
-  let remaining = qtyToDeduct;
-  const nextBatches: ProductBatch[] = [];
-  for (const b of batches) {
-    if (remaining <= 0) {
-      nextBatches.push(b);
-    } else if (b.quantity > remaining) {
-      const nextQty = round2(b.quantity - remaining);
-      if (nextQty > 0) {
-        nextBatches.push({ ...b, quantity: nextQty });
-      }
-      remaining = 0;
-    } else {
-      remaining = round2(remaining - b.quantity);
-    }
-  }
 
-  let nextPriceUSD: number | undefined;
-  let nextCostUSD: number | undefined;
-  let nextPriceBsFixed: number | undefined;
-
-  if (nextBatches.length > 0 && nextBatches[0].id !== previousFirstId) {
-    const activeBatch = nextBatches[0];
-    if (activeBatch.targetPriceUSD && activeBatch.targetPriceUSD > 0 && activeBatch.targetPriceUSD !== currentProduct.priceUSD) {
-      nextPriceUSD = round2(activeBatch.targetPriceUSD);
-      if (baseCurrency === 'VED' && bcvRate > 0) {
-        nextPriceBsFixed = round2(nextPriceUSD * bcvRate);
-      }
-    }
-    if (activeBatch.costUSD > 0 && activeBatch.costUSD !== currentProduct.costUSD) {
-      nextCostUSD = round2(activeBatch.costUSD);
-    }
-  }
-
-  return {
-    batches: nextBatches,
-    priceUSD: nextPriceUSD,
-    costUSD: nextCostUSD,
-    priceBsFixed: nextPriceBsFixed
-  };
-};
 
 const restoreFifoBatches = (
   batches: ProductBatch[] | undefined,
@@ -316,9 +310,13 @@ const purgeLegacyBrowserBusinessCaches = () => {
 };
 
 interface AppContextType {
-  // Realtime Cloud Database (Firebase Firestore)
+  // Realtime Cloud Database (Firebase Firestore) & Global Notifications
   firestoreSyncStatus: FirestoreSyncStatus;
+  notification: AppNotification | null;
+  dismissNotification: () => void;
+  notifyUser: (type: AppNotification['type'], title: string, message: string) => void;
   backupClosingToDrive: () => Promise<boolean>;
+  getFullDatabasePayload: () => Promise<BackupDataPayload>;
 
   // BCV Rate (USD)
   bcvRate: number;
@@ -352,10 +350,10 @@ interface AppContextType {
   products: Product[];
   categories: string[];
   addCategory: (newCategory: string) => void;
-  addProduct: (product: Omit<Product, 'id'>) => void;
-  updateProduct: (product: Product) => void;
+  addProduct: (product: Omit<Product, 'id'>) => Promise<void>;
+  updateProduct: (product: Product) => Promise<void>;
   deleteProduct: (id: string) => void;
-  adjustStock: (id: string, newStock: number) => boolean;
+  adjustStock: (id: string, newStock: number) => Promise<boolean>;
   addQuickService: (serviceData: {
     name: string;
     category?: string;
@@ -383,9 +381,9 @@ interface AppContextType {
     clientData: { name: string; rif: string; phone?: string; address?: string },
     paymentDetails: PaymentDetails,
     fiscalCorrelatives: { invoiceNumber: string; controlNumber: string }
-  ) => Sale;
-  cancelSale: (saleId: string) => void;
-  updateSale: (sale: Sale) => void;
+  ) => Promise<Sale>;
+  cancelSale: (saleId: string) => Promise<void>;
+  updateSale: (sale: Sale) => Promise<void>;
   deleteSale: (saleId: string, restoreStock?: boolean) => void;
   lastCompletedSale: Sale | null;
   setLastCompletedSale: (sale: Sale | null) => void;
@@ -429,8 +427,8 @@ interface AppContextType {
 
   // Expenses / Purchases (Libro de Compras)
   expenses: Expense[];
-  addExpense: (expense: Omit<Expense, 'id'>) => void;
-  updateExpense: (updated: Expense) => void;
+  addExpense: (expense: Omit<Expense, 'id'>) => Promise<void>;
+  updateExpense: (updated: Expense) => Promise<void>;
   deleteExpense: (id: string) => void;
 
   // Date-Range Query Optimization & On-Demand Historical Loading (Sales & Expenses)
@@ -450,7 +448,7 @@ interface AppContextType {
 
   // Fiados
   fiados: FiadoRecord[];
-  addAbonoToFiado: (fiadoId: string, amountUSD: number, method: PaymentMethod, reference?: string, notes?: string) => void;
+  addAbonoToFiado: (fiadoId: string, amountUSD: number, method: PaymentMethod, reference?: string, notes?: string) => Promise<void>;
   createManualFiado: (data: { clientName: string; clientCI: string; clientPhone: string; debtUSD: number; notes?: string }) => void;
 
   // Cuentas por Pagar (Deudas a Proveedores)
@@ -458,14 +456,14 @@ interface AppContextType {
   addCuentaPorPagar: (data: Omit<CuentaPorPagar, 'id' | 'paidAmountUSD' | 'remainingUSD' | 'status' | 'abonos'>) => void;
   updateCuentaPorPagar: (updated: CuentaPorPagar) => void;
   deleteCuentaPorPagar: (id: string) => void;
-  addAbonoToCuentaPorPagar: (cuentaId: string, amountUSD: number, method: PaymentMethod, reference?: string, notes?: string) => void;
+  addAbonoToCuentaPorPagar: (cuentaId: string, amountUSD: number, method: PaymentMethod, reference?: string, notes?: string) => Promise<void>;
 
   // Gastos Operativos del Mes (Alquiler, Servicios, Eventuales)
   gastosOperativos: GastoOperativo[];
   addGastoOperativo: (gasto: Omit<GastoOperativo, 'id'>) => void;
   updateGastoOperativo: (updated: GastoOperativo) => void;
   deleteGastoOperativo: (id: string) => void;
-  markGastoOperativoPagado: (id: string, paymentMethod: PaymentMethod, reference?: string, amountUSD?: number, notes?: string) => void;
+  markGastoOperativoPagado: (id: string, paymentMethod: PaymentMethod, reference?: string, amountUSD?: number, notes?: string) => Promise<void>;
 
   // Google Account, OAuth & Google Drive Export
   googleUser: GoogleAccount | null;
@@ -489,8 +487,8 @@ interface AppContextType {
   cashShift: CashShift | null;
   isCashRegisterOpen: boolean;
   cashShiftHistory: CashShift[];
-  openCashShift: (initialCashUSD: number, initialCashBs: number, notes?: string, initialBanks?: BankInitialBalance[]) => void;
-  closeCashShift: (countedUSD: number, countedBs: number, notes?: string, countedBanks?: BankInitialBalance[]) => CashShift;
+  openCashShift: (initialCashUSD: number, initialCashBs: number, notes?: string, initialBanks?: BankInitialBalance[]) => Promise<void>;
+  closeCashShift: (countedUSD: number, countedBs: number, notes?: string, countedBanks?: BankInitialBalance[]) => Promise<CashShift>;
   isAperturaModalOpen: boolean;
   setIsAperturaModalOpen: (open: boolean) => void;
   isCierreModalOpen: boolean;
@@ -508,7 +506,7 @@ interface AppContextType {
 
   // Business Info
   businessInfo: BusinessInfo;
-  updateBusinessInfo: (info: Partial<BusinessInfo>) => void;
+  updateBusinessInfo: (info: Partial<BusinessInfo>) => Promise<void>;
 
   // Manager PIN
   managerPin: string;
@@ -518,7 +516,7 @@ interface AppContextType {
   isOnline: boolean;
 
   // Factory Reset / Arrancar de 0
-  factoryReset: (mode?: 'clean_zero' | 'restore_demo') => void;
+  factoryReset: (mode?: 'clean_zero' | 'restore_demo') => Promise<void>;
 }
 
 const INITIAL_BCV_RATE = 889.26;
@@ -697,6 +695,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Network Status
   const { isOnline } = useNetworkStatus();
 
+  // Global Notification Toast State
+  const [notification, setNotification] = useState<AppNotification | null>(null);
+  const notificationTimerRef = useRef<number | null>(null);
+
+  const dismissNotification = useCallback(() => {
+    if (notificationTimerRef.current !== null) {
+      window.clearTimeout(notificationTimerRef.current);
+      notificationTimerRef.current = null;
+    }
+    setNotification(null);
+  }, []);
+
+  const notifyUser = useCallback(
+    (type: AppNotification['type'], title: string, message: string) => {
+      if (notificationTimerRef.current !== null) {
+        window.clearTimeout(notificationTimerRef.current);
+        notificationTimerRef.current = null;
+      }
+      const id = 'notif-' + Date.now();
+      setNotification({ id, type, title, message });
+      notificationTimerRef.current = window.setTimeout(() => {
+        setNotification(prev => (prev?.id === id ? null : prev));
+        notificationTimerRef.current = null;
+      }, type === 'error' ? 7500 : 4500);
+    },
+    []
+  );
+
+  const notifyError = useCallback(
+    (err: unknown, fallbackTitle: string): string => {
+      const msg = translateFirebaseError(err);
+      notifyUser('error', fallbackTitle, msg);
+      return msg;
+    },
+    [notifyUser]
+  );
+
   // Realtime Cloud Database (Firestore) status and unsubscribe refs
   const [firestoreSyncStatus, setFirestoreSyncStatus] = useState<FirestoreSyncStatus>('unauthenticated');
   const firestoreUnsubRef = useRef<(() => void) | null>(null);
@@ -759,6 +794,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
    * Invoked strictly on logout or auth sign-out.
    */
   const clearAllInMemoryState = useCallback(() => {
+    if (notificationTimerRef.current !== null) {
+      window.clearTimeout(notificationTimerRef.current);
+      notificationTimerRef.current = null;
+    }
+    setNotification(null);
     setProducts([]);
     setSales([]);
     setExpenses([]);
@@ -784,6 +824,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsLoadingHistory(false);
     setBaseCurrencyState('USD');
     setManagerPin('1234');
+    setTerminalIdState('C1');
+    setApplyIVA(true);
+    setApplyIGTF(false);
     setLastDriveSyncTime(null);
     setSelectedClientForPOS(null);
     setCart([]);
@@ -800,6 +843,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsCuadreModalOpenState(false);
     setIsCreditNoteModalOpen(false);
     setIsDischargeModalOpen(false);
+    isCompletingSaleRef.current = false;
+    isCreatingCreditNoteRef.current = false;
+    isCreatingDischargeRef.current = false;
+    isCheckingRemoteRef.current = false;
     lastDriveFileIdRef.current = null;
     lastRemoteEtagRef.current = null;
     lastRemoteModifiedTimeRef.current = null;
@@ -891,7 +938,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   /**
    * Apertura de Caja para iniciar la jornada diaria
    */
-  const openCashShift = useCallback((initialCashUSD: number, initialCashBs: number, notes?: string, initialBanks?: BankInitialBalance[]) => {
+  const openCashShift = useCallback(async (initialCashUSD: number, initialCashBs: number, notes?: string, initialBanks?: BankInitialBalance[]): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para abrir la caja.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+
     const now = new Date();
     const timeStr = now.toLocaleDateString('es-VE') + ' ' + now.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
     const newShift: CashShift = {
@@ -905,24 +959,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       notes: notes || undefined,
       openedBy: googleUser?.name || 'Administrador'
     };
-    setCashShift(newShift);
-    setIsAperturaModalOpen(false);
-    const uid = getActiveUid();
-    if (uid) {
-      saveCashRegisterStatusToFirestore(uid, {
+
+    try {
+      await saveCashRegisterStatusToFirestore(uid, {
         isOpen: true,
         activeShift: newShift,
         updatedAt: now.toISOString(),
         updatedBy: googleUser?.name || 'Administrador',
         openedAt: now.toISOString()
-      }).catch(e => console.error('Sync open shift error:', e));
+      });
+      setCashShift(newShift);
+      setIsAperturaModalOpen(false);
+      notifyUser('success', 'Caja abierta', 'La jornada comercial quedó sincronizada en Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo abrir la caja');
+      throw e;
     }
-  }, [getActiveUid, googleUser?.name, setIsAperturaModalOpen]);
+  }, [getActiveUid, googleUser?.name, setIsAperturaModalOpen, notifyError, notifyUser]);
 
   /**
    * Cierre de Caja al final de la jornada diaria
    */
-  const closeCashShift = useCallback((countedUSD: number, countedBs: number, closedNotes?: string, countedBanks?: BankInitialBalance[]): CashShift => {
+  const closeCashShift = useCallback(async (countedUSD: number, countedBs: number, closedNotes?: string, countedBanks?: BankInitialBalance[]): Promise<CashShift> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para cerrar la caja.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+
     const now = new Date();
     const timeStr = now.toLocaleDateString('es-VE') + ' ' + now.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
 
@@ -1038,55 +1103,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalFiadoAbonosBs: round2(totalFiadoAbonosBs)
     };
 
-    setCashShift(closedShift);
-    setCashShiftHistory(prev => [closedShift, ...prev]);
-    setIsCierreModalOpen(false);
-
-    const uid = getActiveUid();
-    if (uid) {
-      saveCashShiftToFirestore(uid, closedShift).catch(e => console.error('Sync close shift error:', e));
-      saveCashRegisterStatusToFirestore(uid, {
-        isOpen: false,
-        activeShift: null,
-        updatedAt: now.toISOString(),
-        updatedBy: googleUser?.name || 'Administrador'
-      }).catch(e => console.error('Sync close shift status error:', e));
+    try {
+      await Promise.all([
+        saveCashShiftToFirestore(uid, closedShift),
+        saveCashRegisterStatusToFirestore(uid, {
+          isOpen: false,
+          activeShift: null,
+          updatedAt: now.toISOString(),
+          updatedBy: googleUser?.name || 'Administrador'
+        })
+      ]);
+      setCashShift(closedShift);
+      setCashShiftHistory(prev => [closedShift, ...prev.filter(h => h.id !== closedShift.id)]);
+      notifyUser('success', 'Cierre de caja confirmado', 'El arqueo y cierre de jornada quedaron guardados en la nube.');
       syncToGoogleDriveRef.current().then(() => {
         devLog('[PosVenecia] Respaldo opcional de cierre guardado en Google Drive.');
       }).catch(() => {});
+      return closedShift;
+    } catch (e) {
+      notifyError(e, 'No se pudo completar el cierre de caja');
+      throw e;
     }
-
-    return closedShift;
-  }, [cashShift, sales, expenses, creditNotes, fiados, getActiveUid, googleUser?.name, setIsCierreModalOpen]);
+  }, [cashShift, sales, expenses, creditNotes, fiados, getActiveUid, googleUser?.name, notifyError, notifyUser]);
 
   /**
-   * Build current database payload for optional Google Drive / JSON export
+   * Fetches a complete 14-collection snapshot directly from Cloud Firestore for lossless backups (JSON / Excel / Drive)
    */
-  const buildCurrentPayload = useCallback((): AppDatabasePayload => {
-    const cur = latestDataRef.current;
-    return {
-      version: '2.1',
-      updatedAt: new Date().toISOString(),
-      userEmail: cur.googleUser?.email || '',
-      userUid: cur.googleUser?.uid || '',
-      businessInfo: cur.businessInfo,
-      bcvRate: cur.bcvRate,
-      bcvEuroRate: cur.bcvEuroRate,
-      products: cur.products,
-      sales: cur.sales,
-      expenses: cur.expenses,
-      fiados: cur.fiados,
-      cuentasPorPagar: cur.cuentasPorPagar,
-      gastosOperativos: cur.gastosOperativos,
-      clients: cur.clients,
-      cashShift: cur.cashShift,
-      cashShiftHistory: cur.cashShiftHistory,
-      tombstones: { ...tombstonesRef.current }
-    };
-  }, []);
+  const getFullDatabasePayload = useCallback(async (): Promise<BackupDataPayload> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      throw new Error('Debes iniciar sesión con Google para generar un respaldo completo desde Cloud Firestore.');
+    }
+    return fetchFullStoreSnapshotForBackup(uid, latestDataRef.current.googleUser?.email || '');
+  }, [getActiveUid]);
+
+  const toDrivePayload = (snap: BackupDataPayload): AppDatabasePayload => ({
+    version: snap.version,
+    updatedAt: snap.timestamp,
+    userEmail: snap.userEmail || '',
+    userUid: snap.userUid || '',
+    businessInfo: snap.businessInfo,
+    bcvRate: snap.bcvRate,
+    bcvEuroRate: snap.bcvEuroRate ?? latestDataRef.current.bcvEuroRate,
+    baseCurrency: snap.baseCurrency,
+    rateHistory: snap.rateHistory,
+    bcvLastUpdatedDate: snap.bcvLastUpdatedDate,
+    bcvLastUpdatedAt: snap.bcvLastUpdatedAt,
+    customCategories: snap.customCategories,
+    managerPin: snap.managerPin,
+    products: snap.products,
+    sales: snap.sales,
+    expenses: snap.expenses,
+    fiados: snap.fiados,
+    cuentasPorPagar: snap.cuentasPorPagar,
+    gastosOperativos: snap.gastosOperativos || [],
+    clients: snap.clients,
+    suppliers: snap.suppliers || [],
+    creditNotes: snap.creditNotes || [],
+    inventoryDischarges: snap.inventoryDischarges || [],
+    kardex: snap.kardex || [],
+    cashShift: snap.cashShift,
+    cashShiftHistory: snap.cashShiftHistory || [],
+    tombstones: { ...tombstonesRef.current }
+  });
 
   /**
-   * Optional manual export to Google Drive (no longer used as local cache)
+   * Optional manual export to Google Drive (reads complete Cloud Firestore snapshot unconditionally)
    */
   const syncToGoogleDrive = useCallback(async (): Promise<boolean> => {
     return driveSyncMutex.runExclusive(async () => {
@@ -1106,7 +1188,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setDriveSyncStatus('syncing');
 
       try {
-        let payload = buildCurrentPayload();
+        const fullSnapshot = await fetchFullStoreSnapshotForBackup(curUser.uid, curUser.email || '');
+        let payload = toDrivePayload(fullSnapshot);
         let saveRes: { fileId: string; modifiedTime: string; etag: string | null } | null = null;
 
         try {
@@ -1157,7 +1240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsDriveSyncing(false);
       }
     });
-  }, [buildCurrentPayload]);
+  }, []);
 
   useEffect(() => {
     syncToGoogleDriveRef.current = syncToGoogleDrive;
@@ -1186,7 +1269,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           lastDriveFileIdRef.current = meta.fileId;
           const remoteResult = await readDatabaseFromDrive(token, meta.fileId);
           if (remoteResult && remoteResult.data) {
-            const localPayload = buildCurrentPayload();
+            const fullSnapshot = await fetchFullStoreSnapshotForBackup(curUser.uid, curUser.email || '');
+            const localPayload = toDrivePayload(fullSnapshot);
             const merged = mergeDatabasePayloads(localPayload, remoteResult.data);
 
             await restoreStoreDataToFirestore(curUser.uid, {
@@ -1196,11 +1280,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               fiados: merged.fiados,
               clients: merged.clients,
               cuentasPorPagar: merged.cuentasPorPagar,
-              gastosOperativos: merged.gastosOperativos,
+              gastosOperativos: merged.gastosOperativos || [],
+              suppliers: merged.suppliers || [],
+              creditNotes: merged.creditNotes || [],
+              inventoryDischarges: merged.inventoryDischarges || [],
+              kardex: merged.kardex || [],
               cashShiftHistory: merged.cashShiftHistory || [],
               businessInfo: merged.businessInfo || DEFAULT_BUSINESS_INFO,
               bcvRate: merged.bcvRate || bcvRate,
               bcvEuroRate: merged.bcvEuroRate || bcvEuroRate,
+              baseCurrency: merged.baseCurrency || 'USD',
+              rateHistory: merged.rateHistory || [],
+              bcvLastUpdatedDate: merged.bcvLastUpdatedDate,
+              bcvLastUpdatedAt: merged.bcvLastUpdatedAt,
+              customCategories: merged.customCategories || [],
+              managerPin: merged.managerPin || '1234',
               cashShift: merged.cashShift
             });
 
@@ -1210,6 +1304,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const timeStr = new Date().toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
             setLastDriveSyncTime(timeStr);
             setDriveSyncStatus('synced');
+            notifyUser('success', 'Respaldo sincronizado', 'Datos restaurados desde Google Drive en Cloud Firestore.');
             return true;
           }
         }
@@ -1222,12 +1317,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           setDriveSyncStatus('error');
         }
+        notifyError(err, 'Error al restaurar desde Google Drive');
         return false;
       } finally {
         setIsDriveSyncing(false);
       }
     });
-  }, [bcvEuroRate, bcvRate, buildCurrentPayload]);
+  }, [bcvEuroRate, bcvRate, notifyError, notifyUser]);
 
   const renewGoogleSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -1257,7 +1353,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
    * Restores a JSON backup directly into Cloud Firestore under users/{uid}/...
    */
   const restoreDatabase = useCallback(async (payload: any): Promise<boolean> => {
-    if (!payload || !payload.products || !payload.sales) {
+    if (!payload || !Array.isArray(payload.products) || !Array.isArray(payload.sales)) {
       throw new Error('El archivo no tiene el formato de copia de seguridad válido de PosVenecia.');
     }
 
@@ -1266,25 +1362,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw new Error('Debes iniciar sesión con Google para restaurar datos en Cloud Firestore.');
     }
 
-    await restoreStoreDataToFirestore(uid, {
-      products: payload.products || [],
-      sales: payload.sales || [],
-      expenses: payload.expenses || [],
-      fiados: payload.fiados || [],
-      clients: payload.clients || [],
-      cuentasPorPagar: payload.cuentasPorPagar || [],
-      gastosOperativos: payload.gastosOperativos || [],
-      suppliers: payload.suppliers || [],
-      cashShiftHistory: payload.cashShiftHistory || [],
-      businessInfo: payload.businessInfo || DEFAULT_BUSINESS_INFO,
-      bcvRate: payload.bcvRate || bcvRate,
-      bcvEuroRate: payload.bcvEuroRate || bcvEuroRate,
-      customCategories: payload.customCategories || [],
-      cashShift: payload.cashShift !== undefined ? payload.cashShift : null
-    });
-
-    return true;
-  }, [bcvEuroRate, bcvRate, getActiveUid]);
+    try {
+      await restoreStoreDataToFirestore(uid, {
+        products: payload.products || [],
+        sales: payload.sales || [],
+        expenses: Array.isArray(payload.expenses) ? payload.expenses : [],
+        fiados: Array.isArray(payload.fiados) ? payload.fiados : [],
+        clients: Array.isArray(payload.clients) ? payload.clients : [],
+        cuentasPorPagar: Array.isArray(payload.cuentasPorPagar) ? payload.cuentasPorPagar : [],
+        gastosOperativos: Array.isArray(payload.gastosOperativos) ? payload.gastosOperativos : [],
+        suppliers: Array.isArray(payload.suppliers) ? payload.suppliers : [],
+        creditNotes: Array.isArray(payload.creditNotes) ? payload.creditNotes : [],
+        inventoryDischarges: Array.isArray(payload.inventoryDischarges) ? payload.inventoryDischarges : [],
+        kardex: Array.isArray(payload.kardex) ? payload.kardex : [],
+        cashShiftHistory: Array.isArray(payload.cashShiftHistory) ? payload.cashShiftHistory : [],
+        businessInfo: payload.businessInfo || DEFAULT_BUSINESS_INFO,
+        bcvRate: payload.bcvRate || bcvRate,
+        bcvEuroRate: payload.bcvEuroRate || bcvEuroRate,
+        baseCurrency: payload.baseCurrency || 'USD',
+        rateHistory: Array.isArray(payload.rateHistory) ? payload.rateHistory : [],
+        bcvLastUpdatedDate: payload.bcvLastUpdatedDate,
+        bcvLastUpdatedAt: payload.bcvLastUpdatedAt,
+        customCategories: Array.isArray(payload.customCategories) ? payload.customCategories : [],
+        managerPin: payload.managerPin || '1234',
+        cashShift: payload.cashShift !== undefined ? payload.cashShift : null
+      });
+      notifyUser('success', 'Restauración completada', 'Toda la copia de seguridad fue importada a Cloud Firestore.');
+      return true;
+    } catch (err) {
+      notifyError(err, 'No se pudo restaurar la copia de seguridad');
+      throw err;
+    }
+  }, [bcvEuroRate, bcvRate, getActiveUid, notifyError, notifyUser]);
 
   const setTransactionsDateFilter = useCallback(
     (preset: TransactionsDatePreset, customStart?: string, customEnd?: string) => {
@@ -1350,10 +1459,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onError: (err) => {
         console.warn('[PosVenecia Firestore Realtime] Error:', err);
         setFirestoreSyncStatus('error');
+        notifyError(err, 'Error de sincronización en tiempo real');
       }
     });
     setFirestoreSyncStatus('synced');
-  }, []);
+  }, [notifyError]);
 
   // Re-subscribes ONLY `sales` and `expenses` when user switches date filter or logs in,
   // ensuring active cash shift boundaries are always covered without streaming unbounded months.
@@ -1410,6 +1520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onError: (err) => {
         console.warn('[PosVenecia Firestore Transactions] Error:', err);
         setIsLoadingHistory(false);
+        notifyError(err, 'Error al cargar historial de movimientos');
       }
     });
 
@@ -1419,7 +1530,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         transactionsUnsubRef.current = null;
       }
     };
-  }, [googleUser?.uid, transactionsDateRange, transactionsPreset, activeShiftOpenedYMD]);
+  }, [googleUser?.uid, transactionsDateRange, transactionsPreset, activeShiftOpenedYMD, notifyError]);
 
   /**
    * Firebase Auth initialization & real-time Firestore subscription (Strictly single-mount)
@@ -1540,18 +1651,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Business Info updates (Saved directly in Cloud Firestore users/{uid}/businessProfile/profile)
-  const updateBusinessInfo = useCallback((info: Partial<BusinessInfo>) => {
-    setBusinessInfo(prev => {
-      const next = { ...prev, ...info };
-      const uid = getActiveUid();
-      if (uid) {
-        saveBusinessProfileToFirestore(uid, { businessInfo: next }).catch(e =>
-          console.error('[PosVenecia Firestore] Error guardando perfil de negocio:', e)
-        );
-      }
-      return next;
-    });
-  }, [getActiveUid]);
+  const updateBusinessInfo = useCallback(async (info: Partial<BusinessInfo>): Promise<void> => {
+    const uid = getActiveUid();
+    const next = { ...latestDataRef.current.businessInfo, ...info };
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para guardar el perfil del negocio.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await saveBusinessProfileToFirestore(uid, { businessInfo: next });
+      setBusinessInfo(next);
+      notifyUser('success', 'Perfil actualizado', 'Datos del comercio guardados en Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo guardar el perfil del negocio');
+      throw e;
+    }
+  }, [getActiveUid, notifyError, notifyUser]);
 
   // Categories helper (Saved directly in Cloud Firestore)
   const addCategory = useCallback((newCat: string) => {
@@ -1562,13 +1678,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const next = [...prev, trimmed];
       const uid = getActiveUid();
       if (uid) {
-        saveBusinessProfileToFirestore(uid, { customCategories: next }).catch(e =>
-          console.error('[PosVenecia Firestore] Error guardando categoría:', e)
-        );
+        saveBusinessProfileToFirestore(uid, { customCategories: next }).catch(e => {
+          console.error('[PosVenecia Firestore] Error guardando categoría:', e);
+          notifyError(e, 'No se pudo guardar la categoría');
+        });
       }
       return next;
     });
-  }, [getActiveUid]);
+  }, [getActiveUid, notifyError]);
 
   const categories = Array.from(new Set([
     ...DEFAULT_CATEGORIES,
@@ -1577,14 +1694,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ])).filter(Boolean);
 
   // Product CRUD with real-time Firestore sync + immutable Kardex trace
-  const addProduct = (prodData: Omit<Product, 'id'>) => {
+  const addProduct = async (prodData: Omit<Product, 'id'>): Promise<void> => {
     const uid = getActiveUid();
-    if (!uid) return;
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para agregar productos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
     const newProd: Product = {
       ...prodData,
       id: 'prod-' + Date.now()
     };
-    setProducts(prev => [newProd, ...prev]);
 
     const isPhysical = !newProd.isService && newProd.itemType !== 'servicio';
     let kEntry: KardexEntry | undefined = undefined;
@@ -1601,19 +1721,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notes: 'Stock inicial al registrar producto en catálogo',
         userName: googleUser?.name
       });
-      setKardex(prev => [kEntry!, ...prev]);
     }
 
-    saveProductWithKardexAtomic(uid, newProd, kEntry).catch(e =>
-      console.error('[PosVenecia Firestore] Error en addProduct:', e)
-    );
+    try {
+      await saveProductWithKardexAtomic(uid, newProd, kEntry);
+      setProducts(prev => [newProd, ...prev.filter(p => p.id !== newProd.id)]);
+      if (kEntry) setKardex(prev => [kEntry!, ...prev]);
+      notifyUser('success', 'Producto guardado', `"${newProd.name}" sincronizado en inventario.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo guardar el producto');
+      throw e;
+    }
   };
 
-  const updateProduct = (updated: Product) => {
+  const updateProduct = async (updated: Product): Promise<void> => {
     const uid = getActiveUid();
-    if (!uid) return;
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para actualizar productos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
     const prevProd = products.find(p => p.id === updated.id);
-    setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
 
     const isPhysical = !updated.isService && updated.itemType !== 'servicio';
     let kEntry: KardexEntry | undefined = undefined;
@@ -1631,12 +1759,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notes: 'Ajuste de existencia desde ficha de producto',
         userName: googleUser?.name
       });
-      setKardex(prev => [kEntry!, ...prev]);
     }
 
-    saveProductWithKardexAtomic(uid, updated, kEntry).catch(e =>
-      console.error('[PosVenecia Firestore] Error en updateProduct:', e)
-    );
+    try {
+      await saveProductWithKardexAtomic(uid, updated, kEntry);
+      setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
+      if (kEntry) setKardex(prev => [kEntry!, ...prev]);
+      notifyUser('success', 'Producto actualizado', `"${updated.name}" actualizado en la nube.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo actualizar el producto');
+      throw e;
+    }
   };
 
   const deleteProduct = (id: string) => {
@@ -1647,43 +1780,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id
     ];
     setProducts(prev => prev.filter(p => p.id !== id));
-    deleteProductFromFirestore(uid, id).catch(e =>
-      console.error('[PosVenecia Firestore] Error en deleteProduct:', e)
-    );
+    deleteProductFromFirestore(uid, id).catch(e => {
+      console.error('[PosVenecia Firestore] Error en deleteProduct:', e);
+      notifyError(e, 'Error al eliminar producto');
+    });
   };
 
-  const adjustStock = (id: string, newStock: number): boolean => {
-    const target = products.find(p => p.id === id);
-    if (!target) return false;
+  const adjustStock = async (id: string, newStock: number): Promise<boolean> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      notifyError(new Error('Debes iniciar sesión con Google para ajustar el stock.'), 'Sesión requerida');
+      return false;
+    }
     const safeStock = Math.max(0, round2(newStock));
-    const updatedTarget = { ...target, stock: safeStock };
-    setProducts(prev => prev.map(p => p.id === id ? updatedTarget : p));
-
-    const isPhysical = !target.isService && target.itemType !== 'servicio';
-    let kEntry: KardexEntry | undefined = undefined;
-    if (isPhysical && round2(target.stock) !== safeStock) {
-      kEntry = buildKardexEntry({
-        product: updatedTarget,
-        type: 'ajuste_manual',
-        quantityChange: round2(safeStock - target.stock),
-        previousStock: target.stock,
-        newStock: safeStock,
-        unitCostUSD: target.costUSD || 0,
-        valuationMethod: (target.batches && target.batches.length > 0) ? 'fifo' : 'average_cost',
+    try {
+      await adjustProductStockInFirestore(uid, id, safeStock, {
         reference: 'AJUSTE-RAPIDO',
         notes: 'Ajuste manual (+/-) directo desde catálogo',
         userName: googleUser?.name
       });
-      setKardex(prev => [kEntry!, ...prev]);
+      return true;
+    } catch (e) {
+      notifyError(e, 'No se pudo ajustar el stock');
+      return false;
     }
-
-    const uid = getActiveUid();
-    if (uid) {
-      adjustProductStockInFirestore(uid, id, safeStock, kEntry).catch(e =>
-        console.error('[PosVenecia Firestore] Error en adjustProductStock:', e)
-      );
-    }
-    return true;
   };
 
   const addQuickService = (serviceData: {
@@ -1777,12 +1897,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Ref for double-submit protection in POS checkout
   const isCompletingSaleRef = useRef(false);
 
-  // Sales operations
-  const completeSale = (
+  // Sales operations (Strict Firestore transactions BEFORE clearing cart or UI state)
+  const completeSale = async (
     clientData: { name: string; rif: string; phone?: string; address?: string },
     paymentDetails: PaymentDetails,
     fiscalCorrelatives: { invoiceNumber: string; controlNumber: string }
-  ): Sale => {
+  ): Promise<Sale> => {
     const uid = getActiveUid();
     if (!uid) {
       throw new Error('Debes tener una sesión de Google activa para registrar ventas en la nube.');
@@ -1922,70 +2042,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         quantity
       }));
 
-      const productBatchUpdates: Array<{
-        productId: string;
-        batches?: ProductBatch[];
-        priceUSD?: number;
-        costUSD?: number;
-        priceBsFixed?: number;
-      }> = [];
-      const saleKardexEntries: KardexEntry[] = [];
-
-      if (stockDeductions.length > 0) {
-        const nextProducts = products.map(prod => {
-          const qtyToDeduct = deductionMap.get(prod.id);
-          if (qtyToDeduct !== undefined && qtyToDeduct > 0) {
-            const prevFifoVal = computeFifoValuationUSD(prod, prod.stock);
-            const fifoResult = deductFifoBatches(prod.batches, qtyToDeduct, prod, bcvRate, baseCurrency);
-            const nextStock = Math.max(0, round2(prod.stock - qtyToDeduct));
-            if (prod.batches && prod.batches.length > 0) {
-              productBatchUpdates.push({
-                productId: prod.id,
-                batches: fifoResult.batches,
-                priceUSD: fifoResult.priceUSD,
-                costUSD: fifoResult.costUSD,
-                priceBsFixed: fifoResult.priceBsFixed
-              });
-            }
-            const updatedProd: Product = {
-              ...prod,
-              stock: nextStock,
-              batches: fifoResult.batches,
-              ...(fifoResult.priceUSD !== undefined ? { priceUSD: fifoResult.priceUSD } : {}),
-              ...(fifoResult.costUSD !== undefined ? { costUSD: fifoResult.costUSD } : {}),
-              ...(fifoResult.priceBsFixed !== undefined ? { priceBsFixed: fifoResult.priceBsFixed } : {})
-            };
-            const hasFifoBatches = Boolean(prod.batches && prod.batches.length > 0);
-            const nextFifoVal = computeFifoValuationUSD(updatedProd, nextStock);
-            const unitCostForKardex = hasFifoBatches && qtyToDeduct > 0 && prevFifoVal > nextFifoVal
-              ? round2((prevFifoVal - nextFifoVal) / qtyToDeduct)
-              : (prod.costUSD || 0);
-
-            saleKardexEntries.push(
-              buildKardexEntry({
-                product: updatedProd,
-                type: 'venta',
-                quantityChange: -qtyToDeduct,
-                previousStock: prod.stock,
-                newStock: nextStock,
-                unitCostUSD: unitCostForKardex,
-                valuationMethod: hasFifoBatches ? 'fifo' : 'average_cost',
-                reference: cleanInvoice,
-                notes: `Venta POS a ${newSale.clientName}`,
-                userName: newSale.cashierName,
-                date: newSale.date
-              })
-            );
-            return updatedProd;
-          }
-          return prod;
-        });
-        setProducts(nextProducts);
-        if (saleKardexEntries.length > 0) {
-          setKardex(prev => [...saleKardexEntries, ...prev]);
-        }
-      }
-
       let createdFiado: FiadoRecord | undefined = undefined;
       if (paymentDetails.method === 'fiao' || (paymentDetails.method === 'pago_combinado' && (paymentDetails.combinedBreakdown?.fiaoRemaining || 0) > 0)) {
         const remainingDebt = round2(
@@ -2024,110 +2080,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           status: remainingDebt <= 0.009 ? 'saldado' : (initialAbonoUSD > 0 ? 'parcial' : 'pendiente'),
           abonos: initialAbonos
         };
-        setFiados(prev => [createdFiado!, ...prev]);
       }
 
-      setSales(prev => [newSale, ...prev]);
-      setLastCompletedSale(newSale);
+      // Atomic Cloud Firestore transaction under users/{uid}/... BEFORE clearing cart
+      const confirmedSale = await saveSaleAtomic(
+        uid,
+        newSale,
+        stockDeductions,
+        bcvRate,
+        baseCurrency,
+        createdFiado
+      );
+
+      setSales(prev => [confirmedSale, ...prev.filter(s => s.id !== confirmedSale.id)]);
+      if (createdFiado) {
+        setFiados(prev => [createdFiado!, ...prev.filter(f => f.id !== createdFiado!.id)]);
+      }
+      setLastCompletedSale(confirmedSale);
       clearCart();
-
-      // Atomic Cloud Firestore persistence under users/{uid}/...
-      saveSaleAtomic(uid, newSale, stockDeductions, createdFiado, productBatchUpdates, saleKardexEntries).then(() => {
-        devLog(`[PosVenecia Firestore] Venta ${newSale.invoiceNumber} confirmada en Firestore.`);
-        setSales(prev => prev.map(s => s.id === newSale.id ? { ...s, syncStatus: 'synced' } : s));
-      }).catch(e => {
-        console.error('Firestore atomic sale error:', e);
-      });
-
-      return newSale;
+      return confirmedSale;
+    } catch (e) {
+      const msg = notifyError(e, 'No se pudo procesar la venta');
+      throw new Error(msg);
     } finally {
-      setTimeout(() => {
-        isCompletingSaleRef.current = false;
-      }, 500);
+      isCompletingSaleRef.current = false;
     }
   };
 
-  const cancelSale = (saleId: string) => {
+  const cancelSale = async (saleId: string): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para anular facturas.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+
     const targetSale = sales.find(s => s.id === saleId);
     if (!targetSale || targetSale.status === 'anulada') return;
 
-    tombstonesRef.current.canceledSaleIds = [
-      ...(tombstonesRef.current.canceledSaleIds || []),
-      saleId
-    ];
-
-    setSales(prev => prev.map(s => s.id === saleId ? { ...s, status: 'anulada' } : s));
-
-    const restorationMap = new Map<string, number>();
-    (targetSale.items || []).forEach(cartItem => {
-      if (!cartItem.product.isService && cartItem.product.itemType !== 'servicio' && cartItem.product.id) {
-        restorationMap.set(
-          cartItem.product.id,
-          (restorationMap.get(cartItem.product.id) || 0) + cartItem.quantity
-        );
-      }
-    });
-
-    const productBatchUpdates: Array<{ productId: string; batches?: ProductBatch[] }> = [];
-    const cancelKardexEntries: KardexEntry[] = [];
-    if (restorationMap.size > 0) {
-      const nextProducts = products.map(p => {
-        const qty = restorationMap.get(p.id);
-        if (qty && qty > 0) {
-          const restoredBatches = restoreFifoBatches(p.batches, qty, p, `ANUL-${targetSale.invoiceNumber}`);
-          if (restoredBatches !== undefined) {
-            productBatchUpdates.push({ productId: p.id, batches: restoredBatches });
-          }
-          const updatedProd: Product = {
-            ...p,
-            stock: round2(p.stock + qty),
-            ...(restoredBatches !== undefined ? { batches: restoredBatches } : {})
-          };
-          cancelKardexEntries.push(
-            buildKardexEntry({
-              product: updatedProd,
-              type: 'ajuste_manual',
-              quantityChange: qty,
-              previousStock: p.stock,
-              newStock: updatedProd.stock,
-              unitCostUSD: p.costUSD || 0,
-              valuationMethod: (updatedProd.batches && updatedProd.batches.length > 0) ? 'fifo' : 'average_cost',
-              reference: `ANUL-${targetSale.invoiceNumber}`,
-              notes: `Reintegro por anulación de factura ${targetSale.invoiceNumber}`,
-              userName: googleUser?.name
-            })
-          );
-          return updatedProd;
-        }
-        return p;
-      });
-      setProducts(nextProducts);
-      if (cancelKardexEntries.length > 0) {
-        setKardex(prev => [...cancelKardexEntries, ...prev]);
-      }
-    }
-
     const associatedFiado = fiados.find(f => f.saleId === saleId);
-    setFiados(prevFiados => prevFiados.filter(f => f.saleId !== saleId));
 
-    const uid = getActiveUid();
-    if (uid) {
-      const stockRestorations = Array.from(restorationMap.entries()).map(([productId, quantity]) => ({
-        productId,
-        quantity
-      }));
-      cancelSaleAtomic(uid, targetSale, stockRestorations, associatedFiado?.id, productBatchUpdates, cancelKardexEntries).catch(e =>
-        console.error('Firestore atomic cancelSale error:', e)
-      );
+    try {
+      await cancelSaleAtomic(uid, saleId, associatedFiado?.id, googleUser?.name);
+      tombstonesRef.current.canceledSaleIds = [
+        ...(tombstonesRef.current.canceledSaleIds || []),
+        saleId
+      ];
+      setSales(prev => prev.map(s => s.id === saleId ? { ...s, status: 'anulada' } : s));
+      notifyUser('success', 'Factura anulada', `La factura ${targetSale.invoiceNumber} fue anulada y el inventario reintegrado.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo anular la factura');
+      throw e;
     }
   };
 
-  const updateSale = (updatedSale: Sale) => {
-    setSales(prev => prev.map(s => s.id === updatedSale.id ? updatedSale : s));
-    setLastCompletedSale(prev => prev?.id === updatedSale.id ? updatedSale : prev);
+  const updateSale = async (updatedSale: Sale): Promise<void> => {
     const uid = getActiveUid();
-    if (uid) {
-      saveSaleAtomic(uid, updatedSale, []).catch(e => console.error('Firestore updateSale error:', e));
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para actualizar ventas.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await updateSaleInFirestore(uid, updatedSale);
+      setSales(prev => prev.map(s => s.id === updatedSale.id ? updatedSale : s));
+      setLastCompletedSale(prev => prev?.id === updatedSale.id ? updatedSale : prev);
+    } catch (e) {
+      notifyError(e, 'No se pudo actualizar la venta');
+      throw e;
     }
   };
 
@@ -2207,6 +2227,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     originalInvoiceNumber?: string;
     originalControlNumber?: string;
   }): Promise<CreditNote> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para emitir notas de crédito.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+
     if (isCreatingCreditNoteRef.current) {
       throw new Error('Ya se está procesando una nota de crédito. Espere un momento.');
     }
@@ -2244,228 +2271,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Debe ingresar el Número de Control fiscal de la factura afectada.');
       }
 
-      const duplicateNCNumber = creditNotes.some(
-        n => (n.creditNoteNumber || '').trim().toUpperCase() === cleanNCNumber
-      );
-      if (duplicateNCNumber) {
-        throw new Error(`El Número de Nota de Crédito "${cleanNCNumber}" ya fue registrado anteriormente.`);
-      }
-
-      const duplicateNCControl = creditNotes.some(
-        n => (n.controlNumber || '').trim().toUpperCase() === cleanNCControl
-      );
-      if (duplicateNCControl) {
-        throw new Error(`El Número de Control SENIAT "${cleanNCControl}" ya fue utilizado en otra nota de crédito.`);
-      }
-
-      // Compute cumulative previously returned quantities per product (use persisted map, fallback to creditNotes history for legacy sales)
-      const priorReturnedMap: Record<string, number> = {};
-      if (originalSale.returnedQuantities) {
-        Object.entries(originalSale.returnedQuantities).forEach(([pid, q]) => {
-          priorReturnedMap[pid] = Math.max(0, Number(q) || 0);
-        });
-      } else {
-        creditNotes
-          .filter(nc => nc.saleId === originalSale.id)
-          .forEach(nc => {
-            nc.items.forEach(ncItem => {
-              priorReturnedMap[ncItem.productId] = (priorReturnedMap[ncItem.productId] || 0) + ncItem.quantity;
-            });
-          });
-      }
-
-      let refundedSubtotalUSD = 0;
-      let refundedTaxableUSD = 0;
-      let refundedExemptUSD = 0;
-
-      const ncItems: CreditNoteItem[] = [];
-      const stockRestorations: { productId: string; quantity: number }[] = [];
-      const nextReturnedQuantities: Record<string, number> = { ...priorReturnedMap };
-
-      for (const itemReq of data.items) {
-        const originalItem = originalSale.items.find(i => i.product.id === itemReq.productId);
-        if (!originalItem) continue;
-
-        const alreadyReturned = priorReturnedMap[originalItem.product.id] || 0;
-        const maxReturnable = Math.max(0, round2(originalItem.quantity - alreadyReturned));
-
-        if (maxReturnable <= 0) {
-          throw new Error(`El producto "${originalItem.product.name}" ya fue devuelto en su totalidad (${originalItem.quantity} und).`);
-        }
-
-        const requestedQty = Number(itemReq.quantity) || 0;
-        if (requestedQty <= 0) continue;
-
-        if (requestedQty > maxReturnable) {
-          throw new Error(
-            `La cantidad a devolver de "${originalItem.product.name}" (${requestedQty}) supera el saldo disponible (${maxReturnable} de ${originalItem.quantity} vendidas; ya devueltas: ${alreadyReturned}).`
-          );
-        }
-
-        const qty = requestedQty;
-        nextReturnedQuantities[originalItem.product.id] = round2(alreadyReturned + qty);
-
-        const unitPriceUSD = originalItem.unitPriceUSD;
-        const totalItemUSD = round2(qty * unitPriceUSD);
-        refundedSubtotalUSD = round2(refundedSubtotalUSD + totalItemUSD);
-
-        if (originalItem.product.isExemptFromIVA) {
-          refundedExemptUSD = round2(refundedExemptUSD + totalItemUSD);
-        } else {
-          refundedTaxableUSD = round2(refundedTaxableUSD + totalItemUSD);
-        }
-
-        ncItems.push({
-          productId: originalItem.product.id,
-          productName: originalItem.product.name,
-          quantity: qty,
-          unitPriceUSD,
-          totalUSD: totalItemUSD,
-          isExemptFromIVA: Boolean(originalItem.product.isExemptFromIVA)
-        });
-
-        if (!originalItem.product.isService && originalItem.product.itemType !== 'servicio') {
-          stockRestorations.push({
-            productId: originalItem.product.id,
-            quantity: qty
-          });
-        }
-      }
-
-      if (ncItems.length === 0) {
-        throw new Error('No se seleccionaron productos válidos para devolución.');
-      }
-
-      const remainingIvaBudget = round2(Math.max(0, originalSale.ivaUSD - creditNotes
-        .filter(nc => nc.saleId === originalSale.id)
-        .reduce((sum, nc) => sum + (nc.ivaUSD || 0), 0)));
-      const refundedIvaUSD = originalSale.ivaUSD > 0
-        ? Math.min(remainingIvaBudget, round2(refundedTaxableUSD * 0.16))
-        : 0;
-
-      const remainingIgtfBudget = round2(Math.max(0, originalSale.igtfUSD - creditNotes
-        .filter(nc => nc.saleId === originalSale.id)
-        .reduce((sum, nc) => sum + (nc.igtfUSD || 0), 0)));
-      const refundedIgtfUSD = originalSale.igtfUSD > 0 && data.refundMethod === 'efectivo_usd'
-        ? Math.min(remainingIgtfBudget, round2((refundedSubtotalUSD + refundedIvaUSD) * 0.03))
-        : 0;
-
-      const refundedTotalUSD = round2(refundedSubtotalUSD + refundedIvaUSD + refundedIgtfUSD);
-
-      const bcv = originalSale.bcvRate || bcvRate;
-      const refundedTotalBs = round2(refundedTotalUSD * bcv);
-
-      const newCreditNote: CreditNote = {
-        id: 'nc-' + Date.now(),
+      const createdNC = await saveCreditNoteAtomic(uid, {
+        creditNoteId: 'nc-' + Date.now(),
+        saleId: originalSale.id,
+        reason: data.reason,
+        refundMethod: data.refundMethod,
+        items: data.items,
         creditNoteNumber: cleanNCNumber,
         controlNumber: cleanNCControl,
-        saleId: originalSale.id,
         originalInvoiceNumber: cleanAffectedInvoice,
         originalControlNumber: cleanAffectedControl,
-        date: new Date().toISOString(),
-        clientName: originalSale.clientName || 'Consumidor Final',
-        clientRIF: originalSale.clientRIF || 'V-00000000',
-        clientPhone: originalSale.clientPhone,
-        clientAddress: originalSale.clientAddress,
-        items: ncItems,
-        subtotalUSD: round2(refundedSubtotalUSD),
-        exemptUSD: round2(refundedExemptUSD),
-        taxableUSD: round2(refundedTaxableUSD),
-        ivaUSD: refundedIvaUSD,
-        igtfUSD: refundedIgtfUSD,
-        totalUSD: refundedTotalUSD,
-        subtotalBs: round2(refundedSubtotalUSD * bcv),
-        exemptBs: round2(refundedExemptUSD * bcv),
-        taxableBs: round2(refundedTaxableUSD * bcv),
-        ivaBs: round2(refundedIvaUSD * bcv),
-        igtfBs: round2(refundedIgtfUSD * bcv),
-        totalBs: refundedTotalBs,
-        bcvRate: bcv,
-        refundMethod: data.refundMethod,
-        reason: data.reason,
+        fallbackBcvRate: bcvRate,
         cashierName: googleUser?.name || 'Cajero'
-      };
+      });
 
-      const productBatchUpdates: Array<{ productId: string; batches?: ProductBatch[] }> = [];
-      const ncKardexEntries: KardexEntry[] = [];
-      if (stockRestorations.length > 0) {
-        const restMap = new Map<string, number>();
-        stockRestorations.forEach(s => restMap.set(s.productId, (restMap.get(s.productId) || 0) + s.quantity));
-        const nextProducts = products.map(p => {
-          const addQty = restMap.get(p.id);
-          if (addQty && addQty > 0) {
-            const restoredBatches = restoreFifoBatches(p.batches, addQty, p, cleanNCNumber);
-            if (restoredBatches !== undefined) {
-              productBatchUpdates.push({ productId: p.id, batches: restoredBatches });
-            }
-            const updatedProd: Product = {
-              ...p,
-              stock: round2(p.stock + addQty),
-              ...(restoredBatches !== undefined ? { batches: restoredBatches } : {})
-            };
-            ncKardexEntries.push(
-              buildKardexEntry({
-                product: updatedProd,
-                type: 'nota_credito',
-                quantityChange: addQty,
-                previousStock: p.stock,
-                newStock: updatedProd.stock,
-                unitCostUSD: p.costUSD || 0,
-                valuationMethod: (updatedProd.batches && updatedProd.batches.length > 0) ? 'fifo' : 'average_cost',
-                reference: cleanNCNumber,
-                notes: `Devolución s/factura ${cleanAffectedInvoice} (${data.reason})`,
-                userName: newCreditNote.cashierName,
-                date: newCreditNote.date
-              })
-            );
-            return updatedProd;
-          }
-          return p;
-        });
-        setProducts(nextProducts);
-        if (ncKardexEntries.length > 0) {
-          setKardex(prev => [...ncKardexEntries, ...prev]);
-        }
-      }
-
-      const associatedFiado = fiados.find(f => f.saleId === originalSale.id);
-      let updatedFiado: FiadoRecord | undefined = undefined;
-      if (associatedFiado && associatedFiado.status !== 'saldado') {
-        const nextRemaining = round2(Math.max(0, associatedFiado.remainingDebtUSD - refundedTotalUSD));
-        updatedFiado = {
-          ...associatedFiado,
-          remainingDebtUSD: nextRemaining,
-          status: nextRemaining <= 0.009 ? 'saldado' : associatedFiado.status,
-          notes: `${associatedFiado.notes ? `${associatedFiado.notes} | ` : ''}[NC ${cleanNCNumber}] Devolución -$${refundedTotalUSD.toFixed(2)}`
-        };
-        setFiados(prev => prev.map(f => f.id === updatedFiado!.id ? updatedFiado! : f));
-      }
-
-      const isFullyReturned = originalSale.items.every(
-        item => (nextReturnedQuantities[item.product.id] || 0) >= item.quantity
-      );
-
-      const updatedOriginalSale: Sale = {
-        ...originalSale,
-        status: isFullyReturned ? 'devuelta' : originalSale.status,
-        returnedQuantities: nextReturnedQuantities,
-        creditNoteId: newCreditNote.id,
-        refundedUSD: round2((originalSale.refundedUSD || 0) + refundedTotalUSD)
-      };
-      setSales(prev => prev.map(s => s.id === originalSale.id ? updatedOriginalSale : s));
-      setCreditNotes(prev => [newCreditNote, ...prev]);
-      setLastCompletedCreditNote(newCreditNote);
-
-      const uid = getActiveUid();
-      if (uid) {
-        await saveCreditNoteAtomic(uid, newCreditNote, stockRestorations, updatedOriginalSale, updatedFiado, productBatchUpdates, ncKardexEntries);
-      }
-
-      return newCreditNote;
+      setCreditNotes(prev => [createdNC, ...prev.filter(n => n.id !== createdNC.id)]);
+      setLastCompletedCreditNote(createdNC);
+      notifyUser('success', 'Nota de crédito emitida', `Comprobante ${createdNC.creditNoteNumber} registrado e inventario actualizado.`);
+      return createdNC;
+    } catch (e) {
+      const msg = notifyError(e, 'No se pudo emitir la Nota de Crédito');
+      throw new Error(msg);
     } finally {
-      setTimeout(() => {
-        isCreatingCreditNoteRef.current = false;
-      }, 500);
+      isCreatingCreditNoteRef.current = false;
     }
   };
 
@@ -2478,6 +2306,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     notes?: string;
     responsibleName?: string;
   }): Promise<InventoryDischarge> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para desincorporar inventario.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+
     if (isCreatingDischargeRef.current) {
       throw new Error('Ya se está procesando una salida de inventario. Espere un momento.');
     }
@@ -2542,49 +2377,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notes: `Generado automáticamente por desincorporación de stock (${data.reason})`
       };
 
-      const fifoRes = deductFifoBatches(product.batches, qty, product, bcvRate, baseCurrency);
-      const updatedBatches = product.batches && product.batches.length > 0 ? fifoRes.batches : undefined;
-      const updatedProd: Product = {
-        ...product,
-        stock: Math.max(0, round2(product.stock - qty)),
-        ...(updatedBatches !== undefined ? { batches: updatedBatches } : {})
-      };
+      await saveInventoryDischargeAtomic(uid, discharge, lossExpense, bcvRate, baseCurrency);
 
-      const dischargeKardex = buildKardexEntry({
-        product: updatedProd,
-        type: 'merma',
-        quantityChange: -qty,
-        previousStock: product.stock,
-        newStock: updatedProd.stock,
-        unitCostUSD,
-        valuationMethod: updatedBatches && updatedBatches.length > 0 ? 'fifo' : 'average_cost',
-        reference: discharge.dischargeNumber,
-        notes: `${data.reason}${data.notes ? `: ${data.notes}` : ''}`,
-        userName: discharge.responsibleName,
-        date: discharge.date
-      });
-
-      setProducts(prev => prev.map(p => p.id === product.id ? updatedProd : p));
-      setInventoryDischarges(prev => [discharge, ...prev]);
-      setGastosOperativos(prev => [lossExpense, ...prev]);
-      setKardex(prev => [dischargeKardex, ...prev]);
+      setInventoryDischarges(prev => [discharge, ...prev.filter(d => d.id !== discharge.id)]);
+      setGastosOperativos(prev => [lossExpense, ...prev.filter(g => g.id !== lossExpense.id)]);
       setLastCompletedDischarge(discharge);
-
-      const uid = getActiveUid();
-      if (uid) {
-        await saveInventoryDischargeAtomic(uid, discharge, lossExpense, undefined, updatedBatches, dischargeKardex);
-      }
-
+      notifyUser('success', 'Salida registrada', `Comprobante ${discharge.dischargeNumber} sincronizado en inventario.`);
       return discharge;
+    } catch (e) {
+      const msg = notifyError(e, 'No se pudo desincorporar el inventario');
+      throw new Error(msg);
     } finally {
-      setTimeout(() => {
-        isCreatingDischargeRef.current = false;
-      }, 500);
+      isCreatingDischargeRef.current = false;
     }
   };
 
-  // Expenses & Purchases operations
-  const addExpense = (expData: Omit<Expense, 'id'>) => {
+  // Expenses & Purchases operations (Transactional & zero-loss)
+  const addExpense = async (expData: Omit<Expense, 'id'>): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para registrar compras o facturas.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+
     const isCreditPurchase = expData.paymentMethod === 'credito';
     if (!isCreditPurchase && !cashShift?.isOpen) {
       setIsAperturaModalOpen(true);
@@ -2605,103 +2421,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       retencionISLRBs: round2(expData.retencionISLRBs)
     };
 
-    const updatedProductsList: Product[] = [];
-    const purchaseKardexEntries: KardexEntry[] = [];
-
-    if (newExp.items && newExp.items.length > 0) {
-      const productMap = new Map(products.map(p => [p.id, { ...p }]));
-
-      for (const item of newExp.items) {
-        const prod = productMap.get(item.productId);
-        if (!prod) continue;
-
-        const incomingQty = Math.max(0, item.quantity);
-        const incomingCostUSD = round6(Math.max(0, item.unitCostUSD));
-        const previousStock = prod.stock || 0;
-        prod.stock = round2(previousStock + incomingQty);
-
-        if (item.costCurrency === 'Bs' && typeof item.unitCostBs === 'number' && item.unitCostBs >= 0) {
-          prod.costBsFixed = round2(item.unitCostBs);
-          prod.costCurrency = 'Bs';
-        } else {
-          prod.costCurrency = 'USD';
-          prod.costBsFixed = undefined;
-        }
-
-        if (item.strategy === 'fifo') {
-          if (!prod.costUSD || prod.costUSD <= 0) {
-            prod.costUSD = incomingCostUSD;
-          }
-          const newBatch: ProductBatch = {
-            id: 'batch-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-            invoiceNumber: newExp.invoiceNumber,
-            supplierName: newExp.supplierName,
-            date: newExp.date,
-            quantity: incomingQty,
-            initialQuantity: incomingQty,
-            costUSD: incomingCostUSD,
-            targetPriceUSD: item.newPriceUSD && item.newPriceUSD > 0 ? round2(item.newPriceUSD) : prod.priceUSD
-          };
-
-          prod.batches = [...(prod.batches || []), newBatch];
-          prod.purchaseNote = `Lote Factura ${newExp.invoiceNumber} (${incomingQty} unids a $${incomingCostUSD.toFixed(2)})`;
-        } else {
-          const previousCost = (item.previousCostUSD !== undefined && item.previousCostUSD > 0)
-            ? item.previousCostUSD
-            : (prod.costUSD > 0 ? prod.costUSD : incomingCostUSD);
-          const previousPrice = (item.previousPriceUSD !== undefined && item.previousPriceUSD > 0)
-            ? item.previousPriceUSD
-            : prod.priceUSD;
-
-          const weightedAvgCost = (previousStock + incomingQty) > 0
-            ? round6(((previousStock * previousCost) + (incomingQty * incomingCostUSD)) / (previousStock + incomingQty))
-            : incomingCostUSD;
-
-          prod.costUSD = weightedAvgCost > 0 ? weightedAvgCost : incomingCostUSD;
-          if (item.newPriceUSD && item.newPriceUSD > 0) {
-            prod.priceUSD = round2(item.newPriceUSD);
-          } else {
-            const margin = previousCost > 0 ? (previousPrice - previousCost) / previousCost : 0.30;
-            prod.priceUSD = round2(incomingCostUSD * (1 + Math.max(0, margin)));
-          }
-
-          if (baseCurrency === 'VED') {
-            prod.priceBsFixed = round2(prod.priceUSD * bcvRate);
-            prod.priceCurrency = 'Bs';
-          }
-
-          prod.purchaseNote = `Actualizado Factura ${newExp.invoiceNumber} - Costo Prom. $${prod.costUSD.toFixed(2)} / Venta $${prod.priceUSD.toFixed(2)}`;
-        }
-
-        updatedProductsList.push(prod);
-
-        if (!prod.isService && prod.itemType !== 'servicio' && incomingQty > 0) {
-          purchaseKardexEntries.push(
-            buildKardexEntry({
-              product: prod,
-              type: 'entrada_compra',
-              quantityChange: incomingQty,
-              previousStock,
-              newStock: prod.stock,
-              unitCostUSD: incomingCostUSD,
-              valuationMethod: item.strategy,
-              reference: newExp.invoiceNumber,
-              notes: `Compra a ${newExp.supplierName} (${item.strategy === 'fifo' ? 'Lote FIFO' : 'Costo Promedio'})`,
-              userName: googleUser?.name,
-              date: newExp.date
-            })
-          );
-        }
-      }
-
-      setProducts(Array.from(productMap.values()));
-      if (purchaseKardexEntries.length > 0) {
-        setKardex(prev => [...purchaseKardexEntries, ...prev]);
-      }
-    }
-
     let linkedCuenta: CuentaPorPagar | undefined = undefined;
-    let updatedSupplierForExpense: Supplier | undefined = undefined;
     if (isCreditPurchase) {
       const defaultDue = new Date();
       defaultDue.setDate(defaultDue.getDate() + (matchedSup?.creditDays || 15));
@@ -2730,39 +2450,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         abonos: []
       };
       newExp.linkedCuentaId = linkedCuenta.id;
-      const nextCuentas = [linkedCuenta, ...cuentasPorPagar];
-      setCuentasPorPagar(nextCuentas);
-
-      if (matchedSup) {
-        updatedSupplierForExpense = {
-          ...matchedSup,
-          accumulatedBalanceUSD: computeSupplierAccumulatedBalance(matchedSup, nextCuentas)
-        };
-        setSuppliers(prev => prev.map(s => s.id === updatedSupplierForExpense!.id ? updatedSupplierForExpense! : s));
-      }
     }
 
-    setExpenses(prev => [newExp, ...prev]);
-
-    const uid = getActiveUid();
-    if (uid) {
-      if (updatedProductsList.length > 0 || linkedCuenta || purchaseKardexEntries.length > 0 || updatedSupplierForExpense) {
-        saveExpenseWithInventoryAtomic(uid, newExp, updatedProductsList, linkedCuenta, purchaseKardexEntries, updatedSupplierForExpense).catch(e =>
-          console.error('Firestore atomic saveExpenseWithInventoryAtomic error:', e)
+    try {
+      if ((newExp.items && newExp.items.length > 0) || linkedCuenta) {
+        await saveExpenseWithInventoryAtomic(
+          uid,
+          newExp,
+          newExp.bcvRate || bcvRate,
+          baseCurrency,
+          linkedCuenta,
+          googleUser?.name
         );
       } else {
-        saveExpenseToFirestore(uid, newExp).catch(e =>
-          console.error('Firestore addExpense error:', e)
-        );
+        await saveExpenseToFirestore(uid, newExp);
       }
+      setExpenses(prev => [newExp, ...prev.filter(e => e.id !== newExp.id)]);
+      if (linkedCuenta) {
+        setCuentasPorPagar(prev => [linkedCuenta!, ...prev.filter(c => c.id !== linkedCuenta!.id)]);
+      }
+      notifyUser('success', 'Factura registrada', `Comprobante ${newExp.invoiceNumber} sincronizado en Cloud Firestore.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo guardar la factura');
+      throw e;
     }
   };
 
-  const updateExpense = (updated: Expense) => {
-    setExpenses(prev => prev.map(e => e.id === updated.id ? updated : e));
+  const updateExpense = async (updated: Expense): Promise<void> => {
     const uid = getActiveUid();
-    if (uid) {
-      saveExpenseToFirestore(uid, updated).catch(e => console.error('Firestore updateExpense error:', e));
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para editar facturas.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await saveExpenseToFirestore(uid, updated);
+      setExpenses(prev => prev.map(e => e.id === updated.id ? updated : e));
+      notifyUser('success', 'Factura actualizada', `Comprobante ${updated.invoiceNumber} actualizado en la nube.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo actualizar la factura');
+      throw e;
     }
   };
 
@@ -2774,45 +2501,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setExpenses(prev => prev.filter(e => e.id !== id));
     const uid = getActiveUid();
     if (uid) {
-      deleteExpenseFromFirestore(uid, id).catch(e => console.error('Firestore deleteExpense error:', e));
+      deleteExpenseFromFirestore(uid, id).catch(e => {
+        console.error('Firestore deleteExpense error:', e);
+        notifyError(e, 'Error al eliminar factura');
+      });
     }
   };
 
-  // Fiados operations
-  const addAbonoToFiado = (
+  // Fiados operations (Transactional)
+  const addAbonoToFiado = async (
     fiadoId: string,
     amountUSD: number,
     method: PaymentMethod,
     reference?: string,
     notes?: string
-  ) => {
-    const target = fiados.find(f => f.id === fiadoId);
-    if (!target || target.remainingDebtUSD <= 0) return;
-
-    const payUSD = Math.min(target.remainingDebtUSD, Math.max(0.01, round2(amountUSD)));
-    const newRemaining = round2(Math.max(0, target.remainingDebtUSD - payUSD));
-    const newAbono: Abono = {
-      id: 'abono-' + Date.now(),
-      date: new Date().toISOString(),
-      amountUSD: payUSD,
-      amountBs: round2(payUSD * bcvRate),
-      bcvRate,
-      paymentMethod: method,
-      reference,
-      notes
-    };
-    const updatedFiado: FiadoRecord = {
-      ...target,
-      remainingDebtUSD: newRemaining,
-      status: newRemaining <= 0.009 ? 'saldado' : 'parcial',
-      abonos: [newAbono, ...(target.abonos || [])]
-    };
-
-    setFiados(prev => prev.map(f => f.id === fiadoId ? updatedFiado : f));
-
+  ): Promise<void> => {
     const uid = getActiveUid();
-    if (uid) {
-      saveFiadoToFirestore(uid, updatedFiado).catch(e => console.error('Firestore fiado abono error:', e));
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para registrar abonos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await addAbonoToFiadoTransaction(uid, fiadoId, amountUSD, method, bcvRate, reference, notes);
+      notifyUser('success', 'Abono registrado', 'Pago aplicado a la cuenta por cobrar en Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo registrar el abono');
+      throw e;
     }
   };
 
@@ -2980,79 +2695,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return 'Otros';
   };
 
-  const addAbonoToCuentaPorPagar = (cuentaId: string, amountUSD: number, method: PaymentMethod, reference?: string, notes?: string) => {
-    const target = cuentasPorPagar.find(c => c.id === cuentaId);
-    if (!target) return;
-
-    const payAmount = Math.min(target.remainingUSD, Math.max(0.01, Number(amountUSD.toFixed(2))));
-    const newPaid = Number((target.paidAmountUSD + payAmount).toFixed(2));
-    const newRemaining = Number(Math.max(0, target.totalAmountUSD - newPaid).toFixed(2));
-    const nowIso = new Date().toISOString();
-    const payBs = Number((payAmount * bcvRate).toFixed(2));
-
-    const newAbono: Abono = {
-      id: 'abono-cpp-' + Date.now(),
-      date: nowIso,
-      amountUSD: payAmount,
-      amountBs: payBs,
-      bcvRate,
-      paymentMethod: method,
-      reference,
-      notes: notes || 'Abono realizado a proveedor'
-    };
-
-    const updatedCuenta: CuentaPorPagar = {
-      ...target,
-      paidAmountUSD: newPaid,
-      remainingUSD: newRemaining,
-      status: newRemaining <= 0.009 ? 'pagada' : 'parcial',
-      abonos: [newAbono, ...target.abonos]
-    };
-
-    const cashOutflowExpense: Expense = {
-      id: 'exp-cpp-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
-      date: nowIso,
-      invoiceNumber: target.invoiceNumber || 'CPP-ABONO',
-      controlNumber: target.controlNumber || '00-00000',
-      supplierId: target.supplierId,
-      supplierName: target.supplierName,
-      supplierRIF: target.supplierRIF || 'N/A',
-      supplierPhone: target.supplierPhone,
-      description: `Abono Cta. por Pagar (${target.invoiceNumber}): ${target.description}${notes ? ` - ${notes}` : ''}`,
-      category: target.category === 'Alquiler' || target.category === 'Servicios' || target.category === 'Mantenimiento'
-        ? target.category
-        : (target.category === 'Mercancía' || target.category === 'Materia Prima' ? 'Mercancía' : 'Otros'),
-      amountUSD: payAmount,
-      amountBs: payBs,
-      baseImponibleBs: payBs,
-      ivaBs: 0,
-      retencionIVABs: 0,
-      retencionISLRBs: 0,
-      bcvRate,
-      paymentMethod: mapMethodToExpenseMethod(method),
-      reference,
-      linkedCuentaId: target.id
-    };
-
-    const nextCuentas = cuentasPorPagar.map(c => c.id === cuentaId ? updatedCuenta : c);
-    setCuentasPorPagar(nextCuentas);
-    setExpenses(prev => [cashOutflowExpense, ...prev]);
-
-    let updatedSupplier: Supplier | undefined = undefined;
-    const matchedSup = matchSupplierRecord(suppliers, target.supplierId, target.supplierRIF, target.supplierName);
-    if (matchedSup) {
-      updatedSupplier = {
-        ...matchedSup,
-        accumulatedBalanceUSD: computeSupplierAccumulatedBalance(matchedSup, nextCuentas)
-      };
-      setSuppliers(prev => prev.map(s => s.id === updatedSupplier!.id ? updatedSupplier! : s));
-    }
-
+  const addAbonoToCuentaPorPagar = async (
+    cuentaId: string,
+    amountUSD: number,
+    method: PaymentMethod,
+    reference?: string,
+    notes?: string
+  ): Promise<void> => {
     const uid = getActiveUid();
-    if (uid) {
-      saveCuentaWithCashOutflowAtomic(uid, updatedCuenta, cashOutflowExpense, updatedSupplier).catch(e =>
-        console.error('Firestore abono cpp atomic error:', e)
-      );
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para registrar abonos a proveedores.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await addAbonoToCuentaPorPagarTransaction(uid, cuentaId, amountUSD, method, bcvRate, reference, notes);
+      notifyUser('success', 'Abono registrado', 'Pago a proveedor y egreso guardados en Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo registrar el abono al proveedor');
+      throw e;
     }
   };
 
@@ -3163,85 +2824,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const markGastoOperativoPagado = (
+  const markGastoOperativoPagado = async (
     id: string,
     paymentMethod: PaymentMethod,
     reference?: string,
     amountUSD?: number,
     notes?: string
-  ) => {
-    const target = gastosOperativos.find(g => g.id === id);
-    if (!target) return;
-
-    const currentPaid = Number((target.paidAmountUSD ?? (target.status === 'pagado' ? target.amountUSD : 0)).toFixed(2));
-    const currentRemaining = Number((target.remainingUSD ?? Math.max(0, target.amountUSD - currentPaid)).toFixed(2));
-    if (currentRemaining <= 0) return;
-
-    const requestedAmount = amountUSD !== undefined && !isNaN(amountUSD) && amountUSD > 0
-      ? Number(amountUSD.toFixed(2))
-      : currentRemaining;
-    const payAmount = Math.min(currentRemaining, Math.max(0.01, requestedAmount));
-    const payAmountBs = Number((payAmount * bcvRate).toFixed(2));
-
-    const newPaid = Number((currentPaid + payAmount).toFixed(2));
-    const newRemaining = Number(Math.max(0, target.amountUSD - newPaid).toFixed(2));
-    const newStatus: GastoOperativo['status'] = newRemaining <= 0.009 ? 'pagado' : 'parcial';
-    const nowIso = new Date().toISOString();
-
-    const newAbono: Abono = {
-      id: 'abono-gasto-' + Date.now(),
-      date: nowIso,
-      amountUSD: payAmount,
-      amountBs: payAmountBs,
-      bcvRate,
-      paymentMethod,
-      reference,
-      notes: notes || (newStatus === 'pagado' && currentPaid === 0 ? 'Pago completo de gasto' : newStatus === 'pagado' ? 'Liquidación final de saldo pendiente' : 'Abono parcial a gasto pendiente')
-    };
-
-    const existingAbonos = target.abonos || [];
-
-    const updatedGasto: GastoOperativo = {
-      ...target,
-      paidAmountUSD: newPaid,
-      remainingUSD: newRemaining,
-      status: newStatus,
-      paymentDate: nowIso,
-      paymentMethod,
-      reference: reference || target.reference,
-      abonos: [newAbono, ...existingAbonos]
-    };
-
-    const cashOutflowExpense: Expense = {
-      id: 'exp-gasto-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
-      date: nowIso,
-      invoiceNumber: target.invoiceNumber || 'REC-GASTO',
-      controlNumber: '00-00000',
-      supplierName: target.supplierName || target.concept,
-      supplierRIF: target.supplierRIF || 'N/A',
-      supplierPhone: target.supplierPhone,
-      description: `${newStatus === 'pagado' && currentPaid === 0 ? 'Pago' : 'Abono'} Gasto (${target.concept})${notes ? ` - ${notes}` : ''}`,
-      category: mapGastoCategoryToExpenseCategory(target.category),
-      amountUSD: payAmount,
-      amountBs: payAmountBs,
-      baseImponibleBs: payAmountBs,
-      ivaBs: 0,
-      retencionIVABs: 0,
-      retencionISLRBs: 0,
-      bcvRate,
-      paymentMethod: mapMethodToExpenseMethod(paymentMethod),
-      reference,
-      linkedGastoId: target.id
-    };
-
-    setGastosOperativos(prev => prev.map(g => g.id === id ? updatedGasto : g));
-    setExpenses(prev => [cashOutflowExpense, ...prev]);
-
+  ): Promise<void> => {
     const uid = getActiveUid();
-    if (uid) {
-      saveGastoWithCashOutflowAtomic(uid, updatedGasto, cashOutflowExpense).catch(e =>
-        console.error('Firestore markGastoPagado atomic error:', e)
-      );
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para registrar pagos de gastos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await markGastoOperativoPagadoTransaction(uid, id, paymentMethod, bcvRate, reference, amountUSD, notes);
+      notifyUser('success', 'Pago registrado', 'El pago del gasto operativo se sincronizó en Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo registrar el pago del gasto');
+      throw e;
     }
   };
 
@@ -3289,7 +2890,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   /**
    * Factory Reset: Arrancar de 0 limpiando todas las colecciones en Cloud Firestore del usuario actual
    */
-  const factoryReset = (_mode: 'clean_zero' | 'restore_demo' = 'clean_zero') => {
+  const factoryReset = async (_mode: 'clean_zero' | 'restore_demo' = 'clean_zero'): Promise<void> => {
+    const uid = getActiveUid();
+    if (uid) {
+      try {
+        await clearUserFirestoreCollections(uid);
+      } catch (e) {
+        notifyError(e, 'No se pudo completar el reinicio en Firestore');
+        throw e;
+      }
+    }
+
     setProducts([]);
     setSales([]);
     setExpenses([]);
@@ -3300,6 +2911,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSuppliers([]);
     setCreditNotes([]);
     setInventoryDischarges([]);
+    setKardex([]);
     setCashShift(null);
     setCashShiftHistory([]);
     setSelectedClientForPOS(null);
@@ -3315,13 +2927,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deletedCuentaIds: [],
       deletedGastoIds: []
     };
-
-    const uid = getActiveUid();
-    if (uid) {
-      clearUserFirestoreCollections(uid).catch(e =>
-        console.error('Firestore factoryReset error:', e)
-      );
-    }
+    notifyUser('info', 'Reinicio completado', 'Todas las colecciones operativas han sido reiniciadas en Cloud Firestore.');
   };
 
   return (
@@ -3416,7 +3022,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteGastoOperativo,
         markGastoOperativoPagado,
         firestoreSyncStatus,
+        notification,
+        dismissNotification,
+        notifyUser,
         backupClosingToDrive: syncToGoogleDrive,
+        getFullDatabasePayload,
         googleUser,
         isAuthLoading,
         isDriveSyncing,

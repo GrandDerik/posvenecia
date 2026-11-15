@@ -274,8 +274,8 @@ export const POSView: React.FC = () => {
     }
   };
 
-  // Finalize sale checkout with double-submit protection
-  const handleCheckout = () => {
+  // Finalize sale checkout with double-submit protection and atomic await
+  const handleCheckout = async () => {
     if (isProcessingCheckoutRef.current) {
       console.warn('[POSView] Prevenido doble envío de venta (double-submit protection)');
       return;
@@ -359,12 +359,12 @@ export const POSView: React.FC = () => {
         address: fiadoData?.clientAddress || clientAddress
       };
 
-      const createdSale = completeSale(finalClient, paymentDetails, {
+      const createdSale = await completeSale(finalClient, paymentDetails, {
         invoiceNumber: cleanInvoiceInput,
         controlNumber: cleanControlInput
       });
 
-      // Reset flow states
+      // Reset flow states only after Firestore transaction succeeds
       setPagoMovilData(null);
       setFiadoData(null);
       setCombinedData(null);
@@ -375,7 +375,7 @@ export const POSView: React.FC = () => {
       setSuccessSale(createdSale);
     } catch (err: any) {
       console.error('[POSView] Error al procesar venta:', err);
-      setFiscalError(err?.message || 'No se pudo procesar la venta. Verifique los datos fiscales.');
+      setFiscalError(err?.message || 'No se pudo procesar la venta. Verifique su conexión o los datos fiscales.');
     } finally {
       // Cooldown timer to prevent accidental double clicks
       setTimeout(() => {

@@ -33,6 +33,8 @@ export const FiadosView: React.FC = () => {
   const [abonoMethod, setAbonoMethod] = useState<PaymentMethod>('pago_movil');
   const [abonoRef, setAbonoRef] = useState('');
   const [abonoNotes, setAbonoNotes] = useState('');
+  const [abonoError, setAbonoError] = useState<string | null>(null);
+  const [isSubmittingAbono, setIsSubmittingAbono] = useState(false);
 
   // Create manual fiado modal
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
@@ -73,18 +75,29 @@ export const FiadosView: React.FC = () => {
     setAbonoMethod('pago_movil');
     setAbonoRef('');
     setAbonoNotes('Abono a cuenta');
+    setAbonoError(null);
+    setIsSubmittingAbono(false);
   };
 
-  const handleConfirmAbono = (e: React.FormEvent) => {
+  const handleConfirmAbono = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFiadoForAbono) return;
+    if (!selectedFiadoForAbono || isSubmittingAbono) return;
     const rawVal = parseFloat(abonoAmountInput) || 0;
     if (rawVal <= 0) return;
 
     const amountUSD = abonoCurrency === 'USD' ? round2(rawVal) : round2(safeDiv(rawVal, bcvRate));
     if (amountUSD <= 0) return;
-    addAbonoToFiado(selectedFiadoForAbono.id, amountUSD, abonoMethod, abonoRef, abonoNotes);
-    setSelectedFiadoForAbono(null);
+
+    setIsSubmittingAbono(true);
+    setAbonoError(null);
+    try {
+      await addAbonoToFiado(selectedFiadoForAbono.id, amountUSD, abonoMethod, abonoRef, abonoNotes);
+      setSelectedFiadoForAbono(null);
+    } catch (err: any) {
+      setAbonoError(err?.message || 'No se pudo registrar el abono en Cloud Firestore.');
+    } finally {
+      setIsSubmittingAbono(false);
+    }
   };
 
   const handleCreateManual = (e: React.FormEvent) => {
@@ -485,20 +498,29 @@ Para cancelar mediante Pago Móvil:
                 />
               </div>
 
+              {abonoError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{abonoError}</span>
+                </div>
+              )}
+
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmittingAbono}
                   onClick={() => setSelectedFiadoForAbono(null)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white text-xs font-bold rounded-xl shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center gap-1.5 cursor-pointer"
+                  disabled={isSubmittingAbono}
+                  className="px-5 py-2.5 bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center gap-1.5 cursor-pointer"
                 >
                   <Check className="w-4 h-4" />
-                  <span>Registrar Abono</span>
+                  <span>{isSubmittingAbono ? 'Registrando...' : 'Registrar Abono'}</span>
                 </button>
               </div>
             </form>

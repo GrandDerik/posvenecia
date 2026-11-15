@@ -45,6 +45,14 @@ service cloud.firestore {
       return !(key in data) || data[key] == null || (data[key] is list && data[key].size() <= maxLen);
     }
 
+    function isOptMap(data, key, maxKeys) {
+      return !(key in data) || data[key] == null || (data[key] is map && data[key].size() <= maxKeys);
+    }
+
+    function matchesDocId(data, docId) {
+      return !('id' in data) || data.id == null || data.id == docId;
+    }
+
     // Validadores por entidad (compatibles con merge: true e increment() atómicos)
     function isValidProduct(data) {
       return data is map
@@ -62,6 +70,7 @@ service cloud.firestore {
         && isOptNumber(data, 'minStock')
         && isOptBool(data, 'isExemptFromIVA')
         && isOptString(data, 'unit', 50)
+        && isOptString(data, 'imageUrl', 350000)
         && isOptString(data, 'itemType', 50)
         && isOptBool(data, 'isService')
         && isOptString(data, 'purchaseNote', 500)
@@ -86,9 +95,16 @@ service cloud.firestore {
         && isOptNumber(data, 'igtfUSD')
         && isOptNumber(data, 'totalUSD')
         && isOptNumber(data, 'bcvRate')
+        && isOptNumber(data, 'subtotalBs')
+        && isOptNumber(data, 'exemptBs')
+        && isOptNumber(data, 'taxableBs')
+        && isOptNumber(data, 'ivaBs')
+        && isOptNumber(data, 'igtfBs')
         && isOptNumber(data, 'totalBs')
         && isOptString(data, 'paymentMethod', 50)
+        && isOptMap(data, 'paymentDetails', 30)
         && isOptString(data, 'status', 50)
+        && isOptMap(data, 'returnedQuantities', 500)
         && isOptString(data, 'creditNoteId', 128)
         && isOptNumber(data, 'refundedUSD')
         && isOptString(data, 'cashierName', 100)
@@ -100,6 +116,7 @@ service cloud.firestore {
       return data is map
         && isOptString(data, 'id', 128)
         && isOptString(data, 'date', 100)
+        && isOptString(data, 'dueDate', 100)
         && isOptString(data, 'invoiceNumber', 100)
         && isOptString(data, 'controlNumber', 100)
         && isOptString(data, 'supplierId', 128)
@@ -227,11 +244,13 @@ service cloud.firestore {
     function isValidBusinessProfile(data) {
       return data is map
         && isOptString(data, 'updatedAt', 100)
+        && isOptMap(data, 'businessInfo', 30)
+        && (!('businessInfo' in data) || data.businessInfo == null || isOptString(data.businessInfo, 'logoUrl', 350000))
         && isOptNumber(data, 'bcvRate')
         && isOptNumber(data, 'bcvEuroRate')
         && isOptString(data, 'bcvLastUpdatedDate', 50)
         && isOptString(data, 'bcvLastUpdatedAt', 100)
-        && isOptString(data, 'baseCurrency', 10)
+        && (!('baseCurrency' in data) || data.baseCurrency == null || data.baseCurrency in ['USD', 'VED'])
         && isOptString(data, 'managerPin', 32)
         && isOptString(data, 'lastUpdatedBy', 200)
         && isOptList(data, 'customCategories', 200)
@@ -241,6 +260,7 @@ service cloud.firestore {
     function isValidCashRegister(data) {
       return data is map
         && isOptBool(data, 'isOpen')
+        && isOptMap(data, 'activeShift', 30)
         && isOptString(data, 'updatedAt', 100)
         && isOptString(data, 'updatedBy', 200)
         && isOptString(data, 'terminalId', 128)
@@ -254,6 +274,7 @@ service cloud.firestore {
         && isOptString(data, 'controlNumber', 100)
         && isOptString(data, 'saleId', 128)
         && isOptString(data, 'originalInvoiceNumber', 100)
+        && isOptString(data, 'originalControlNumber', 100)
         && isOptString(data, 'date', 100)
         && isOptString(data, 'clientName', 200)
         && isOptString(data, 'clientRIF', 50)
@@ -330,49 +351,49 @@ service cloud.firestore {
       match /products/{productId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(productId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(productId) && isValidProduct(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(productId) && isValidProduct(incoming()) && matchesDocId(incoming(), productId);
       }
 
       match /sales/{saleId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(saleId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(saleId) && isValidSale(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(saleId) && isValidSale(incoming()) && matchesDocId(incoming(), saleId);
       }
 
       match /expenses/{expenseId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(expenseId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(expenseId) && isValidExpense(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(expenseId) && isValidExpense(incoming()) && matchesDocId(incoming(), expenseId);
       }
 
       match /fiados/{fiadoId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(fiadoId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(fiadoId) && isValidFiado(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(fiadoId) && isValidFiado(incoming()) && matchesDocId(incoming(), fiadoId);
       }
 
       match /clients/{clientId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(clientId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(clientId) && isValidClient(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(clientId) && isValidClient(incoming()) && matchesDocId(incoming(), clientId);
       }
 
       match /cuentasPorPagar/{cuentaId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(cuentaId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(cuentaId) && isValidCuentaPorPagar(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(cuentaId) && isValidCuentaPorPagar(incoming()) && matchesDocId(incoming(), cuentaId);
       }
 
       match /gastosOperativos/{gastoId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(gastoId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(gastoId) && isValidGastoOperativo(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(gastoId) && isValidGastoOperativo(incoming()) && matchesDocId(incoming(), gastoId);
       }
 
       match /cashShiftHistory/{shiftId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(shiftId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(shiftId) && isValidCashShift(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(shiftId) && isValidCashShift(incoming()) && matchesDocId(incoming(), shiftId);
       }
 
       match /businessProfile/{docId} {
@@ -390,26 +411,26 @@ service cloud.firestore {
       match /creditNotes/{noteId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(noteId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(noteId) && isValidCreditNote(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(noteId) && isValidCreditNote(incoming()) && matchesDocId(incoming(), noteId);
       }
 
       match /inventoryDischarges/{dischargeId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(dischargeId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(dischargeId) && isValidInventoryDischarge(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(dischargeId) && isValidInventoryDischarge(incoming()) && matchesDocId(incoming(), dischargeId);
       }
 
       match /kardex/{kardexId} {
         allow list: if isVerifiedOwner(userId);
         allow get: if isVerifiedOwner(userId) && isValidId(kardexId);
-        allow create: if isVerifiedOwner(userId) && isValidId(kardexId) && isValidKardexEntry(incoming());
+        allow create: if isVerifiedOwner(userId) && isValidId(kardexId) && isValidKardexEntry(incoming()) && matchesDocId(incoming(), kardexId);
         allow update, delete: if false;
       }
 
       match /suppliers/{supplierId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(supplierId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(supplierId) && isValidSupplier(incoming());
+        allow create, update: if isVerifiedOwner(userId) && isValidId(supplierId) && isValidSupplier(incoming()) && matchesDocId(incoming(), supplierId);
       }
     }
   }

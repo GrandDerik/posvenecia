@@ -82,6 +82,8 @@ export const ProductsView: React.FC = () => {
   // Photo & Purchase Note
   const [imageUrl, setImageUrl] = useState<string>('');
   const [purchaseNote, setPurchaseNote] = useState<string>('');
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const categories = ['Todos', ...appCategories];
@@ -97,6 +99,8 @@ export const ProductsView: React.FC = () => {
   const handleOpenAdd = () => {
     const defaultCurr: 'USD' | 'Bs' = baseCurrency === 'VED' ? 'Bs' : 'USD';
     setEditingProduct(null);
+    setFormError(null);
+    setIsSubmitting(false);
     setCode(''); // Blanco por defecto según solicitud del usuario para escanear o escribir directo
     setName('');
     setCategory('Víveres');
@@ -127,6 +131,8 @@ export const ProductsView: React.FC = () => {
       : (p.priceCurrency === 'USD' ? 'USD' : (baseCurrency === 'VED' ? 'Bs' : 'USD'));
 
     setEditingProduct(p);
+    setFormError(null);
+    setIsSubmitting(false);
     setCode(p.code);
     setName(p.name);
     setCategory(p.category);
@@ -170,19 +176,70 @@ export const ProductsView: React.FC = () => {
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        alert('La imagen no debe superar los 2MB');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          setImageUrl(reader.result);
+    e.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setFormError('El archivo seleccionado no es una imagen válida.');
+      return;
+    }
+
+    if (file.size > 4 * 1024 * 1024) {
+      setFormError('La imagen original no debe superar los 4MB.');
+      return;
+    }
+
+    setFormError(null);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result !== 'string') return;
+      const rawDataUrl = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        const MAX_DIM = 480;
+        let { width, height } = img;
+        if (width > MAX_DIM || height > MAX_DIM) {
+          const ratio = Math.min(MAX_DIM / width, MAX_DIM / height);
+          width = Math.max(1, Math.round(width * ratio));
+          height = Math.max(1, Math.round(height * ratio));
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          if (rawDataUrl.length <= 340000) {
+            setImageUrl(rawDataUrl);
+          } else {
+            setFormError('La imagen es demasiado pesada para guardarse en Cloud Firestore. Intenta con una foto más ligera.');
+          }
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        let compressed = canvas.toDataURL('image/webp', 0.80);
+        if (!compressed.startsWith('data:image/webp') || compressed.length > 340000) {
+          const jpegFallback = canvas.toDataURL('image/jpeg', 0.78);
+          if (jpegFallback.length < compressed.length || !compressed.startsWith('data:image/webp')) {
+            compressed = jpegFallback;
+          }
+        }
+        const finalUrl = compressed.length < rawDataUrl.length ? compressed : rawDataUrl;
+        if (finalUrl.length > 340000) {
+          setFormError('La imagen sigue siendo muy pesada después de comprimir (>340KB). Selecciona una imagen más pequeña.');
+          return;
+        }
+        setImageUrl(finalUrl);
+      };
+      img.onerror = () => {
+        if (rawDataUrl.length <= 340000) {
+          setImageUrl(rawDataUrl);
+        } else {
+          setFormError('No se pudo procesar ni comprimir la imagen seleccionada.');
         }
       };
-      reader.readAsDataURL(file);
-    }
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
   };
 
   // Price changes sync (source-preserving: never overwrites entered Bs via round-trip)
@@ -230,9 +287,14 @@ export const ProductsView: React.FC = () => {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || isSubmitting) return;
+
+    if (imageUrl.trim().length > 340000) {
+      setFormError('La foto seleccionada supera el tamaño máximo permitido (340KB). Quita o reemplaza la imagen.');
+      return;
+    }
 
     let finalCategory = category;
     if (isCreatingCategory && newCategoryInput.trim()) {
@@ -280,18 +342,25 @@ export const ProductsView: React.FC = () => {
       purchaseNote: purchaseNote.trim() || undefined
     };
 
-    if (editingProduct) {
-      updateProduct({
-        ...(editingProduct.batches ? { batches: editingProduct.batches } : {}),
-        ...(editingProduct.profitMarginPercent !== undefined ? { profitMarginPercent: editingProduct.profitMarginPercent } : {}),
-        ...prodData,
-        id: editingProduct.id
-      });
-    } else {
-      addProduct(prodData);
+    setIsSubmitting(true);
+    setFormError(null);
+    try {
+      if (editingProduct) {
+        await updateProduct({
+          ...(editingProduct.batches ? { batches: editingProduct.batches } : {}),
+          ...(editingProduct.profitMarginPercent !== undefined ? { profitMarginPercent: editingProduct.profitMarginPercent } : {}),
+          ...prodData,
+          id: editingProduct.id
+        });
+      } else {
+        await addProduct(prodData);
+      }
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setFormError(err?.message || 'Error al guardar el producto en Cloud Firestore.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setIsModalOpen(false);
   };
 
   const handleExportExcel = () => {
@@ -1350,19 +1419,28 @@ export const ProductsView: React.FC = () => {
                 </label>
               </div>
 
+              {formError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
+
               <div className="pt-2 flex justify-end gap-2 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer"
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-blue-500/20 cursor-pointer"
                 >
-                  {editingProduct ? 'Actualizar Producto' : 'Guardar Producto'}
+                  {isSubmitting ? 'Guardando...' : editingProduct ? 'Actualizar Producto' : 'Guardar Producto'}
                 </button>
               </div>
 

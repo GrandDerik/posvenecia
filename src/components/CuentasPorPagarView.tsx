@@ -121,6 +121,10 @@ export const CuentasPorPagarView: React.FC = () => {
   const [abonoMethod, setAbonoMethod] = useState<PaymentMethod>('transferencia');
   const [abonoRef, setAbonoRef] = useState('');
   const [abonoNotes, setAbonoNotes] = useState('');
+  const [abonoError, setAbonoError] = useState<string | null>(null);
+  const [isSubmittingAbono, setIsSubmittingAbono] = useState(false);
+  const [pagarGastoError, setPagarGastoError] = useState<string | null>(null);
+  const [isSubmittingPagarGasto, setIsSubmittingPagarGasto] = useState(false);
 
   // New/Edit Gasto Operativo Form
   const currentMonthName = new Intl.DateTimeFormat('es-VE', { month: 'long', year: 'numeric' }).format(new Date());
@@ -469,9 +473,9 @@ export const CuentasPorPagarView: React.FC = () => {
     setIsAddCuentaModalOpen(false);
   };
 
-  const handleRegisterAbono = (e: React.FormEvent) => {
+  const handleRegisterAbono = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cuentaForAbono) return;
+    if (!cuentaForAbono || isSubmittingAbono) return;
     const amount = parseFloat(abonoAmountUSD);
     if (isNaN(amount) || amount <= 0) return;
 
@@ -480,19 +484,27 @@ export const CuentasPorPagarView: React.FC = () => {
       return;
     }
 
-    addAbonoToCuentaPorPagar(
-      cuentaForAbono.id,
-      amount,
-      abonoMethod,
-      abonoRef.trim() || undefined,
-      abonoNotes.trim() || undefined
-    );
+    setIsSubmittingAbono(true);
+    setAbonoError(null);
+    try {
+      await addAbonoToCuentaPorPagar(
+        cuentaForAbono.id,
+        amount,
+        abonoMethod,
+        abonoRef.trim() || undefined,
+        abonoNotes.trim() || undefined
+      );
 
-    setIsAbonoModalOpen(false);
-    setCuentaForAbono(null);
-    setAbonoAmountUSD('');
-    setAbonoRef('');
-    setAbonoNotes('');
+      setIsAbonoModalOpen(false);
+      setCuentaForAbono(null);
+      setAbonoAmountUSD('');
+      setAbonoRef('');
+      setAbonoNotes('');
+    } catch (err: any) {
+      setAbonoError(err?.message || 'No se pudo registrar el abono en Cloud Firestore.');
+    } finally {
+      setIsSubmittingAbono(false);
+    }
   };
 
   const handleCreateOrEditGasto = (e: React.FormEvent) => {
@@ -569,12 +581,14 @@ export const CuentasPorPagarView: React.FC = () => {
     setPagarMethod('pago_movil');
     setPagarRef('');
     setPagarNotes('');
+    setPagarGastoError(null);
+    setIsSubmittingPagarGasto(false);
     setIsPagarGastoModalOpen(true);
   };
 
-  const handleConfirmPagarGasto = (e: React.FormEvent) => {
+  const handleConfirmPagarGasto = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!gastoForPagar) return;
+    if (!gastoForPagar || isSubmittingPagarGasto) return;
 
     const amountToPay = parseFloat(pagarAmountUSD);
     if (isNaN(amountToPay) || amountToPay <= 0) return;
@@ -584,19 +598,27 @@ export const CuentasPorPagarView: React.FC = () => {
       return;
     }
 
-    markGastoOperativoPagado(
-      gastoForPagar.id,
-      pagarMethod,
-      pagarRef.trim() || undefined,
-      amountToPay,
-      pagarNotes.trim() || undefined
-    );
+    setIsSubmittingPagarGasto(true);
+    setPagarGastoError(null);
+    try {
+      await markGastoOperativoPagado(
+        gastoForPagar.id,
+        pagarMethod,
+        pagarRef.trim() || undefined,
+        amountToPay,
+        pagarNotes.trim() || undefined
+      );
 
-    setIsPagarGastoModalOpen(false);
-    setGastoForPagar(null);
-    setPagarAmountUSD('');
-    setPagarRef('');
-    setPagarNotes('');
+      setIsPagarGastoModalOpen(false);
+      setGastoForPagar(null);
+      setPagarAmountUSD('');
+      setPagarRef('');
+      setPagarNotes('');
+    } catch (err: any) {
+      setPagarGastoError(err?.message || 'No se pudo registrar el pago del gasto en Cloud Firestore.');
+    } finally {
+      setIsSubmittingPagarGasto(false);
+    }
   };
 
   return (
@@ -1325,6 +1347,8 @@ export const CuentasPorPagarView: React.FC = () => {
                           onClick={() => {
                             setCuentaForAbono(cuenta);
                             setAbonoAmountUSD(cuenta.remainingUSD.toString());
+                            setAbonoError(null);
+                            setIsSubmittingAbono(false);
                             setIsAbonoModalOpen(true);
                           }}
                           className="px-3 py-1.5 rounded-xl bg-[#0B1528] hover:bg-[#152440] text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
@@ -1895,20 +1919,32 @@ export const CuentasPorPagarView: React.FC = () => {
                   />
                 </div>
 
+                {pagarGastoError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{pagarGastoError}</span>
+                  </div>
+                )}
+
                 <div className="pt-2 flex items-center justify-end gap-2">
                   <button
                     type="button"
+                    disabled={isSubmittingPagarGasto}
                     onClick={() => setIsPagarGastoModalOpen(false)}
-                    className="px-4 py-2 rounded-xl text-slate-600 hover:bg-[#EEF2F7] font-bold text-xs cursor-pointer"
+                    className="px-4 py-2 rounded-xl text-slate-600 hover:bg-[#EEF2F7] font-bold text-xs cursor-pointer disabled:opacity-50"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
-                    disabled={enteredAmount <= 0 || enteredAmount > remaining + 0.01}
+                    disabled={enteredAmount <= 0 || enteredAmount > remaining + 0.01 || isSubmittingPagarGasto}
                     className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-50 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
                   >
-                    {willBeFull ? 'Confirmar Pago Total' : 'Confirmar Abono Parcial'}
+                    {isSubmittingPagarGasto
+                      ? 'Confirmando...'
+                      : willBeFull
+                      ? 'Confirmar Pago Total'
+                      : 'Confirmar Abono Parcial'}
                   </button>
                 </div>
               </form>
@@ -2456,19 +2492,28 @@ export const CuentasPorPagarView: React.FC = () => {
                 />
               </div>
 
+              {abonoError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{abonoError}</span>
+                </div>
+              )}
+
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmittingAbono}
                   onClick={() => setIsAbonoModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-[#EEF2F7] font-bold text-xs cursor-pointer"
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-[#EEF2F7] font-bold text-xs cursor-pointer disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
+                  disabled={isSubmittingAbono}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-50 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
                 >
-                  Confirmar Abono
+                  {isSubmittingAbono ? 'Confirmando...' : 'Confirmar Abono'}
                 </button>
               </div>
             </form>

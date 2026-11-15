@@ -19,10 +19,12 @@
         "minStock": { "type": "number" },
         "isExemptFromIVA": { "type": "boolean" },
         "unit": { "type": "string", "maxLength": 50 },
-        "imageUrl": { "type": "string", "maxLength": 2000 },
+        "imageUrl": { "type": "string", "maxLength": 350000 },
         "itemType": { "type": "string", "maxLength": 50 },
         "isService": { "type": "boolean" },
-        "purchaseNote": { "type": "string", "maxLength": 500 }
+        "purchaseNote": { "type": "string", "maxLength": 500 },
+        "profitMarginPercent": { "type": "number" },
+        "batches": { "type": "array" }
       },
       "required": ["id", "code", "name", "category", "priceUSD", "stock"]
     },
@@ -53,7 +55,11 @@
         "igtfBs": { "type": "number" },
         "totalBs": { "type": "number" },
         "paymentMethod": { "type": "string", "maxLength": 50 },
+        "paymentDetails": { "type": "object" },
         "status": { "type": "string", "maxLength": 50 },
+        "returnedQuantities": { "type": "object" },
+        "creditNoteId": { "type": "string", "maxLength": 128 },
+        "refundedUSD": { "type": "number" },
         "cashierName": { "type": "string", "maxLength": 100 },
         "syncStatus": { "type": "string", "maxLength": 50 }
       },
@@ -66,8 +72,10 @@
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
         "date": { "type": "string", "maxLength": 100 },
+        "dueDate": { "type": "string", "maxLength": 100 },
         "invoiceNumber": { "type": "string", "maxLength": 100 },
         "controlNumber": { "type": "string", "maxLength": 100 },
+        "supplierId": { "type": "string", "maxLength": 128 },
         "supplierName": { "type": "string", "maxLength": 200 },
         "supplierRIF": { "type": "string", "maxLength": 50 },
         "supplierPhone": { "type": "string", "maxLength": 50 },
@@ -226,6 +234,7 @@
         "controlNumber": { "type": "string", "maxLength": 100 },
         "saleId": { "type": "string", "maxLength": 128 },
         "originalInvoiceNumber": { "type": "string", "maxLength": 100 },
+        "originalControlNumber": { "type": "string", "maxLength": 100 },
         "date": { "type": "string", "maxLength": 100 },
         "clientName": { "type": "string", "maxLength": 200 },
         "clientRIF": { "type": "string", "maxLength": 50 },

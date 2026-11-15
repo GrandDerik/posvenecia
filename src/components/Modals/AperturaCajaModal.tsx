@@ -43,6 +43,7 @@ export const AperturaCajaModal: React.FC = () => {
   const [initialBs, setInitialBs] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [manualRateInput, setManualRateInput] = useState<string>('');
   const [bcvSyncFeedback, setBcvSyncFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const hasAttemptedAutoSyncRef = useRef(false);
@@ -55,6 +56,8 @@ export const AperturaCajaModal: React.FC = () => {
   // Initialize or reset bank balance fields + auto-sync daily BCV rate if stale on modal open
   useEffect(() => {
     if (isAperturaModalOpen) {
+      setErrorMsg(null);
+      setIsSubmitting(false);
       const initialMap: Record<string, { balanceBs: string; balanceUSD: string }> = {};
       if (configuredBanks.length > 0) {
         configuredBanks.forEach(bk => {
@@ -129,8 +132,9 @@ export const AperturaCajaModal: React.FC = () => {
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const usd = parseFloat(initialUSD) || 0;
     const bs = parseFloat(initialBs) || 0;
 
@@ -167,11 +171,18 @@ export const AperturaCajaModal: React.FC = () => {
       });
     }
 
-    openCashShift(usd, bs, notes.trim(), initialBanksList);
+    setIsSubmitting(true);
     setErrorMsg(null);
-    setInitialUSD('');
-    setInitialBs('');
-    setNotes('');
+    try {
+      await openCashShift(usd, bs, notes.trim(), initialBanksList);
+      setInitialUSD('');
+      setInitialBs('');
+      setNotes('');
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'No se pudo abrir la caja en Cloud Firestore.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -587,17 +598,19 @@ export const AperturaCajaModal: React.FC = () => {
           <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => setIsAperturaModalOpen(false)}
-              className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer disabled:opacity-50"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="flex-1 sm:flex-none px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-98"
+              disabled={isSubmitting}
+              className="flex-1 sm:flex-none px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-extrabold shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-98"
             >
               <KeyRound className="w-4 h-4" />
-              <span>Abrir Caja e Iniciar Día</span>
+              <span>{isSubmitting ? 'Abriendo Caja...' : 'Abrir Caja e Iniciar Día'}</span>
             </button>
           </div>
 
