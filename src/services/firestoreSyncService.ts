@@ -3,6 +3,7 @@ import {
   doc,
   onSnapshot,
   setDoc,
+  updateDoc,
   getDoc,
   deleteDoc,
   getDocs,
@@ -739,11 +740,20 @@ export const saveBusinessProfileToFirestore = async (
   const path = `users/${userId}/businessProfile/profile`;
   const op = (async () => {
     try {
+      const profileRef = doc(db, 'users', userId, 'businessProfile', 'profile');
       const cleaned = cleanForFirestore({
         ...profilePatch,
         updatedAt: new Date().toISOString()
       });
-      await setDoc(doc(db, 'users', userId, 'businessProfile', 'profile'), cleaned, { merge: true });
+      try {
+        await updateDoc(profileRef, cleaned as Record<string, any>);
+      } catch (err: any) {
+        if (err?.code === 'not-found') {
+          await setDoc(profileRef, cleaned, { merge: true });
+        } else {
+          throw err;
+        }
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -1812,6 +1822,32 @@ export const saveClientToFirestore = async (uid: string, client: Client): Promis
   return trackFirestoreWrite(op);
 };
 
+export const updateClientInFirestore = async (uid: string, client: Client): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/clients/${client.id}`;
+  const op = (async () => {
+    try {
+      const clientRef = doc(db, 'users', userId, 'clients', client.id);
+      const cleaned = cleanForFirestore(client) as unknown as Record<string, any>;
+      if (!client.address) cleaned.address = deleteField();
+      if (!client.email) cleaned.email = deleteField();
+      if (!client.notes) cleaned.notes = deleteField();
+      try {
+        await updateDoc(clientRef, cleaned);
+      } catch (err: any) {
+        if (err?.code === 'not-found') {
+          await setDoc(clientRef, cleanForFirestore(client), { merge: true });
+        } else {
+          throw err;
+        }
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
 export const deleteClientFromFirestore = async (uid: string, clientId: string): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/clients/${clientId}`;
@@ -1834,6 +1870,32 @@ export const saveSupplierToFirestore = async (uid: string, supplier: Supplier): 
       await setDoc(doc(db, 'users', userId, 'suppliers', supplier.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const updateSupplierInFirestore = async (uid: string, supplier: Supplier): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/suppliers/${supplier.id}`;
+  const op = (async () => {
+    try {
+      const supplierRef = doc(db, 'users', userId, 'suppliers', supplier.id);
+      const cleaned = cleanForFirestore(supplier) as unknown as Record<string, any>;
+      if (!supplier.address) cleaned.address = deleteField();
+      if (!supplier.email) cleaned.email = deleteField();
+      if (!supplier.notes) cleaned.notes = deleteField();
+      try {
+        await updateDoc(supplierRef, cleaned);
+      } catch (err: any) {
+        if (err?.code === 'not-found') {
+          await setDoc(supplierRef, cleanForFirestore(supplier), { merge: true });
+        } else {
+          throw err;
+        }
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
     }
   })();
   return trackFirestoreWrite(op);

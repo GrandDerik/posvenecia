@@ -85,7 +85,9 @@ export const CuentasPorPagarView: React.FC = () => {
 
   // Confirm delete state
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [confirmDeleteSupplierId, setConfirmDeleteSupplierId] = useState<string | null>(null);
+  const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null);
+  const [isDeletingSupplier, setIsDeletingSupplier] = useState(false);
+  const [deleteSupplierError, setDeleteSupplierError] = useState<string | null>(null);
 
   // Maestro de Proveedores Modal State
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
@@ -97,6 +99,8 @@ export const CuentasPorPagarView: React.FC = () => {
   const [supEmail, setSupEmail] = useState('');
   const [supCreditDays, setSupCreditDays] = useState('15');
   const [supNotes, setSupNotes] = useState('');
+  const [supError, setSupError] = useState<string | null>(null);
+  const [isSubmittingSup, setIsSubmittingSup] = useState(false);
 
   // New/Edit Cuenta por Pagar Form
   const [newSupplierId, setNewSupplierId] = useState('');
@@ -264,6 +268,8 @@ export const CuentasPorPagarView: React.FC = () => {
 
   const openNewSupplierModal = () => {
     setEditingSupplier(null);
+    setSupError(null);
+    setIsSubmittingSup(false);
     setSupName('');
     setSupRif('J-');
     setSupPhone('');
@@ -276,6 +282,8 @@ export const CuentasPorPagarView: React.FC = () => {
 
   const openEditSupplierModal = (sup: Supplier) => {
     setEditingSupplier(sup);
+    setSupError(null);
+    setIsSubmittingSup(false);
     setSupName(sup.name);
     setSupRif(sup.rif || '');
     setSupPhone(sup.phone || '');
@@ -286,34 +294,60 @@ export const CuentasPorPagarView: React.FC = () => {
     setIsSupplierModalOpen(true);
   };
 
-  const handleCreateOrEditSupplier = (e: React.FormEvent) => {
+  const handleCreateOrEditSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supName.trim()) return;
-    const creditDays = Math.max(0, parseInt(supCreditDays, 10) || 0);
-    if (editingSupplier) {
-      updateSupplier({
-        ...editingSupplier,
-        name: supName.trim(),
-        rif: supRif.trim().toUpperCase(),
-        phone: supPhone.trim(),
-        address: supAddress.trim() || undefined,
-        email: supEmail.trim() || undefined,
-        creditDays,
-        notes: supNotes.trim() || undefined
-      });
-    } else {
-      addSupplier({
-        name: supName.trim(),
-        rif: supRif.trim().toUpperCase(),
-        phone: supPhone.trim(),
-        address: supAddress.trim() || undefined,
-        email: supEmail.trim() || undefined,
-        creditDays,
-        notes: supNotes.trim() || undefined
-      });
+    if (isSubmittingSup) return;
+    if (!supName.trim()) {
+      setSupError('El nombre o razón social del proveedor es obligatorio.');
+      return;
     }
-    setEditingSupplier(null);
-    setIsSupplierModalOpen(false);
+    const creditDays = Math.max(0, parseInt(supCreditDays, 10) || 0);
+    setIsSubmittingSup(true);
+    setSupError(null);
+    try {
+      if (editingSupplier) {
+        await updateSupplier({
+          ...editingSupplier,
+          name: supName.trim(),
+          rif: supRif.trim().toUpperCase(),
+          phone: supPhone.trim(),
+          address: supAddress.trim() || undefined,
+          email: supEmail.trim() || undefined,
+          creditDays,
+          notes: supNotes.trim() || undefined
+        });
+      } else {
+        await addSupplier({
+          name: supName.trim(),
+          rif: supRif.trim().toUpperCase(),
+          phone: supPhone.trim(),
+          address: supAddress.trim() || undefined,
+          email: supEmail.trim() || undefined,
+          creditDays,
+          notes: supNotes.trim() || undefined
+        });
+      }
+      setEditingSupplier(null);
+      setIsSupplierModalOpen(false);
+    } catch (err: any) {
+      setSupError(err?.message || 'No se pudo guardar el proveedor en Cloud Firestore.');
+    } finally {
+      setIsSubmittingSup(false);
+    }
+  };
+
+  const handleConfirmDeleteSupplier = async () => {
+    if (!supplierToDelete || isDeletingSupplier) return;
+    setIsDeletingSupplier(true);
+    setDeleteSupplierError(null);
+    try {
+      await deleteSupplier(supplierToDelete.id);
+      setSupplierToDelete(null);
+    } catch (err: any) {
+      setDeleteSupplierError(err?.message || 'No se pudo eliminar el proveedor en Cloud Firestore.');
+    } finally {
+      setIsDeletingSupplier(false);
+    }
   };
 
   const openNewGastoModal = () => {
@@ -2624,42 +2658,25 @@ export const CuentasPorPagarView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => openEditSupplierModal(sup)}
-                          className="p-1.5 rounded-xl bg-[#F8FAFC] text-slate-600 border border-[#DCE4F0] hover:bg-[#EBF3FE] hover:text-[#1D4ED8] cursor-pointer"
+                          className="px-2.5 py-1.5 rounded-xl bg-[#F8FAFC] text-slate-700 border border-[#DCE4F0] hover:bg-[#EBF3FE] hover:text-[#1D4ED8] hover:border-[#93C5FD] text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
                           title="Editar proveedor"
+                          aria-label={`Editar proveedor ${sup.name}`}
                         >
-                          <Edit2 className="w-4 h-4" />
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Editar</span>
                         </button>
-                        {confirmDeleteSupplierId === sup.id ? (
-                          <div className="flex items-center gap-1 bg-[#FEECEF] px-2 py-1 rounded-xl border border-[#FBC4CD]">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                deleteSupplier(sup.id);
-                                setConfirmDeleteSupplierId(null);
-                              }}
-                              className="text-[11px] font-bold text-[#BE123C] hover:underline cursor-pointer"
-                            >
-                              Confirmar
-                            </button>
-                            <span className="text-slate-300">|</span>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteSupplierId(null)}
-                              className="text-[11px] font-semibold text-slate-500 cursor-pointer"
-                            >
-                              No
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteSupplierId(sup.id)}
-                            className="p-1.5 rounded-xl bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] hover:bg-rose-100 cursor-pointer"
-                            title="Eliminar proveedor"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeleteSupplierError(null);
+                            setSupplierToDelete(sup);
+                          }}
+                          className="p-1.5 rounded-xl bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] hover:bg-rose-100 cursor-pointer transition-colors"
+                          title="Eliminar proveedor"
+                          aria-label={`Eliminar proveedor ${sup.name}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -2778,25 +2795,88 @@ export const CuentasPorPagarView: React.FC = () => {
                 />
               </div>
 
+              {supError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{supError}</span>
+                </div>
+              )}
+
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmittingSup}
                   onClick={() => {
                     setIsSupplierModalOpen(false);
                     setEditingSupplier(null);
                   }}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer"
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 disabled:opacity-50 font-bold text-xs cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
+                  disabled={isSubmittingSup}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-50 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
                 >
-                  {editingSupplier ? 'Guardar Cambios' : 'Guardar Proveedor'}
+                  {isSubmittingSup ? 'Guardando...' : editingSupplier ? 'Actualizar Proveedor' : 'Guardar Proveedor'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CONFIRMACIÓN ELIMINAR PROVEEDOR */}
+      {supplierToDelete && (
+        <div className="fixed inset-0 bg-[#0B1528]/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl border border-rose-200 space-y-3.5 animate-in zoom-in-95">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-11 h-11 rounded-2xl bg-rose-100 border border-rose-200 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-sm text-slate-900">¿Eliminar proveedor del maestro?</h3>
+                <p className="text-[11px] text-slate-500">Se eliminará de Cloud Firestore de forma permanente.</p>
+              </div>
+            </div>
+
+            <div className="bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl p-3 text-xs space-y-1">
+              <div className="font-extrabold text-[#0B1528]">{supplierToDelete.name}</div>
+              <div className="text-[11px] font-mono text-slate-600">
+                RIF: {supplierToDelete.rif || 'Sin RIF'} • {supplierToDelete.phone || 'Sin teléfono'}
+              </div>
+              {getLiveSupplierBalance(supplierToDelete) > 0 && (
+                <div className="mt-1.5 p-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-semibold">
+                  Nota: Este proveedor tiene ${formatUSD(getLiveSupplierBalance(supplierToDelete))} en facturas registradas. Las facturas existentes se conservarán en Cuentas por Pagar.
+                </div>
+              )}
+            </div>
+
+            {deleteSupplierError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700">
+                {deleteSupplierError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                disabled={isDeletingSupplier}
+                onClick={() => setSupplierToDelete(null)}
+                className="py-2.5 px-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingSupplier}
+                onClick={handleConfirmDeleteSupplier}
+                className="py-2.5 px-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
+              >
+                {isDeletingSupplier ? 'Eliminando...' : 'Sí, Eliminar'}
+              </button>
+            </div>
           </div>
         </div>
       )}

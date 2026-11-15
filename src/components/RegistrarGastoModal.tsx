@@ -357,7 +357,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
     try {
       let finalSupplierId = selectedSupplierId || undefined;
       if (!editingExpense && !finalSupplierId && saveAsNewSupplier && supplierName.trim()) {
-        const createdSup = addSupplier({
+        const createdSup = await addSupplier({
           name: supplierName.trim(),
           rif: supplierRIF.trim(),
           phone: supplierPhone.trim(),

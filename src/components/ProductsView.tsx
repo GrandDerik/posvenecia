@@ -84,6 +84,8 @@ export const ProductsView: React.FC = () => {
   const [purchaseNote, setPurchaseNote] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeletingProduct, setIsDeletingProduct] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const categories = ['Todos', ...appCategories];
@@ -1460,23 +1462,42 @@ export const ProductsView: React.FC = () => {
             <p className="text-xs text-slate-600">
               Se eliminará <strong className="text-slate-900">{productToDelete.name}</strong> del catálogo de ventas.
             </p>
+            {deleteError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700">
+                {deleteError}
+              </div>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setProductToDelete(null)}
-                className="px-3.5 py-1.5 rounded-xl text-slate-600 hover:bg-slate-100 text-xs font-bold cursor-pointer"
+                disabled={isDeletingProduct}
+                onClick={() => {
+                  setDeleteError(null);
+                  setProductToDelete(null);
+                }}
+                className="px-3.5 py-1.5 rounded-xl text-slate-600 hover:bg-slate-100 disabled:opacity-50 text-xs font-bold cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  deleteProduct(productToDelete.id);
-                  setProductToDelete(null);
+                disabled={isDeletingProduct}
+                onClick={async () => {
+                  if (isDeletingProduct) return;
+                  setIsDeletingProduct(true);
+                  setDeleteError(null);
+                  try {
+                    await deleteProduct(productToDelete.id);
+                    setProductToDelete(null);
+                  } catch (err: any) {
+                    setDeleteError(err?.message || 'No se pudo eliminar el producto en Cloud Firestore.');
+                  } finally {
+                    setIsDeletingProduct(false);
+                  }
                 }}
-                className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs cursor-pointer"
+                className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold shadow-xs cursor-pointer"
               >
-                Eliminar
+                {isDeletingProduct ? 'Eliminando...' : 'Eliminar'}
               </button>
             </div>
           </div>

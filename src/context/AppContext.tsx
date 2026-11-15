@@ -65,8 +65,10 @@ import {
   deleteExpenseFromFirestore,
   saveFiadoToFirestore,
   saveClientToFirestore,
+  updateClientInFirestore,
   deleteClientFromFirestore,
   saveSupplierToFirestore,
+  updateSupplierInFirestore,
   deleteSupplierFromFirestore,
   saveCuentaPorPagarToFirestore,
   deleteCuentaPorPagarFromFirestore,
@@ -340,9 +342,9 @@ interface AppContextType {
 
   // Clientes Habituales
   clients: Client[];
-  addClient: (clientData: Omit<Client, 'id' | 'createdAt'>) => Client;
-  updateClient: (updated: Client) => void;
-  deleteClient: (id: string) => void;
+  addClient: (clientData: Omit<Client, 'id' | 'createdAt'>) => Promise<Client>;
+  updateClient: (updated: Client) => Promise<void>;
+  deleteClient: (id: string) => Promise<void>;
   selectedClientForPOS: Client | null;
   setSelectedClientForPOS: (client: Client | null) => void;
 
@@ -352,7 +354,7 @@ interface AppContextType {
   addCategory: (newCategory: string) => void;
   addProduct: (product: Omit<Product, 'id'>) => Promise<void>;
   updateProduct: (product: Product) => Promise<void>;
-  deleteProduct: (id: string) => void;
+  deleteProduct: (id: string) => Promise<void>;
   adjustStock: (id: string, newStock: number) => Promise<boolean>;
   addQuickService: (serviceData: {
     name: string;
@@ -442,9 +444,9 @@ interface AppContextType {
 
   // Maestro de Proveedores
   suppliers: Supplier[];
-  addSupplier: (data: Omit<Supplier, 'id' | 'createdAt' | 'accumulatedBalanceUSD'> & { accumulatedBalanceUSD?: number }) => Supplier;
-  updateSupplier: (updated: Supplier) => void;
-  deleteSupplier: (id: string) => void;
+  addSupplier: (data: Omit<Supplier, 'id' | 'createdAt' | 'accumulatedBalanceUSD'> & { accumulatedBalanceUSD?: number }) => Promise<Supplier>;
+  updateSupplier: (updated: Supplier) => Promise<void>;
+  deleteSupplier: (id: string) => Promise<void>;
 
   // Fiados
   fiados: FiadoRecord[];
@@ -1661,6 +1663,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     try {
       await saveBusinessProfileToFirestore(uid, { businessInfo: next });
+      latestDataRef.current = { ...latestDataRef.current, businessInfo: next };
       setBusinessInfo(next);
       notifyUser('success', 'Perfil actualizado', 'Datos del comercio guardados en Cloud Firestore.');
     } catch (e) {
@@ -1772,18 +1775,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const deleteProduct = (id: string) => {
+  const deleteProduct = async (id: string): Promise<void> => {
     const uid = getActiveUid();
-    if (!uid) return;
-    tombstonesRef.current.deletedProductIds = [
-      ...(tombstonesRef.current.deletedProductIds || []),
-      id
-    ];
-    setProducts(prev => prev.filter(p => p.id !== id));
-    deleteProductFromFirestore(uid, id).catch(e => {
-      console.error('[PosVenecia Firestore] Error en deleteProduct:', e);
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para eliminar productos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await deleteProductFromFirestore(uid, id);
+      tombstonesRef.current.deletedProductIds = [
+        ...(tombstonesRef.current.deletedProductIds || []),
+        id
+      ];
+      setProducts(prev => prev.filter(p => p.id !== id));
+      notifyUser('success', 'Producto eliminado', 'El producto fue eliminado de Cloud Firestore.');
+    } catch (e) {
       notifyError(e, 'Error al eliminar producto');
-    });
+      throw e;
+    }
   };
 
   const adjustStock = async (id: string, newStock: number): Promise<boolean> => {
@@ -2560,9 +2570,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Maestro de Proveedores CRUD
-  const addSupplier = (
+  const addSupplier = async (
     data: Omit<Supplier, 'id' | 'createdAt' | 'accumulatedBalanceUSD'> & { accumulatedBalanceUSD?: number }
-  ): Supplier => {
+  ): Promise<Supplier> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para registrar proveedores.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
     const newSup: Supplier = {
       ...data,
       id: 'sup-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
@@ -2574,29 +2590,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (syncedBalance > 0 && newSup.accumulatedBalanceUSD === 0) {
       newSup.accumulatedBalanceUSD = syncedBalance;
     }
-    setSuppliers(prev => [newSup, ...prev].sort((a, b) => a.name.localeCompare(b.name)));
-    const uid = getActiveUid();
-    if (uid) {
-      saveSupplierToFirestore(uid, newSup).catch(e => console.error('Firestore addSupplier error:', e));
-    }
-    return newSup;
-  };
-
-  const updateSupplier = (updated: Supplier) => {
-    setSuppliers(prev =>
-      prev.map(s => (s.id === updated.id ? updated : s)).sort((a, b) => a.name.localeCompare(b.name))
-    );
-    const uid = getActiveUid();
-    if (uid) {
-      saveSupplierToFirestore(uid, updated).catch(e => console.error('Firestore updateSupplier error:', e));
+    try {
+      await saveSupplierToFirestore(uid, newSup);
+      setSuppliers(prev => [newSup, ...prev.filter(s => s.id !== newSup.id)].sort((a, b) => a.name.localeCompare(b.name)));
+      notifyUser('success', 'Proveedor registrado', `"${newSup.name}" guardado en Cloud Firestore.`);
+      return newSup;
+    } catch (e) {
+      notifyError(e, 'No se pudo guardar el proveedor');
+      throw e;
     }
   };
 
-  const deleteSupplier = (id: string) => {
-    setSuppliers(prev => prev.filter(s => s.id !== id));
+  const updateSupplier = async (updated: Supplier): Promise<void> => {
     const uid = getActiveUid();
-    if (uid) {
-      deleteSupplierFromFirestore(uid, id).catch(e => console.error('Firestore deleteSupplier error:', e));
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para actualizar proveedores.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await updateSupplierInFirestore(uid, updated);
+      setSuppliers(prev =>
+        prev.map(s => (s.id === updated.id ? updated : s)).sort((a, b) => a.name.localeCompare(b.name))
+      );
+      notifyUser('success', 'Proveedor actualizado', `"${updated.name}" actualizado en Cloud Firestore.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo actualizar el proveedor');
+      throw e;
+    }
+  };
+
+  const deleteSupplier = async (id: string): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para eliminar proveedores.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await deleteSupplierFromFirestore(uid, id);
+      setSuppliers(prev => prev.filter(s => s.id !== id));
+      notifyUser('success', 'Proveedor eliminado', 'El proveedor fue eliminado de Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo eliminar el proveedor');
+      throw e;
     }
   };
 
@@ -2847,43 +2884,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Clientes Habituales
-  const addClient = (clientData: Omit<Client, 'id' | 'createdAt'>): Client => {
+  const addClient = async (clientData: Omit<Client, 'id' | 'createdAt'>): Promise<Client> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para registrar clientes.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
     const newClient: Client = {
       ...clientData,
       id: 'cli-' + Date.now(),
       createdAt: new Date().toISOString()
     };
-    setClients(prev => [newClient, ...prev]);
-    const uid = getActiveUid();
-    if (uid) {
-      saveClientToFirestore(uid, newClient).catch(e => console.error('Firestore addClient error:', e));
-    }
-    return newClient;
-  };
-
-  const updateClient = (updated: Client) => {
-    setClients(prev => prev.map(c => c.id === updated.id ? updated : c));
-    if (selectedClientForPOS?.id === updated.id) {
-      setSelectedClientForPOS(updated);
-    }
-    const uid = getActiveUid();
-    if (uid) {
-      saveClientToFirestore(uid, updated).catch(e => console.error('Firestore updateClient error:', e));
+    try {
+      await saveClientToFirestore(uid, newClient);
+      setClients(prev => [newClient, ...prev.filter(c => c.id !== newClient.id)]);
+      notifyUser('success', 'Cliente guardado', `"${newClient.name}" sincronizado en Cloud Firestore.`);
+      return newClient;
+    } catch (e) {
+      notifyError(e, 'No se pudo guardar el cliente');
+      throw e;
     }
   };
 
-  const deleteClient = (id: string) => {
-    tombstonesRef.current.deletedClientIds = [
-      ...(tombstonesRef.current.deletedClientIds || []),
-      id
-    ];
-    setClients(prev => prev.filter(c => c.id !== id));
-    if (selectedClientForPOS?.id === id) {
-      setSelectedClientForPOS(null);
-    }
+  const updateClient = async (updated: Client): Promise<void> => {
     const uid = getActiveUid();
-    if (uid) {
-      deleteClientFromFirestore(uid, id).catch(e => console.error('Firestore deleteClient error:', e));
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para actualizar clientes.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await updateClientInFirestore(uid, updated);
+      setClients(prev => prev.map(c => c.id === updated.id ? updated : c));
+      if (selectedClientForPOS?.id === updated.id) {
+        setSelectedClientForPOS(updated);
+      }
+      notifyUser('success', 'Cliente actualizado', `"${updated.name}" actualizado en Cloud Firestore.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo actualizar el cliente');
+      throw e;
+    }
+  };
+
+  const deleteClient = async (id: string): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para eliminar clientes.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await deleteClientFromFirestore(uid, id);
+      tombstonesRef.current.deletedClientIds = [
+        ...(tombstonesRef.current.deletedClientIds || []),
+        id
+      ];
+      setClients(prev => prev.filter(c => c.id !== id));
+      if (selectedClientForPOS?.id === id) {
+        setSelectedClientForPOS(null);
+      }
+      notifyUser('success', 'Cliente eliminado', 'El cliente fue eliminado de Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo eliminar el cliente');
+      throw e;
     }
   };
 

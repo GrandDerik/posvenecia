@@ -4,6 +4,7 @@ import {
   Building2, 
   Upload, 
   Trash2, 
+  Edit2,
   Check, 
   X, 
   Store, 
@@ -77,64 +78,50 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
 
   // Multiple payment accounts
   const [pagoMovilAccounts, setPagoMovilAccounts] = useState<PagoMovilAccount[]>(() => {
-    return businessInfo.pagoMovilAccounts || [
-      {
-        id: 'pm-1',
-        bank: businessInfo.pagoMovilBank || '0102 - Banco de Venezuela',
-        phone: businessInfo.pagoMovilPhone || '0414-7890123',
-        ci: businessInfo.pagoMovilCI || 'V-20194852',
-        holderName: businessInfo.name || 'PosVenecia',
-        isDefault: true
-      }
-    ];
+    return businessInfo.pagoMovilAccounts || [];
   });
 
   const [posTerminals, setPosTerminals] = useState<POSTerminal[]>(() => {
-    return businessInfo.posTerminals || [
-      {
-        id: 'pos-1',
-        name: 'Punto Inalámbrico (Caja 1)',
-        bank: '0134 - Banesco',
-        serial: 'BN-884920',
-        isDefault: true
-      }
-    ];
+    return businessInfo.posTerminals || [];
   });
 
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>(() => {
-    return businessInfo.bankAccounts || [
-      {
-        id: 'bk-1',
-        bank: '0102 - Banco de Venezuela',
-        accountNumber: '0102-0123-45-0000123456',
-        accountType: 'corriente',
-        holderName: businessInfo.name || 'PosVenecia C.A.',
-        holderCI: businessInfo.rif || 'J-40912847-2',
-        email: businessInfo.email || 'pagos@posvenecia.com',
-        isDefault: true
-      }
-    ];
+    return businessInfo.bankAccounts || [];
   });
 
-  // Sub-forms for adding new accounts
+  // Sub-forms for adding & editing accounts
   const [isAddingPM, setIsAddingPM] = useState(false);
+  const [editingPMId, setEditingPMId] = useState<string | null>(null);
   const [newPMBank, setNewPMBank] = useState('0102 - Banco de Venezuela');
   const [newPMPhone, setNewPMPhone] = useState('');
   const [newPMCI, setNewPMCI] = useState('');
   const [newPMHolder, setNewPMHolder] = useState('');
 
   const [isAddingPOS, setIsAddingPOS] = useState(false);
+  const [editingPOSId, setEditingPOSId] = useState<string | null>(null);
   const [newPOSName, setNewPOSName] = useState('');
   const [newPOSBank, setNewPOSBank] = useState('0134 - Banesco');
   const [newPOSSerial, setNewPOSSerial] = useState('');
 
   const [isAddingBank, setIsAddingBank] = useState(false);
+  const [editingBankId, setEditingBankId] = useState<string | null>(null);
   const [newBankName, setNewBankName] = useState('0134 - Banesco');
   const [newBankAccountNumber, setNewBankAccountNumber] = useState('');
   const [newBankAccountType, setNewBankAccountType] = useState<'corriente' | 'ahorro'>('corriente');
   const [newBankHolder, setNewBankHolder] = useState('');
   const [newBankCI, setNewBankCI] = useState('');
   const [newBankEmail, setNewBankEmail] = useState('');
+
+  // Account CRUD async state & delete confirmation modal
+  const [isSavingAccountAction, setIsSavingAccountAction] = useState(false);
+  const [accountActionError, setAccountActionError] = useState<string | null>(null);
+  const [accountSavedFeedback, setAccountSavedFeedback] = useState<string | null>(null);
+  const [deleteAccountTarget, setDeleteAccountTarget] = useState<{
+    type: 'pm' | 'pos' | 'bank';
+    id: string;
+    title: string;
+    subtitle: string;
+  } | null>(null);
 
   // Modals
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
@@ -159,6 +146,10 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
     setLogoError(null);
     setSaveError(null);
     setIsSaving(false);
+    setAccountActionError(null);
+    setAccountSavedFeedback(null);
+    setIsSavingAccountAction(false);
+    setDeleteAccountTarget(null);
     setFormData({
       name: businessInfo.name,
       rif: businessInfo.rif,
@@ -172,15 +163,9 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
       pagoMovilCI: businessInfo.pagoMovilCI,
       pagoMovilBank: businessInfo.pagoMovilBank
     });
-    if (businessInfo.pagoMovilAccounts) {
-      setPagoMovilAccounts(businessInfo.pagoMovilAccounts);
-    }
-    if (businessInfo.posTerminals) {
-      setPosTerminals(businessInfo.posTerminals);
-    }
-    if (businessInfo.bankAccounts) {
-      setBankAccounts(businessInfo.bankAccounts);
-    }
+    setPagoMovilAccounts(businessInfo.pagoMovilAccounts || []);
+    setPosTerminals(businessInfo.posTerminals || []);
+    setBankAccounts(businessInfo.bankAccounts || []);
   }, [isOpen, businessInfo]);
 
   if (!isOpen) return null;
@@ -282,68 +267,272 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
     }
   };
 
-  // Add Pago Móvil account
-  const handleAddPagoMovilAccount = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPMPhone.trim() || !newPMCI.trim()) return;
+  const persistPaymentLists = async (
+    nextPM: PagoMovilAccount[],
+    nextPOS: POSTerminal[],
+    nextBanks: BankAccount[],
+    feedbackMsg: string
+  ): Promise<boolean> => {
+    setIsSavingAccountAction(true);
+    setAccountActionError(null);
+    const defaultPM = nextPM.find(a => a.isDefault) || nextPM[0];
+    try {
+      await updateBusinessInfo({
+        ...formData,
+        pagoMovilBank: defaultPM?.bank || (nextPM.length === 0 ? '' : formData.pagoMovilBank),
+        pagoMovilPhone: defaultPM?.phone || (nextPM.length === 0 ? '' : formData.pagoMovilPhone),
+        pagoMovilCI: defaultPM?.ci || (nextPM.length === 0 ? '' : formData.pagoMovilCI),
+        pagoMovilAccounts: nextPM,
+        posTerminals: nextPOS,
+        bankAccounts: nextBanks
+      });
+      setPagoMovilAccounts(nextPM);
+      setPosTerminals(nextPOS);
+      setBankAccounts(nextBanks);
+      setAccountSavedFeedback(feedbackMsg);
+      setTimeout(() => setAccountSavedFeedback(null), 2500);
+      return true;
+    } catch (err: any) {
+      setAccountActionError(err?.message || 'No se pudo actualizar los métodos de pago en Cloud Firestore.');
+      return false;
+    } finally {
+      setIsSavingAccountAction(false);
+    }
+  };
 
-    const newAcc: PagoMovilAccount = {
-      id: 'pm-' + Date.now(),
-      bank: newPMBank,
-      phone: newPMPhone.trim(),
-      ci: newPMCI.trim().toUpperCase(),
-      holderName: newPMHolder.trim() || formData.name,
-      isDefault: pagoMovilAccounts.length === 0
-    };
-
-    setPagoMovilAccounts(prev => [...prev, newAcc]);
+  const resetPMForm = () => {
+    setIsAddingPM(false);
+    setEditingPMId(null);
+    setNewPMBank('0102 - Banco de Venezuela');
     setNewPMPhone('');
     setNewPMCI('');
     setNewPMHolder('');
-    setIsAddingPM(false);
   };
 
-  // Add POS Terminal
-  const handleAddPOSTerminal = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPOSName.trim()) return;
+  const openEditPM = (pm: PagoMovilAccount) => {
+    setAccountActionError(null);
+    setEditingPMId(pm.id);
+    setNewPMBank(pm.bank);
+    setNewPMPhone(pm.phone);
+    setNewPMCI(pm.ci);
+    setNewPMHolder(pm.holderName || '');
+    setIsAddingPM(true);
+  };
 
-    const newTerm: POSTerminal = {
-      id: 'pos-' + Date.now(),
-      name: newPOSName.trim(),
-      bank: newPOSBank,
-      serial: newPOSSerial.trim() || undefined,
-      isDefault: posTerminals.length === 0
-    };
+  // Add or Edit Pago Móvil account
+  const handleSavePagoMovilAccount = async () => {
+    if (isSavingAccountAction) return;
+    if (!newPMPhone.trim() || !newPMCI.trim()) {
+      setAccountActionError('Completa el teléfono y la Cédula / RIF del Pago Móvil.');
+      return;
+    }
 
-    setPosTerminals(prev => [...prev, newTerm]);
-    setNewPOSName('');
-    setNewPOSSerial('');
+    let nextPM: PagoMovilAccount[];
+    if (editingPMId) {
+      nextPM = pagoMovilAccounts.map(a =>
+        a.id === editingPMId
+          ? {
+              ...a,
+              bank: newPMBank,
+              phone: newPMPhone.trim(),
+              ci: newPMCI.trim().toUpperCase(),
+              holderName: newPMHolder.trim() || formData.name || 'Comercio'
+            }
+          : a
+      );
+    } else {
+      const newAcc: PagoMovilAccount = {
+        id: 'pm-' + Date.now(),
+        bank: newPMBank,
+        phone: newPMPhone.trim(),
+        ci: newPMCI.trim().toUpperCase(),
+        holderName: newPMHolder.trim() || formData.name || 'Comercio',
+        isDefault: pagoMovilAccounts.length === 0
+      };
+      nextPM = [...pagoMovilAccounts, newAcc];
+    }
+
+    const ok = await persistPaymentLists(
+      nextPM,
+      posTerminals,
+      bankAccounts,
+      editingPMId ? 'Cuenta Pago Móvil actualizada en Firestore.' : 'Cuenta Pago Móvil guardada en Firestore.'
+    );
+    if (ok) resetPMForm();
+  };
+
+  const handleSetDefaultPM = async (id: string) => {
+    if (isSavingAccountAction) return;
+    const nextPM = pagoMovilAccounts.map(a => ({ ...a, isDefault: a.id === id }));
+    await persistPaymentLists(nextPM, posTerminals, bankAccounts, 'Cuenta principal de Pago Móvil actualizada.');
+  };
+
+  const resetPOSForm = () => {
     setIsAddingPOS(false);
+    setEditingPOSId(null);
+    setNewPOSName('');
+    setNewPOSBank('0134 - Banesco');
+    setNewPOSSerial('');
   };
 
-  // Add Bank Account
-  const handleAddBankAccount = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newBankAccountNumber.trim()) return;
+  const openEditPOS = (pos: POSTerminal) => {
+    setAccountActionError(null);
+    setEditingPOSId(pos.id);
+    setNewPOSName(pos.name);
+    setNewPOSBank(pos.bank);
+    setNewPOSSerial(pos.serial || '');
+    setIsAddingPOS(true);
+  };
 
-    const newAcc: BankAccount = {
-      id: 'bk-' + Date.now(),
-      bank: newBankName,
-      accountNumber: newBankAccountNumber.trim(),
-      accountType: newBankAccountType,
-      holderName: newBankHolder.trim() || formData.name,
-      holderCI: newBankCI.trim().toUpperCase() || formData.rif,
-      email: newBankEmail.trim() || undefined,
-      isDefault: bankAccounts.length === 0
-    };
+  // Add or Edit POS Terminal
+  const handleSavePOSTerminal = async () => {
+    if (isSavingAccountAction) return;
+    if (!newPOSName.trim()) {
+      setAccountActionError('Ingresa el nombre identificador del Terminal POS.');
+      return;
+    }
 
-    setBankAccounts(prev => [...prev, newAcc]);
+    let nextPOS: POSTerminal[];
+    if (editingPOSId) {
+      nextPOS = posTerminals.map(t =>
+        t.id === editingPOSId
+          ? {
+              ...t,
+              name: newPOSName.trim(),
+              bank: newPOSBank,
+              serial: newPOSSerial.trim() || undefined
+            }
+          : t
+      );
+    } else {
+      const newTerm: POSTerminal = {
+        id: 'pos-' + Date.now(),
+        name: newPOSName.trim(),
+        bank: newPOSBank,
+        serial: newPOSSerial.trim() || undefined,
+        isDefault: posTerminals.length === 0
+      };
+      nextPOS = [...posTerminals, newTerm];
+    }
+
+    const ok = await persistPaymentLists(
+      pagoMovilAccounts,
+      nextPOS,
+      bankAccounts,
+      editingPOSId ? 'Terminal POS actualizado en Firestore.' : 'Terminal POS guardado en Firestore.'
+    );
+    if (ok) resetPOSForm();
+  };
+
+  const handleSetDefaultPOS = async (id: string) => {
+    if (isSavingAccountAction) return;
+    const nextPOS = posTerminals.map(t => ({ ...t, isDefault: t.id === id }));
+    await persistPaymentLists(pagoMovilAccounts, nextPOS, bankAccounts, 'Terminal POS principal actualizado.');
+  };
+
+  const resetBankForm = () => {
+    setIsAddingBank(false);
+    setEditingBankId(null);
+    setNewBankName('0134 - Banesco');
     setNewBankAccountNumber('');
+    setNewBankAccountType('corriente');
     setNewBankHolder('');
     setNewBankCI('');
     setNewBankEmail('');
-    setIsAddingBank(false);
+  };
+
+  const openEditBank = (bk: BankAccount) => {
+    setAccountActionError(null);
+    setEditingBankId(bk.id);
+    setNewBankName(bk.bank);
+    setNewBankAccountNumber(bk.accountNumber);
+    setNewBankAccountType(bk.accountType);
+    setNewBankHolder(bk.holderName || '');
+    setNewBankCI(bk.holderCI || '');
+    setNewBankEmail(bk.email || '');
+    setIsAddingBank(true);
+  };
+
+  // Add or Edit Bank Account
+  const handleSaveBankAccount = async () => {
+    if (isSavingAccountAction) return;
+    if (!newBankAccountNumber.trim()) {
+      setAccountActionError('Ingresa el número de cuenta bancaria.');
+      return;
+    }
+
+    let nextBanks: BankAccount[];
+    if (editingBankId) {
+      nextBanks = bankAccounts.map(b =>
+        b.id === editingBankId
+          ? {
+              ...b,
+              bank: newBankName,
+              accountNumber: newBankAccountNumber.trim(),
+              accountType: newBankAccountType,
+              holderName: newBankHolder.trim() || formData.name || 'Comercio',
+              holderCI: newBankCI.trim().toUpperCase() || formData.rif || '',
+              email: newBankEmail.trim() || undefined
+            }
+          : b
+      );
+    } else {
+      const newAcc: BankAccount = {
+        id: 'bk-' + Date.now(),
+        bank: newBankName,
+        accountNumber: newBankAccountNumber.trim(),
+        accountType: newBankAccountType,
+        holderName: newBankHolder.trim() || formData.name || 'Comercio',
+        holderCI: newBankCI.trim().toUpperCase() || formData.rif || '',
+        email: newBankEmail.trim() || undefined,
+        isDefault: bankAccounts.length === 0
+      };
+      nextBanks = [...bankAccounts, newAcc];
+    }
+
+    const ok = await persistPaymentLists(
+      pagoMovilAccounts,
+      posTerminals,
+      nextBanks,
+      editingBankId ? 'Cuenta bancaria actualizada en Firestore.' : 'Cuenta bancaria guardada en Firestore.'
+    );
+    if (ok) resetBankForm();
+  };
+
+  const handleSetDefaultBank = async (id: string) => {
+    if (isSavingAccountAction) return;
+    const nextBanks = bankAccounts.map(b => ({ ...b, isDefault: b.id === id }));
+    await persistPaymentLists(pagoMovilAccounts, posTerminals, nextBanks, 'Cuenta bancaria principal actualizada.');
+  };
+
+  const handleConfirmDeleteAccountItem = async () => {
+    if (!deleteAccountTarget || isSavingAccountAction) return;
+    let nextPM = pagoMovilAccounts;
+    let nextPOS = posTerminals;
+    let nextBanks = bankAccounts;
+
+    if (deleteAccountTarget.type === 'pm') {
+      nextPM = pagoMovilAccounts.filter(a => a.id !== deleteAccountTarget.id);
+      if (nextPM.length > 0 && !nextPM.some(a => a.isDefault)) {
+        nextPM = nextPM.map((a, i) => (i === 0 ? { ...a, isDefault: true } : a));
+      }
+      if (editingPMId === deleteAccountTarget.id) resetPMForm();
+    } else if (deleteAccountTarget.type === 'pos') {
+      nextPOS = posTerminals.filter(t => t.id !== deleteAccountTarget.id);
+      if (nextPOS.length > 0 && !nextPOS.some(t => t.isDefault)) {
+        nextPOS = nextPOS.map((t, i) => (i === 0 ? { ...t, isDefault: true } : t));
+      }
+      if (editingPOSId === deleteAccountTarget.id) resetPOSForm();
+    } else if (deleteAccountTarget.type === 'bank') {
+      nextBanks = bankAccounts.filter(b => b.id !== deleteAccountTarget.id);
+      if (nextBanks.length > 0 && !nextBanks.some(b => b.isDefault)) {
+        nextBanks = nextBanks.map((b, i) => (i === 0 ? { ...b, isDefault: true } : b));
+      }
+      if (editingBankId === deleteAccountTarget.id) resetBankForm();
+    }
+
+    const ok = await persistPaymentLists(nextPM, nextPOS, nextBanks, 'Método eliminado de Cloud Firestore.');
+    if (ok) setDeleteAccountTarget(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -680,10 +869,32 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
           {/* TAB 2: MÉTODOS Y CUENTAS DE PAGO */}
           {activeSubTab === 'cuentas' && (
             <div className="space-y-6">
+              {accountActionError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{accountActionError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAccountActionError(null)}
+                    className="text-rose-500 hover:text-rose-800 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {accountSavedFeedback && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-700 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{accountSavedFeedback}</span>
+                </div>
+              )}
               
               {/* SUBSECTION 1: CUENTAS DE PAGO MÓVIL */}
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
                     <Smartphone className="w-4 h-4 text-blue-600" />
                     <h3 className="font-extrabold text-xs text-slate-900 uppercase tracking-wide">
@@ -692,68 +903,105 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsAddingPM(true)}
-                    className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                    disabled={isSavingAccountAction}
+                    onClick={() => {
+                      resetPMForm();
+                      setAccountActionError(null);
+                      setIsAddingPM(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
                   >
-                    <Plus className="w-3 h-3" />
+                    <Plus className="w-3.5 h-3.5" />
                     <span>Agregar Pago Móvil</span>
                   </button>
                 </div>
 
-                <div className="space-y-2">
-                  {pagoMovilAccounts.map((pm, idx) => (
-                    <div 
-                      key={pm.id}
-                      className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 text-xs"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900">{pm.bank}</span>
-                          {pm.isDefault && (
-                            <span className="text-[10px] bg-blue-100 text-blue-700 font-extrabold px-1.5 py-0.2 rounded">
-                              Principal
-                            </span>
-                          )}
+                {pagoMovilAccounts.length === 0 ? (
+                  <div className="bg-white/80 border border-dashed border-slate-300 rounded-xl p-4 text-center text-xs text-slate-500">
+                    No hay cuentas de Pago Móvil registradas. Agrega una para mostrarla al cobrar.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {pagoMovilAccounts.map((pm) => (
+                      <div 
+                        key={pm.id}
+                        className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 text-xs hover:border-blue-300 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-slate-900">{pm.bank}</span>
+                            {pm.isDefault && (
+                              <span className="text-[10px] bg-blue-100 text-blue-700 font-extrabold px-1.5 py-0.5 rounded">
+                                Principal
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono mt-0.5 break-all">
+                            Telf: <strong>{pm.phone}</strong> • CI/RIF: <strong>{pm.ci}</strong> • Titular: {pm.holderName}
+                          </div>
                         </div>
-                        <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                          Telf: <strong>{pm.phone}</strong> • CI/RIF: <strong>{pm.ci}</strong> • Titular: {pm.holderName}
-                        </div>
-                      </div>
 
-                      <div className="flex items-center gap-1">
-                        {!pm.isDefault && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          {!pm.isDefault && (
+                            <button
+                              type="button"
+                              disabled={isSavingAccountAction}
+                              onClick={() => handleSetDefaultPM(pm.id)}
+                              className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 hover:text-amber-600 hover:bg-amber-50 hover:border-amber-200 disabled:opacity-50 cursor-pointer"
+                              title="Marcar como cuenta principal"
+                              aria-label="Marcar Pago Móvil como principal"
+                            >
+                              <Star className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => {
-                              setPagoMovilAccounts(prev => prev.map(a => ({ ...a, isDefault: a.id === pm.id })));
-                            }}
-                            className="p-1 rounded-md text-slate-400 hover:text-blue-600 hover:bg-blue-50"
-                            title="Marcar como cuenta principal"
+                            disabled={isSavingAccountAction}
+                            onClick={() => openEditPM(pm)}
+                            className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-200 disabled:opacity-50 cursor-pointer"
+                            title="Editar Pago Móvil"
+                            aria-label="Editar Pago Móvil"
                           >
-                            <Star className="w-4 h-4" />
+                            <Edit2 className="w-3.5 h-3.5" />
                           </button>
-                        )}
-                        {pagoMovilAccounts.length > 1 && (
                           <button
                             type="button"
-                            onClick={() => setPagoMovilAccounts(prev => prev.filter(a => a.id !== pm.id))}
-                            className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                            title="Eliminar cuenta"
+                            disabled={isSavingAccountAction}
+                            onClick={() => setDeleteAccountTarget({
+                              type: 'pm',
+                              id: pm.id,
+                              title: pm.bank,
+                              subtitle: `${pm.phone} • ${pm.ci}`
+                            })}
+                            className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 disabled:opacity-50 cursor-pointer"
+                            title="Eliminar Pago Móvil"
+                            aria-label="Eliminar Pago Móvil"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                        )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
 
                 {isAddingPM && (
-                  <div className="bg-white p-3 rounded-xl border border-blue-300 space-y-2 animate-in fade-in">
-                    <div className="text-xs font-bold text-blue-900">Nueva Cuenta de Pago Móvil</div>
+                  <div className="bg-white p-3.5 rounded-xl border border-blue-300 space-y-2.5 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold text-blue-900">
+                        {editingPMId ? 'Editar Cuenta de Pago Móvil' : 'Nueva Cuenta de Pago Móvil'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={resetPMForm}
+                        className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600">Banco Receptor</label>
+                        <label className="text-[10px] font-bold text-slate-600">Banco Receptor *</label>
                         <select
                           value={newPMBank}
                           onChange={(e) => setNewPMBank(e.target.value)}
@@ -763,7 +1011,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                         </select>
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600">Teléfono Pago Móvil</label>
+                        <label className="text-[10px] font-bold text-slate-600">Teléfono Pago Móvil *</label>
                         <input
                           type="text"
                           placeholder="0414-1234567"
@@ -773,12 +1021,12 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                         />
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600">Cédula / RIF</label>
+                        <label className="text-[10px] font-bold text-slate-600">Cédula / RIF *</label>
                         <input
                           type="text"
                           placeholder="V-12345678 o J-12345678-0"
                           value={newPMCI}
-                          onChange={(e) => setNewPMCI(e.target.value)}
+                          onChange={(e) => setNewPMCI(e.target.value.toUpperCase())}
                           className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
                         />
                       </div>
@@ -796,17 +1044,19 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                     <div className="flex justify-end gap-2 pt-1">
                       <button
                         type="button"
-                        onClick={() => setIsAddingPM(false)}
-                        className="px-2.5 py-1 text-slate-500 text-xs font-bold"
+                        disabled={isSavingAccountAction}
+                        onClick={resetPMForm}
+                        className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50"
                       >
                         Cancelar
                       </button>
                       <button
                         type="button"
-                        onClick={handleAddPagoMovilAccount}
-                        className="px-3 py-1 bg-blue-600 text-white rounded-lg text-xs font-bold"
+                        disabled={isSavingAccountAction}
+                        onClick={handleSavePagoMovilAccount}
+                        className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold cursor-pointer"
                       >
-                        Guardar Cuenta
+                        {isSavingAccountAction ? 'Guardando...' : editingPMId ? 'Actualizar Cuenta' : 'Guardar Cuenta'}
                       </button>
                     </div>
                   </div>
@@ -815,7 +1065,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
 
               {/* SUBSECTION 2: PUNTOS DE VENTA (POS) */}
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
                     <CreditCard className="w-4 h-4 text-indigo-600" />
                     <h3 className="font-extrabold text-xs text-slate-900 uppercase tracking-wide">
@@ -824,55 +1074,110 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsAddingPOS(true)}
-                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                    disabled={isSavingAccountAction}
+                    onClick={() => {
+                      resetPOSForm();
+                      setAccountActionError(null);
+                      setIsAddingPOS(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
                   >
-                    <Plus className="w-3 h-3" />
+                    <Plus className="w-3.5 h-3.5" />
                     <span>Agregar Punto</span>
                   </button>
                 </div>
 
-                <div className="space-y-2">
-                  {posTerminals.map((pos) => (
-                    <div 
-                      key={pos.id}
-                      className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 text-xs"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900">{pos.name}</span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200">
-                            {pos.bank}
-                          </span>
-                        </div>
-                        {pos.serial && (
-                          <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                            Serial: {pos.serial}
+                {posTerminals.length === 0 ? (
+                  <div className="bg-white/80 border border-dashed border-slate-300 rounded-xl p-4 text-center text-xs text-slate-500">
+                    No hay terminales POS registrados. Agrega tus puntos de venta físicos o inalámbricos.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {posTerminals.map((pos) => (
+                      <div 
+                        key={pos.id}
+                        className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 text-xs hover:border-indigo-300 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-slate-900">{pos.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200">
+                              {pos.bank}
+                            </span>
+                            {pos.isDefault && (
+                              <span className="text-[10px] bg-indigo-100 text-indigo-800 font-extrabold px-1.5 py-0.5 rounded">
+                                Principal
+                              </span>
+                            )}
                           </div>
-                        )}
-                      </div>
+                          {pos.serial && (
+                            <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                              Serial: {pos.serial}
+                            </div>
+                          )}
+                        </div>
 
-                      <div className="flex items-center gap-1">
-                        {posTerminals.length > 1 && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          {!pos.isDefault && (
+                            <button
+                              type="button"
+                              disabled={isSavingAccountAction}
+                              onClick={() => handleSetDefaultPOS(pos.id)}
+                              className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 hover:text-amber-600 hover:bg-amber-50 hover:border-amber-200 disabled:opacity-50 cursor-pointer"
+                              title="Marcar como punto principal"
+                              aria-label="Marcar terminal POS como principal"
+                            >
+                              <Star className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => setPosTerminals(prev => prev.filter(t => t.id !== pos.id))}
-                            className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                            disabled={isSavingAccountAction}
+                            onClick={() => openEditPOS(pos)}
+                            className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200 disabled:opacity-50 cursor-pointer"
+                            title="Editar Terminal POS"
+                            aria-label="Editar Terminal POS"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Edit2 className="w-3.5 h-3.5" />
                           </button>
-                        )}
+                          <button
+                            type="button"
+                            disabled={isSavingAccountAction}
+                            onClick={() => setDeleteAccountTarget({
+                              type: 'pos',
+                              id: pos.id,
+                              title: pos.name,
+                              subtitle: `${pos.bank}${pos.serial ? ` • Serial: ${pos.serial}` : ''}`
+                            })}
+                            className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 disabled:opacity-50 cursor-pointer"
+                            title="Eliminar Terminal POS"
+                            aria-label="Eliminar Terminal POS"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
 
                 {isAddingPOS && (
-                  <div className="bg-white p-3 rounded-xl border border-indigo-300 space-y-2 animate-in fade-in">
-                    <div className="text-xs font-bold text-indigo-900">Nuevo Punto de Venta</div>
+                  <div className="bg-white p-3.5 rounded-xl border border-indigo-300 space-y-2.5 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold text-indigo-900">
+                        {editingPOSId ? 'Editar Punto de Venta' : 'Nuevo Punto de Venta'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={resetPOSForm}
+                        className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600">Nombre del Terminal</label>
+                        <label className="text-[10px] font-bold text-slate-600">Nombre del Terminal *</label>
                         <input
                           type="text"
                           placeholder="Ej: Punto Caja 1 Inalámbrico"
@@ -882,7 +1187,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                         />
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600">Banco del Punto</label>
+                        <label className="text-[10px] font-bold text-slate-600">Banco del Punto *</label>
                         <select
                           value={newPOSBank}
                           onChange={(e) => setNewPOSBank(e.target.value)}
@@ -905,17 +1210,19 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                     <div className="flex justify-end gap-2 pt-1">
                       <button
                         type="button"
-                        onClick={() => setIsAddingPOS(false)}
-                        className="px-2.5 py-1 text-slate-500 text-xs font-bold"
+                        disabled={isSavingAccountAction}
+                        onClick={resetPOSForm}
+                        className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50"
                       >
                         Cancelar
                       </button>
                       <button
                         type="button"
-                        onClick={handleAddPOSTerminal}
-                        className="px-3 py-1 bg-indigo-600 text-white rounded-lg text-xs font-bold"
+                        disabled={isSavingAccountAction}
+                        onClick={handleSavePOSTerminal}
+                        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold cursor-pointer"
                       >
-                        Guardar Punto
+                        {isSavingAccountAction ? 'Guardando...' : editingPOSId ? 'Actualizar Punto' : 'Guardar Punto'}
                       </button>
                     </div>
                   </div>
@@ -924,7 +1231,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
 
               {/* SUBSECTION 3: CUENTAS BANCARIAS (TRANSFERENCIAS) */}
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
                     <Landmark className="w-4 h-4 text-emerald-600" />
                     <h3 className="font-extrabold text-xs text-slate-900 uppercase tracking-wide">
@@ -933,58 +1240,114 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsAddingBank(true)}
-                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                    disabled={isSavingAccountAction}
+                    onClick={() => {
+                      resetBankForm();
+                      setAccountActionError(null);
+                      setIsAddingBank(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
                   >
-                    <Plus className="w-3 h-3" />
+                    <Plus className="w-3.5 h-3.5" />
                     <span>Agregar Cuenta Bancaria</span>
                   </button>
                 </div>
 
-                <div className="space-y-2">
-                  {bankAccounts.map((bk) => (
-                    <div 
-                      key={bk.id}
-                      className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 text-xs"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900">{bk.bank}</span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-800 font-semibold border border-emerald-200 capitalize">
-                            Cuenta {bk.accountType}
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-slate-600 font-mono mt-0.5">
-                          Nro: <strong>{bk.accountNumber}</strong> • Titular: <strong>{bk.holderName}</strong> ({bk.holderCI})
-                        </div>
-                        {bk.email && (
-                          <div className="text-[10px] text-slate-400">
-                            Email comprobante: {bk.email}
+                {bankAccounts.length === 0 ? (
+                  <div className="bg-white/80 border border-dashed border-slate-300 rounded-xl p-4 text-center text-xs text-slate-500">
+                    No hay cuentas bancarias registradas. Agrega una para transferencias y apertura de caja.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {bankAccounts.map((bk) => (
+                      <div 
+                        key={bk.id}
+                        className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-3 text-xs hover:border-emerald-300 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-slate-900">{bk.bank}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 font-semibold border border-emerald-200 capitalize">
+                              Cuenta {bk.accountType}
+                            </span>
+                            {bk.isDefault && (
+                              <span className="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-1.5 py-0.5 rounded">
+                                Principal
+                              </span>
+                            )}
                           </div>
-                        )}
-                      </div>
+                          <div className="text-[11px] text-slate-600 font-mono mt-0.5 break-all">
+                            Nro: <strong>{bk.accountNumber}</strong> • Titular: <strong>{bk.holderName}</strong>
+                            {bk.holderCI ? ` (${bk.holderCI})` : ''}
+                          </div>
+                          {bk.email && (
+                            <div className="text-[10px] text-slate-400">
+                              Email comprobante: {bk.email}
+                            </div>
+                          )}
+                        </div>
 
-                      <div className="flex items-center gap-1">
-                        {bankAccounts.length > 1 && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          {!bk.isDefault && (
+                            <button
+                              type="button"
+                              disabled={isSavingAccountAction}
+                              onClick={() => handleSetDefaultBank(bk.id)}
+                              className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 hover:text-amber-600 hover:bg-amber-50 hover:border-amber-200 disabled:opacity-50 cursor-pointer"
+                              title="Marcar como cuenta principal"
+                              aria-label="Marcar cuenta bancaria como principal"
+                            >
+                              <Star className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => setBankAccounts(prev => prev.filter(b => b.id !== bk.id))}
-                            className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                            disabled={isSavingAccountAction}
+                            onClick={() => openEditBank(bk)}
+                            className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200 disabled:opacity-50 cursor-pointer"
+                            title="Editar Cuenta Bancaria"
+                            aria-label="Editar Cuenta Bancaria"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Edit2 className="w-3.5 h-3.5" />
                           </button>
-                        )}
+                          <button
+                            type="button"
+                            disabled={isSavingAccountAction}
+                            onClick={() => setDeleteAccountTarget({
+                              type: 'bank',
+                              id: bk.id,
+                              title: bk.bank,
+                              subtitle: `${bk.accountNumber} • ${bk.holderName}`
+                            })}
+                            className="p-1.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 disabled:opacity-50 cursor-pointer"
+                            title="Eliminar Cuenta Bancaria"
+                            aria-label="Eliminar Cuenta Bancaria"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
 
                 {isAddingBank && (
-                  <div className="bg-white p-3 rounded-xl border border-emerald-300 space-y-2 animate-in fade-in">
-                    <div className="text-xs font-bold text-emerald-900">Nueva Cuenta Bancaria</div>
+                  <div className="bg-white p-3.5 rounded-xl border border-emerald-300 space-y-2.5 animate-in fade-in">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold text-emerald-900">
+                        {editingBankId ? 'Editar Cuenta Bancaria' : 'Nueva Cuenta Bancaria'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={resetBankForm}
+                        className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600">Banco</label>
+                        <label className="text-[10px] font-bold text-slate-600">Banco *</label>
                         <select
                           value={newBankName}
                           onChange={(e) => setNewBankName(e.target.value)}
@@ -994,10 +1357,10 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                         </select>
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600">Número de Cuenta (20 Dígitos)</label>
+                        <label className="text-[10px] font-bold text-slate-600">Número de Cuenta (20 Dígitos) *</label>
                         <input
                           type="text"
-                          maxLength={20}
+                          maxLength={25}
                           placeholder="0102-0000-00-0000000000"
                           value={newBankAccountNumber}
                           onChange={(e) => setNewBankAccountNumber(e.target.value)}
@@ -1008,7 +1371,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                         <label className="text-[10px] font-bold text-slate-600">Tipo de Cuenta</label>
                         <select
                           value={newBankAccountType}
-                          onChange={(e) => setNewBankAccountType(e.target.value as any)}
+                          onChange={(e) => setNewBankAccountType(e.target.value as 'corriente' | 'ahorro')}
                           className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                         >
                           <option value="corriente">Corriente</option>
@@ -1016,12 +1379,32 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                         </select>
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-600">Titular y Cédula/RIF</label>
+                        <label className="text-[10px] font-bold text-slate-600">Nombre del Titular</label>
                         <input
                           type="text"
-                          placeholder="PosVenecia C.A. / J-40912847-2"
+                          placeholder="Ej: PosVenecia C.A."
                           value={newBankHolder}
                           onChange={(e) => setNewBankHolder(e.target.value)}
+                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600">Cédula / RIF del Titular</label>
+                        <input
+                          type="text"
+                          placeholder="Ej: J-40912847-2"
+                          value={newBankCI}
+                          onChange={(e) => setNewBankCI(e.target.value.toUpperCase())}
+                          className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600">Correo para Comprobantes (Opcional)</label>
+                        <input
+                          type="email"
+                          placeholder="pagos@comercio.com"
+                          value={newBankEmail}
+                          onChange={(e) => setNewBankEmail(e.target.value)}
                           className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                         />
                       </div>
@@ -1029,17 +1412,19 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                     <div className="flex justify-end gap-2 pt-1">
                       <button
                         type="button"
-                        onClick={() => setIsAddingBank(false)}
-                        className="px-2.5 py-1 text-slate-500 text-xs font-bold"
+                        disabled={isSavingAccountAction}
+                        onClick={resetBankForm}
+                        className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50"
                       >
                         Cancelar
                       </button>
                       <button
                         type="button"
-                        onClick={handleAddBankAccount}
-                        className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs font-bold"
+                        disabled={isSavingAccountAction}
+                        onClick={handleSaveBankAccount}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold cursor-pointer"
                       >
-                        Guardar Cuenta
+                        {isSavingAccountAction ? 'Guardando...' : editingBankId ? 'Actualizar Cuenta' : 'Guardar Cuenta'}
                       </button>
                     </div>
                   </div>
@@ -1468,6 +1853,49 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                   </div>
                 )}
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Confirmación de Eliminación de Método de Pago / POS / Cuenta Bancaria */}
+        {deleteAccountTarget && (
+          <div className="fixed inset-0 z-60 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3">
+            <div className="bg-white rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl border border-rose-200 animate-in zoom-in-95">
+              <div className="flex items-center gap-2.5 text-rose-600">
+                <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm text-slate-900">
+                    ¿Eliminar {deleteAccountTarget.type === 'pm' ? 'Cuenta Pago Móvil' : deleteAccountTarget.type === 'pos' ? 'Terminal POS' : 'Cuenta Bancaria'}?
+                  </h3>
+                  <p className="text-[11px] text-slate-500">Se eliminará de forma permanente en Cloud Firestore.</p>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs">
+                <div className="font-bold text-slate-900">{deleteAccountTarget.title}</div>
+                <div className="text-[11px] text-slate-600 font-mono mt-0.5">{deleteAccountTarget.subtitle}</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={isSavingAccountAction}
+                  onClick={() => setDeleteAccountTarget(null)}
+                  className="py-2 px-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isSavingAccountAction}
+                  onClick={handleConfirmDeleteAccountItem}
+                  className="py-2 px-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
+                >
+                  {isSavingAccountAction ? 'Eliminando...' : 'Sí, Eliminar'}
+                </button>
+              </div>
             </div>
           </div>
         )}

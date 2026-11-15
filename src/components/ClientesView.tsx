@@ -48,6 +48,10 @@ export const ClientesView: React.FC = () => {
   const [email, setEmail] = useState('');
   const [creditLimitUSD, setCreditLimitUSD] = useState('50');
   const [notes, setNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Search filter
   const filteredClients = clients.filter(c => 
@@ -59,6 +63,8 @@ export const ClientesView: React.FC = () => {
   // Open modal for add
   const handleOpenAdd = () => {
     setEditingClient(null);
+    setFormError(null);
+    setIsSubmitting(false);
     setName('');
     setRifPrefix('V');
     setRifNumber('');
@@ -73,6 +79,8 @@ export const ClientesView: React.FC = () => {
   // Open modal for edit
   const handleOpenEdit = (client: Client) => {
     setEditingClient(client);
+    setFormError(null);
+    setIsSubmitting(false);
     setName(client.name);
     const parts = client.rif.split('-');
     if (parts.length > 1 && ['V', 'J', 'E', 'G'].includes(parts[0])) {
@@ -91,9 +99,13 @@ export const ClientesView: React.FC = () => {
   };
 
   // Save client submit
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (isSubmitting) return;
+    if (!name.trim()) {
+      setFormError('El nombre del cliente es obligatorio.');
+      return;
+    }
 
     const fullRIF = `${rifPrefix}-${rifNumber.trim()}`;
     const clientPayload = {
@@ -106,16 +118,23 @@ export const ClientesView: React.FC = () => {
       notes: notes.trim()
     };
 
-    if (editingClient) {
-      updateClient({
-        ...editingClient,
-        ...clientPayload
-      });
-    } else {
-      addClient(clientPayload);
+    setIsSubmitting(true);
+    setFormError(null);
+    try {
+      if (editingClient) {
+        await updateClient({
+          ...editingClient,
+          ...clientPayload
+        });
+      } else {
+        await addClient(clientPayload);
+      }
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setFormError(err?.message || 'No se pudo guardar el cliente en Cloud Firestore.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setIsModalOpen(false);
   };
 
   // Direct sale to this client
@@ -483,19 +502,27 @@ export const ClientesView: React.FC = () => {
                 />
               </div>
 
+              {formError && (
+                <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700">
+                  {formError}
+                </div>
+              )}
+
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
                 >
-                  {editingClient ? 'Guardar Cambios' : 'Registrar Cliente'}
+                  {isSubmitting ? 'Guardando...' : editingClient ? 'Guardar Cambios' : 'Registrar Cliente'}
                 </button>
               </div>
             </form>
@@ -516,23 +543,42 @@ export const ClientesView: React.FC = () => {
             <p className="text-xs text-slate-500">
               ¿Estás seguro de que deseas eliminar a <strong>{clientToDelete.name}</strong> ({clientToDelete.rif})?
             </p>
+            {deleteError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700 text-left">
+                {deleteError}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setClientToDelete(null)}
-                className="py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors"
+                disabled={isDeleting}
+                onClick={() => {
+                  setDeleteError(null);
+                  setClientToDelete(null);
+                }}
+                className="py-2.5 px-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  deleteClient(clientToDelete.id);
-                  setClientToDelete(null);
+                disabled={isDeleting}
+                onClick={async () => {
+                  if (isDeleting) return;
+                  setIsDeleting(true);
+                  setDeleteError(null);
+                  try {
+                    await deleteClient(clientToDelete.id);
+                    setClientToDelete(null);
+                  } catch (err: any) {
+                    setDeleteError(err?.message || 'No se pudo eliminar el cliente en Cloud Firestore.');
+                  } finally {
+                    setIsDeleting(false);
+                  }
                 }}
-                className="py-2.5 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-md transition-colors"
+                className="py-2.5 px-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
               >
-                Eliminar
+                {isDeleting ? 'Eliminando...' : 'Eliminar'}
               </button>
             </div>
           </div>
