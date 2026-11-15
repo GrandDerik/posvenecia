@@ -32,6 +32,7 @@ export const DashboardView: React.FC = () => {
     fiados,
     cuentasPorPagar,
     gastosOperativos,
+    loans,
     creditNotes,
     setActiveTab,
     setIsCuadreModalOpen,
@@ -78,8 +79,11 @@ export const DashboardView: React.FC = () => {
   const shiftFiadoAbonos = isCashRegisterOpen && cashShift?.openedAt
     ? fiados.flatMap((f) => f.abonos || []).filter((a) => a.date >= cashShift.openedAt)
     : fiados.flatMap((f) => f.abonos || []).filter((a) => isSameLocalDate(a.date, todayStr));
+  const shiftLoans = isCashRegisterOpen && cashShift?.openedAt
+    ? loans.filter((l) => (l.grantDate || l.createdAt) >= cashShift.openedAt)
+    : loans.filter((l) => isSameLocalDate(l.grantDate || l.createdAt, todayStr));
 
-  // 1. Efectivo en caja (Neto de efectivo USD + efectivo Bs convertido a USD, incluyendo pagos combinados, abonos de fiados y reembolsos NC)
+  // 1. Efectivo en caja (Neto de efectivo USD + efectivo Bs convertido a USD, incluyendo pagos combinados, abonos de fiados, préstamos y reembolsos NC)
   let cashUsdSales = 0;
   let cashBsSales = 0;
   shiftSales.forEach((s) => {
@@ -98,6 +102,14 @@ export const DashboardView: React.FC = () => {
       cashUsdSales += a.amountUSD;
     } else if (a.paymentMethod === 'efectivo_bs') {
       cashBsSales += a.amountBs;
+    }
+  });
+
+  shiftLoans.forEach((l) => {
+    if (l.cashDestination === 'efectivo_usd') {
+      cashUsdSales += l.originalAmountUSD;
+    } else if (l.cashDestination === 'efectivo_bs') {
+      cashBsSales += l.originalAmountBs;
     }
   });
 
@@ -179,14 +191,18 @@ export const DashboardView: React.FC = () => {
     return { currentUSD, currentCount, days30USD, days30Count, days60USD, days60Count };
   }, [activeFiados]);
 
-  // 5. Cuentas por Pagar (Proveedores) & Gastos del Mes
+  // 5. Cuentas por Pagar (Proveedores), Gastos del Mes & Préstamos por Pagar
   const activeCPP = cuentasPorPagar.filter((c) => c.status !== 'pagada');
   const pendingGastos = gastosOperativos.filter((g) => g.status !== 'pagado');
+  const activeLoans = loans.filter((l) => l.status !== 'pagado' && (l.remainingUSD > 0.009 || l.remainingBs > 0.01));
   const totalCPPUSD = activeCPP.reduce((a, c) => a + c.remainingUSD, 0);
   const totalPendingGastosUSD = pendingGastos.reduce((a, g) => a + (g.remainingUSD ?? g.amountUSD), 0);
-  const totalCombinedDebtUSD = totalCPPUSD + totalPendingGastosUSD;
+  const totalLoansPendingUSD = activeLoans.reduce((a, l) => a + l.remainingUSD, 0);
+  const totalCombinedDebtUSD = totalCPPUSD + totalPendingGastosUSD + totalLoansPendingUSD;
   const totalCombinedDebtBs = totalCombinedDebtUSD * bcvRate;
-  const overdueCPPCount = activeCPP.filter((c) => new Date(c.dueDate) < new Date()).length;
+  const overdueCPPCount =
+    activeCPP.filter((c) => new Date(c.dueDate) < new Date()).length +
+    activeLoans.filter((l) => l.dueDate && new Date(l.dueDate) < new Date()).length;
 
   // 6. Phase 2: Alertas Activas y Reposición
   const upcomingOrOverduePayables = useMemo(() => {
@@ -230,8 +246,23 @@ export const DashboardView: React.FC = () => {
       }
     });
 
+    activeLoans.forEach((l) => {
+      if (!l.dueDate) return;
+      const daysDiff = Math.ceil((new Date(l.dueDate).getTime() - nowMs) / dayMs);
+      if (daysDiff <= 7) {
+        list.push({
+          id: l.id,
+          title: l.lenderName,
+          subtitle: l.reference ? `Préstamo • ${l.reference}` : 'Préstamo / Crédito',
+          dueDate: l.dueDate,
+          daysDiff,
+          remainingUSD: l.remainingUSD
+        });
+      }
+    });
+
     return list.sort((a, b) => a.daysDiff - b.daysDiff);
-  }, [activeCPP, pendingGastos]);
+  }, [activeCPP, pendingGastos, activeLoans]);
 
   const overdueFiadosByThreshold = useMemo(() => {
     const nowMs = Date.now();
@@ -660,7 +691,9 @@ export const DashboardView: React.FC = () => {
           <div className="text-xs font-semibold text-slate-600 flex items-center gap-2 flex-wrap">
             <span>{activeCPP.length} factura(s) proveedor</span>
             <span className="text-slate-300">•</span>
-            <span>{pendingGastos.length} gasto(s) del mes pendiente(s)</span>
+            <span>{pendingGastos.length} gasto(s) del mes</span>
+            <span className="text-slate-300">•</span>
+            <span>{activeLoans.length} préstamo(s)</span>
             {overdueCPPCount > 0 && (
               <span className="text-[#BE123C] font-bold bg-[#FEECEF] px-2.5 py-0.5 rounded-full border border-[#FBC4CD]">
                 {overdueCPPCount} vencida{overdueCPPCount > 1 ? 's' : ''}

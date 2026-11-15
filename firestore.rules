@@ -138,6 +138,7 @@ service cloud.firestore {
         && isOptString(data, 'costStrategy', 50)
         && isOptString(data, 'linkedGastoId', 128)
         && isOptString(data, 'linkedCuentaId', 128)
+        && isOptString(data, 'linkedLoanId', 128)
         && isOptList(data, 'items', 500);
     }
 
@@ -238,6 +239,8 @@ service cloud.firestore {
         && isOptString(data, 'closedNotes', 1000)
         && isOptString(data, 'openedBy', 100)
         && isOptString(data, 'closedBy', 100)
+        && isOptNumber(data, 'totalLoansInflowUSD')
+        && isOptNumber(data, 'totalLoansInflowBs')
         && isOptList(data, 'initialBanks', 100);
     }
 
@@ -344,6 +347,33 @@ service cloud.firestore {
         && isOptString(data, 'createdAt', 100);
     }
 
+    function isValidLoan(data) {
+      return data is map
+        && isOptString(data, 'id', 128)
+        && isOptString(data, 'lenderName', 200)
+        && isOptString(data, 'lenderRIF', 50)
+        && isOptString(data, 'lenderPhone', 50)
+        && isOptString(data, 'reference', 100)
+        && isOptString(data, 'description', 500)
+        && isOptString(data, 'grantDate', 100)
+        && isOptString(data, 'dueDate', 100)
+        && isOptString(data, 'enteredCurrency', 10)
+        && isOptNumber(data, 'originalAmountUSD')
+        && isOptNumber(data, 'originalAmountBs')
+        && isOptNumber(data, 'bcvRate')
+        && isOptNumber(data, 'paidAmountUSD')
+        && isOptNumber(data, 'paidAmountBs')
+        && isOptNumber(data, 'remainingUSD')
+        && isOptNumber(data, 'remainingBs')
+        && isOptString(data, 'cashDestination', 50)
+        && isOptString(data, 'bankAccountId', 128)
+        && isOptString(data, 'bankAccountLabel', 200)
+        && isOptString(data, 'status', 50)
+        && isOptString(data, 'notes', 1000)
+        && isOptList(data, 'abonos', 500)
+        && isOptString(data, 'createdAt', 100);
+    }
+
     // Reglas explícitas por cada colección aislada bajo users/{userId}
     match /users/{userId} {
       allow read, write: if false;
@@ -431,6 +461,12 @@ service cloud.firestore {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(supplierId);
         allow create, update: if isVerifiedOwner(userId) && isValidId(supplierId) && isValidSupplier(incoming()) && matchesDocId(incoming(), supplierId);
+      }
+
+      match /loans/{loanId} {
+        allow list: if isVerifiedOwner(userId);
+        allow get, delete: if isVerifiedOwner(userId) && isValidId(loanId);
+        allow create, update: if isVerifiedOwner(userId) && isValidId(loanId) && isValidLoan(incoming()) && matchesDocId(incoming(), loanId);
       }
     }
   }

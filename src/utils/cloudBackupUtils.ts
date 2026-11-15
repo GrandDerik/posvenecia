@@ -14,7 +14,8 @@ import {
   CreditNote,
   InventoryDischarge,
   KardexEntry,
-  BaseCurrency
+  BaseCurrency,
+  Loan
 } from '../types';
 import { getLocalDateStr, getProductPriceBs, getProductPriceUSD } from './exportUtils';
 
@@ -40,6 +41,7 @@ export interface BackupDataPayload {
   gastosOperativos?: GastoOperativo[];
   clients: Client[];
   suppliers?: Supplier[];
+  loans?: Loan[];
   creditNotes?: CreditNote[];
   inventoryDischarges?: InventoryDischarge[];
   kardex?: KardexEntry[];
@@ -61,6 +63,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
   gastosOperativos?: GastoOperativo[];
   cashShiftHistory?: CashShift[];
   suppliers?: Supplier[];
+  loans?: Loan[];
   creditNotes?: CreditNote[];
   inventoryDischarges?: InventoryDischarge[];
   kardex?: KardexEntry[];
@@ -306,6 +309,28 @@ export const downloadComprehensiveAccountingExcel = (data: {
       'Responsable': d.responsibleName
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(discData), 'Mermas_y_Salidas');
+  }
+
+  // 12. Sheet: Créditos y Préstamos por Pagar
+  if (data.loans && data.loans.length > 0) {
+    const loansData = data.loans.map((l, idx) => ({
+      'N°': idx + 1,
+      'Fecha Otorgamiento': new Date(l.grantDate).toLocaleDateString('es-VE'),
+      'Fecha Vencimiento': new Date(l.dueDate).toLocaleDateString('es-VE'),
+      'Acreedor / Entidad': l.lenderName,
+      'RIF / Cédula': l.lenderRIF || '-',
+      'Destino Dinero': l.cashDestination,
+      'Moneda Registro': l.enteredCurrency,
+      'Monto Original USD': l.originalAmountUSD,
+      'Monto Original Bs': l.originalAmountBs,
+      'Abonado USD': l.paidAmountUSD,
+      'Resta USD': l.remainingUSD,
+      'Resta Bs': l.remainingBs,
+      'Estado': l.status.toUpperCase(),
+      'Referencia': l.reference || '-',
+      'Notas': l.notes || '-'
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(loansData), 'Prestamos_y_Creditos');
   }
 
   // Save Excel file

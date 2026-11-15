@@ -26,7 +26,8 @@ import {
   KardexEntry,
   KardexMovementType,
   PurchaseCostStrategy,
-  Supplier
+  Supplier,
+  Loan
 } from '../types';
 import { fetchLiveBCVRate, fetchLiveBCVEuroRate } from '../utils/bcvFetcher';
 import {
@@ -89,6 +90,10 @@ import {
   addAbonoToFiadoTransaction,
   addAbonoToCuentaPorPagarTransaction,
   markGastoOperativoPagadoTransaction,
+  saveLoanToFirestore,
+  updateLoanInFirestore,
+  deleteLoanFromFirestore,
+  addAbonoToLoanTransaction,
   deleteSaleFromFirestore,
   fetchFullStoreSnapshotForBackup,
   restoreStoreDataToFirestore,
@@ -360,6 +365,8 @@ interface AppContextType {
     name: string;
     category?: string;
     priceUSD: number;
+    priceBsFixed?: number;
+    priceCurrency?: 'USD' | 'Bs';
     quantity: number;
     isExemptFromIVA: boolean;
     notes?: string;
@@ -466,6 +473,20 @@ interface AppContextType {
   updateGastoOperativo: (updated: GastoOperativo) => void;
   deleteGastoOperativo: (id: string) => void;
   markGastoOperativoPagado: (id: string, paymentMethod: PaymentMethod, reference?: string, amountUSD?: number, notes?: string) => Promise<void>;
+
+  // Créditos y Préstamos por Pagar
+  loans: Loan[];
+  addLoan: (data: Omit<Loan, 'id' | 'paidAmountUSD' | 'paidAmountBs' | 'remainingUSD' | 'remainingBs' | 'status' | 'abonos' | 'createdAt'>) => Promise<Loan>;
+  updateLoan: (updated: Loan) => Promise<void>;
+  deleteLoan: (id: string) => Promise<void>;
+  addAbonoToLoan: (params: {
+    loanId: string;
+    amount: number;
+    enteredCurrency: 'USD' | 'Bs';
+    method: PaymentMethod | 'externo_dueno';
+    reference?: string;
+    notes?: string;
+  }) => Promise<void>;
 
   // Google Account, OAuth & Google Drive Export
   googleUser: GoogleAccount | null;
@@ -617,6 +638,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [gastosOperativos, setGastosOperativos] = useState<GastoOperativo[]>([]);
   const [kardex, setKardex] = useState<KardexEntry[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [loans, setLoans] = useState<Loan[]>([]);
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(DEFAULT_BUSINESS_INFO);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
 
@@ -812,6 +834,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setInventoryDischarges([]);
     setKardex([]);
     setSuppliers([]);
+    setLoans([]);
     setCashShift(null);
     setCashShiftHistory([]);
     setBusinessInfo(DEFAULT_BUSINESS_INFO);
@@ -1001,6 +1024,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const shiftExpenses = expenses.filter(e => e.date >= openedAtIso && e.paymentMethod !== 'credito');
     const shiftCreditNotes = creditNotes.filter(cn => cn.date >= openedAtIso);
     const shiftFiadoAbonos = fiados.flatMap(f => f.abonos || []).filter(a => a.date >= openedAtIso);
+    const shiftLoans = loans.filter(l => (l.grantDate || l.createdAt) >= openedAtIso);
 
     let cashUsdInflow = 0;
     let cashBsInflow = 0;
@@ -1012,6 +1036,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (s.paymentMethod === 'pago_combinado' && s.paymentDetails?.combinedBreakdown) {
         cashUsdInflow += (s.paymentDetails.combinedBreakdown.usdCash || 0);
         cashBsInflow += (s.paymentDetails.combinedBreakdown.bsCash || 0);
+      }
+    });
+
+    let loansCashUsdInflow = 0;
+    let loansCashBsInflow = 0;
+    shiftLoans.forEach(l => {
+      if (l.cashDestination === 'efectivo_usd') {
+        loansCashUsdInflow += l.originalAmountUSD;
+        cashUsdInflow += l.originalAmountUSD;
+      } else if (l.cashDestination === 'efectivo_bs') {
+        loansCashBsInflow += l.originalAmountBs;
+        cashBsInflow += l.originalAmountBs;
       }
     });
 
@@ -1102,7 +1138,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalCreditNotesUSD,
       totalCreditNotesBs,
       totalFiadoAbonosUSD: round2(totalFiadoAbonosUSD),
-      totalFiadoAbonosBs: round2(totalFiadoAbonosBs)
+      totalFiadoAbonosBs: round2(totalFiadoAbonosBs),
+      totalLoansInflowUSD: round2(loansCashUsdInflow),
+      totalLoansInflowBs: round2(loansCashBsInflow)
     };
 
     try {
@@ -1126,7 +1164,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       notifyError(e, 'No se pudo completar el cierre de caja');
       throw e;
     }
-  }, [cashShift, sales, expenses, creditNotes, fiados, getActiveUid, googleUser?.name, notifyError, notifyUser]);
+  }, [cashShift, sales, expenses, creditNotes, fiados, loans, getActiveUid, googleUser?.name, notifyError, notifyUser]);
 
   /**
    * Fetches a complete 14-collection snapshot directly from Cloud Firestore for lossless backups (JSON / Excel / Drive)
@@ -1161,6 +1199,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     gastosOperativos: snap.gastosOperativos || [],
     clients: snap.clients,
     suppliers: snap.suppliers || [],
+    loans: snap.loans || [],
     creditNotes: snap.creditNotes || [],
     inventoryDischarges: snap.inventoryDischarges || [],
     kardex: snap.kardex || [],
@@ -1284,6 +1323,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               cuentasPorPagar: merged.cuentasPorPagar,
               gastosOperativos: merged.gastosOperativos || [],
               suppliers: merged.suppliers || [],
+              loans: merged.loans || [],
               creditNotes: merged.creditNotes || [],
               inventoryDischarges: merged.inventoryDischarges || [],
               kardex: merged.kardex || [],
@@ -1374,6 +1414,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cuentasPorPagar: Array.isArray(payload.cuentasPorPagar) ? payload.cuentasPorPagar : [],
         gastosOperativos: Array.isArray(payload.gastosOperativos) ? payload.gastosOperativos : [],
         suppliers: Array.isArray(payload.suppliers) ? payload.suppliers : [],
+        loans: Array.isArray(payload.loans) ? payload.loans : [],
         creditNotes: Array.isArray(payload.creditNotes) ? payload.creditNotes : [],
         inventoryDischarges: Array.isArray(payload.inventoryDischarges) ? payload.inventoryDischarges : [],
         kardex: Array.isArray(payload.kardex) ? payload.kardex : [],
@@ -1436,6 +1477,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onInventoryDischarges: (newDischarges) => setInventoryDischarges(newDischarges),
       onKardex: (entries) => setKardex(entries),
       onSuppliers: (list) => setSuppliers(list),
+      onLoans: (list) => setLoans(list),
       onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
       onCashRegisterStatus: (status: CashRegisterStatusDoc) => {
         devLog(`[PosVenecia Realtime] Caja sincronizada en vivo: ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
@@ -1820,18 +1862,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     name: string;
     category?: string;
     priceUSD: number;
+    priceBsFixed?: number;
+    priceCurrency?: 'USD' | 'Bs';
     quantity: number;
     isExemptFromIVA: boolean;
     notes?: string;
     saveToCatalog?: boolean;
   }) => {
+    const uidSuffix = Date.now() + '-' + Math.random().toString(36).slice(2, 5);
+    const hasFixedBs = typeof serviceData.priceBsFixed === 'number' && serviceData.priceBsFixed > 0;
     const serviceProduct: Product = {
-      id: 'srv-' + Date.now(),
+      id: 'srv-' + uidSuffix,
       code: 'SRV-' + Date.now().toString().slice(-4),
       name: serviceData.name,
       category: serviceData.category || 'Servicios',
       costUSD: 0,
       priceUSD: serviceData.priceUSD,
+      ...(serviceData.priceCurrency ? { priceCurrency: serviceData.priceCurrency } : {}),
+      ...(hasFixedBs ? { priceBsFixed: round2(serviceData.priceBsFixed!) } : {}),
       stock: 999999,
       minStock: 0,
       isExemptFromIVA: serviceData.isExemptFromIVA,
@@ -2883,6 +2931,144 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Créditos y Préstamos por Pagar
+  const addLoan = async (
+    data: Omit<Loan, 'id' | 'paidAmountUSD' | 'paidAmountBs' | 'remainingUSD' | 'remainingBs' | 'status' | 'abonos' | 'createdAt'>
+  ): Promise<Loan> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para registrar créditos o préstamos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    if ((data.cashDestination === 'efectivo_usd' || data.cashDestination === 'efectivo_bs') && !cashShift?.isOpen) {
+      setIsAperturaModalOpen(true);
+      throw new Error('La caja se encuentra cerrada. Debe abrir la caja para ingresar fondos de préstamo en efectivo a la gaveta.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const origUSD = round2(Math.max(0, Number(data.originalAmountUSD) || 0));
+    const origBs = round2(Math.max(0, Number(data.originalAmountBs) || 0));
+
+    const newLoan: Loan = {
+      ...data,
+      id: 'loan-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
+      originalAmountUSD: origUSD,
+      originalAmountBs: origBs,
+      paidAmountUSD: 0,
+      paidAmountBs: 0,
+      remainingUSD: origUSD,
+      remainingBs: origBs,
+      status: 'pendiente',
+      abonos: [],
+      createdAt: nowIso
+    };
+
+    try {
+      await saveLoanToFirestore(uid, newLoan);
+      setLoans(prev => [newLoan, ...prev.filter(l => l.id !== newLoan.id)]);
+      notifyUser('success', 'Préstamo registrado', `"${newLoan.lenderName}" guardado en Cloud Firestore.`);
+      return newLoan;
+    } catch (e) {
+      notifyError(e, 'No se pudo registrar el préstamo');
+      throw e;
+    }
+  };
+
+  const updateLoan = async (updated: Loan): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para actualizar préstamos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    if ((updated.cashDestination === 'efectivo_usd' || updated.cashDestination === 'efectivo_bs') && !cashShift?.isOpen) {
+      // Allow editing metadata/dates safely even if cash closed; only recalculate balances cleanly
+    }
+
+    const origUSD = round2(Math.max(0, Number(updated.originalAmountUSD) || 0));
+    const origBs = round2(Math.max(0, Number(updated.originalAmountBs) || 0));
+    const paidUSD = round2(Math.max(0, Number(updated.paidAmountUSD) || 0));
+    const paidBs = round2(Math.max(0, Number(updated.paidAmountBs) || 0));
+    const remUSD = round2(Math.max(0, origUSD - paidUSD));
+    const remBs = updated.enteredCurrency === 'Bs'
+      ? round2(Math.max(0, origBs - paidBs))
+      : round2(remUSD * (updated.bcvRate || bcvRate));
+    const isSettled = updated.enteredCurrency === 'Bs' ? remBs <= 0.01 : remUSD <= 0.009;
+
+    const normalized: Loan = {
+      ...updated,
+      originalAmountUSD: origUSD,
+      originalAmountBs: origBs,
+      paidAmountUSD: paidUSD,
+      paidAmountBs: paidBs,
+      remainingUSD: isSettled ? 0 : remUSD,
+      remainingBs: isSettled ? 0 : remBs,
+      status: isSettled ? 'pagado' : (paidUSD > 0 || paidBs > 0 ? 'parcial' : 'pendiente')
+    };
+
+    try {
+      await updateLoanInFirestore(uid, normalized);
+      setLoans(prev => prev.map(l => (l.id === normalized.id ? normalized : l)));
+      notifyUser('success', 'Préstamo actualizado', `"${normalized.lenderName}" actualizado en Cloud Firestore.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo actualizar el préstamo');
+      throw e;
+    }
+  };
+
+  const deleteLoan = async (id: string): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para eliminar préstamos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await deleteLoanFromFirestore(uid, id);
+      setLoans(prev => prev.filter(l => l.id !== id));
+      notifyUser('success', 'Préstamo eliminado', 'El registro fue eliminado de Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo eliminar el préstamo');
+      throw e;
+    }
+  };
+
+  const addAbonoToLoan = async (params: {
+    loanId: string;
+    amount: number;
+    enteredCurrency: 'USD' | 'Bs';
+    method: PaymentMethod | 'externo_dueno';
+    reference?: string;
+    notes?: string;
+  }): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para registrar abonos de préstamos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    if ((params.method === 'efectivo_usd' || params.method === 'efectivo_bs') && !cashShift?.isOpen) {
+      setIsAperturaModalOpen(true);
+      throw new Error('La caja se encuentra cerrada. Debe abrir la caja para realizar abonos en efectivo.');
+    }
+
+    try {
+      await addAbonoToLoanTransaction(uid, params.loanId, {
+        amount: params.amount,
+        enteredCurrency: params.enteredCurrency,
+        method: params.method,
+        bcvRate,
+        reference: params.reference,
+        notes: params.notes
+      });
+      notifyUser('success', 'Abono registrado', 'Pago aplicado al préstamo en Cloud Firestore.');
+    } catch (e) {
+      notifyError(e, 'No se pudo registrar el abono al préstamo');
+      throw e;
+    }
+  };
+
   // Clientes Habituales
   const addClient = async (clientData: Omit<Client, 'id' | 'createdAt'>): Promise<Client> => {
     const uid = getActiveUid();
@@ -2976,6 +3162,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCreditNotes([]);
     setInventoryDischarges([]);
     setKardex([]);
+    setLoans([]);
     setCashShift(null);
     setCashShiftHistory([]);
     setSelectedClientForPOS(null);
@@ -3085,6 +3272,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateGastoOperativo,
         deleteGastoOperativo,
         markGastoOperativoPagado,
+        loans,
+        addLoan,
+        updateLoan,
+        deleteLoan,
+        addAbonoToLoan,
         firestoreSyncStatus,
         notification,
         dismissNotification,

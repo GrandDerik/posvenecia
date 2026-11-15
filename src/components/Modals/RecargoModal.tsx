@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   MapPin
 } from 'lucide-react';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs, formatUSD, round2, round6, safeDiv } from '../../utils/exportUtils';
 
 interface RecargoModalProps {
   isOpen: boolean;
@@ -50,30 +50,36 @@ export const RecargoModal: React.FC<RecargoModalProps> = ({
     setAmountInput(p.amountUSD.toString());
   };
 
-  // Calculate equivalent USD amount
-  const parsedValue = parseFloat(amountInput) || 0;
+  // Preserve exact entered currency without reverse cross-rounding
+  const parsedValue = Math.max(0, parseFloat(amountInput) || 0);
+  const safeRate = bcvRate > 0 ? bcvRate : 1;
+
   let finalUSD = 0;
+  let finalBs = 0;
 
-  if (chargeType === 'fixed_usd') {
-    finalUSD = parsedValue;
-  } else if (chargeType === 'fixed_bs') {
-    finalUSD = parsedValue / (bcvRate || 1);
-  } else if (chargeType === 'percent') {
-    finalUSD = (subtotalUSD * parsedValue) / 100;
+  if (chargeType === 'fixed_bs') {
+    finalBs = round2(parsedValue);
+    finalUSD = round6(safeDiv(finalBs, safeRate, 0));
+  } else if (chargeType === 'fixed_usd') {
+    finalUSD = round2(parsedValue);
+    finalBs = round2(finalUSD * safeRate);
+  } else {
+    finalUSD = round2((subtotalUSD * parsedValue) / 100);
+    finalBs = round2(finalUSD * safeRate);
   }
-
-  const finalBs = finalUSD * bcvRate;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (finalUSD <= 0) return;
+    if (finalBs <= 0 && finalUSD <= 0) return;
 
     const formattedNotes = deliveryNotes.trim() ? deliveryNotes.trim() : undefined;
 
     addQuickService({
       name: `Recargo: ${concept.trim()}`,
       category: 'Recargo / Delivery',
-      priceUSD: Number(finalUSD.toFixed(2)),
+      priceUSD: chargeType === 'fixed_bs' ? finalUSD : round2(finalUSD),
+      priceBsFixed: chargeType === 'fixed_bs' ? finalBs : undefined,
+      priceCurrency: chargeType === 'fixed_bs' ? 'Bs' : 'USD',
       quantity: 1,
       isExemptFromIVA: isExemptIVA,
       notes: formattedNotes

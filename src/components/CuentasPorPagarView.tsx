@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { formatUSD, formatBs, getLocalDateStr, round2 } from '../utils/exportUtils';
 import { CuentaPorPagar, PaymentMethod, GastoOperativo, GastoOperativoCategory, Supplier } from '../types';
+import { LoansSubTab } from './LoansSubTab';
 
 export const CuentasPorPagarView: React.FC = () => {
   const { 
@@ -51,13 +52,15 @@ export const CuentasPorPagarView: React.FC = () => {
     addSupplier,
     updateSupplier,
     deleteSupplier,
+    loans,
     bcvRate,
     isCashRegisterOpen,
     setIsAperturaModalOpen
   } = useApp();
 
-  // Active Sub-Tab: 'proveedores' vs 'gastos_mes' vs 'maestro_proveedores'
-  const [activeSubTab, setActiveSubTab] = useState<'gastos_mes' | 'proveedores' | 'maestro_proveedores'>('gastos_mes');
+  // Active Sub-Tab: 'gastos_mes' | 'proveedores' | 'maestro_proveedores' | 'prestamos'
+  const [activeSubTab, setActiveSubTab] = useState<'gastos_mes' | 'proveedores' | 'maestro_proveedores' | 'prestamos'>('gastos_mes');
+  const [loanCreateSignal, setLoanCreateSignal] = useState(0);
 
   // Search & Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -694,6 +697,15 @@ export const CuentasPorPagarView: React.FC = () => {
                 <Plus className="w-4 h-4" />
                 <span>Registrar Factura Proveedor</span>
               </button>
+            ) : activeSubTab === 'prestamos' ? (
+              <button
+                type="button"
+                onClick={() => setLoanCreateSignal((n) => n + 1)}
+                className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Registrar Préstamo / Crédito</span>
+              </button>
             ) : (
               <button
                 type="button"
@@ -707,8 +719,8 @@ export const CuentasPorPagarView: React.FC = () => {
           </div>
         </div>
 
-        {/* Triple Sub-Navigation Switcher */}
-        <div className="flex flex-col sm:flex-row p-1 bg-[#EEF2F7] rounded-2xl border border-[#DCE4F0] gap-1">
+        {/* Quadruple Sub-Navigation Switcher */}
+        <div className="flex flex-col sm:flex-row flex-wrap p-1 bg-[#EEF2F7] rounded-2xl border border-[#DCE4F0] gap-1">
           <button
             type="button"
             onClick={() => {
@@ -754,6 +766,27 @@ export const CuentasPorPagarView: React.FC = () => {
           <button
             type="button"
             onClick={() => {
+              setActiveSubTab('prestamos');
+              setStatusFilter('todos');
+            }}
+            className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap ${
+              activeSubTab === 'prestamos'
+                ? 'bg-white text-[#1D4ED8] shadow-xs border border-[#DCE4F0]'
+                : 'text-slate-600 hover:text-[#0B1528]'
+            }`}
+          >
+            <CreditCard className="w-4 h-4 shrink-0" />
+            <span>Créditos y Préstamos</span>
+            {loans.filter(l => l.status !== 'pagado' && (l.remainingUSD > 0.009 || l.remainingBs > 0.01)).length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] font-extrabold font-mono-numbers">
+                {loans.filter(l => l.status !== 'pagado' && (l.remainingUSD > 0.009 || l.remainingBs > 0.01)).length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
               setActiveSubTab('maestro_proveedores');
               setStatusFilter('todos');
             }}
@@ -772,8 +805,11 @@ export const CuentasPorPagarView: React.FC = () => {
         </div>
       </div>
 
+      {/* VIEW: CRÉDITOS Y PRÉSTAMOS POR PAGAR */}
+      {activeSubTab === 'prestamos' && <LoansSubTab openCreateSignal={loanCreateSignal} />}
+
       {/* METRICS ROW */}
-      {activeSubTab === 'gastos_mes' ? (
+      {activeSubTab !== 'prestamos' && (activeSubTab === 'gastos_mes' ? (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-gradient-to-b from-white to-[#F4F8FF] rounded-2xl p-4 border border-[#93C5FD] shadow-[0_2px_12px_-4px_rgba(37,99,235,0.1)]">
             <div className="flex items-center justify-between text-[#1D4ED8] mb-1">
@@ -881,9 +917,10 @@ export const CuentasPorPagarView: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+      ))}
 
       {/* SEARCH AND FILTERS */}
+      {activeSubTab !== 'prestamos' && (
       <div className="bg-white/95 rounded-2xl p-3 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col md:flex-row items-center gap-3">
         <div className="relative flex-1 w-full">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -959,6 +996,7 @@ export const CuentasPorPagarView: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* VIEW: GASTOS OPERATIVOS DEL MES */}
       {activeSubTab === 'gastos_mes' && (

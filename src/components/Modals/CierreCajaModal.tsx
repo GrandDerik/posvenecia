@@ -31,6 +31,7 @@ export const CierreCajaModal: React.FC = () => {
     expenses,
     creditNotes,
     fiados,
+    loans,
     bcvRate, 
     businessInfo,
     setIsCuadreModalOpen
@@ -64,8 +65,9 @@ export const CierreCajaModal: React.FC = () => {
   const shiftExpenses = expenses.filter(e => e.date >= openedAtIso && e.paymentMethod !== 'credito');
   const shiftCreditNotes = creditNotes.filter(cn => cn.date >= openedAtIso);
   const shiftFiadoAbonos = fiados.flatMap(f => f.abonos || []).filter(a => a.date >= openedAtIso);
+  const shiftLoans = loans.filter(l => (l.grantDate || l.createdAt) >= openedAtIso);
 
-  // Inflow in cash (sales + fiado abonos in cash)
+  // Inflow in cash (sales + fiado abonos + loan inflows in cash)
   let cashUsdInflow = 0;
   let cashBsInflow = 0;
   shiftSales.forEach(s => {
@@ -84,6 +86,18 @@ export const CierreCajaModal: React.FC = () => {
       cashUsdInflow += a.amountUSD;
     } else if (a.paymentMethod === 'efectivo_bs') {
       cashBsInflow += a.amountBs;
+    }
+  });
+
+  let loansCashUsd = 0;
+  let loansCashBs = 0;
+  shiftLoans.forEach(l => {
+    if (l.cashDestination === 'efectivo_usd') {
+      loansCashUsd += l.originalAmountUSD;
+      cashUsdInflow += l.originalAmountUSD;
+    } else if (l.cashDestination === 'efectivo_bs') {
+      loansCashBs += l.originalAmountBs;
+      cashBsInflow += l.originalAmountBs;
     }
   });
 
@@ -304,7 +318,10 @@ export const CierreCajaModal: React.FC = () => {
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1 space-y-0.5 border-t border-slate-100 pt-1 font-mono">
                     <div>Base: +${formatUSD(initialUSD)}</div>
-                    <div className="text-emerald-700">Ingresos: +${formatUSD(cashUsdInflow)}</div>
+                    <div className="text-emerald-700">
+                      Ingresos: +${formatUSD(cashUsdInflow)}
+                      {loansCashUsd > 0 ? ` (Prést: +$${formatUSD(loansCashUsd)})` : ''}
+                    </div>
                     <div className="text-rose-600">Egresos/NC: -${formatUSD(cashUsdOutflow)}</div>
                   </div>
                 </div>
@@ -317,7 +334,10 @@ export const CierreCajaModal: React.FC = () => {
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1 space-y-0.5 border-t border-slate-100 pt-1 font-mono">
                     <div>Base: +Bs {formatBs(initialBs)}</div>
-                    <div className="text-emerald-700">Ingresos: +Bs {formatBs(cashBsInflow)}</div>
+                    <div className="text-emerald-700">
+                      Ingresos: +Bs {formatBs(cashBsInflow)}
+                      {loansCashBs > 0 ? ` (Prést: +Bs ${formatBs(loansCashBs)})` : ''}
+                    </div>
                     <div className="text-rose-600">Egresos/NC: -Bs {formatBs(cashBsOutflow)}</div>
                   </div>
                 </div>

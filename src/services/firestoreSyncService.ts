@@ -38,7 +38,9 @@ import {
   PurchaseCostStrategy,
   PaymentMethod,
   Abono,
-  Supplier
+  Supplier,
+  Loan,
+  LoanAbono
 } from '../types';
 import { BackupDataPayload } from '../utils/cloudBackupUtils';
 
@@ -91,6 +93,7 @@ export interface FirestoreStoreListeners {
   onInventoryDischarges?: (discharges: InventoryDischarge[]) => void;
   onKardex?: (entries: KardexEntry[]) => void;
   onSuppliers?: (suppliers: Supplier[]) => void;
+  onLoans?: (loans: Loan[]) => void;
   onError?: (error: Error) => void;
 }
 
@@ -560,6 +563,25 @@ export const subscribeToStoreRealtime = (
         }
       },
       (err) => handleErr(OperationType.GET, suppliersPath, err)
+    )
+  );
+
+  // 15. Créditos y Préstamos por Pagar
+  const loansPath = `users/${userId}/loans`;
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, 'users', userId, 'loans'),
+      (snapshot) => {
+        const loans: Loan[] = [];
+        snapshot.forEach((d) => {
+          loans.push(d.data() as Loan);
+        });
+        loans.sort((a, b) => new Date(b.grantDate || b.createdAt).getTime() - new Date(a.grantDate || a.createdAt).getTime());
+        if (callbacks.onLoans) {
+          callbacks.onLoans(loans);
+        }
+      },
+      (err) => handleErr(OperationType.GET, loansPath, err)
     )
   );
 
@@ -1914,6 +1936,194 @@ export const deleteSupplierFromFirestore = async (uid: string, supplierId: strin
   return trackFirestoreWrite(op);
 };
 
+export const saveLoanToFirestore = async (uid: string, loan: Loan): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/loans/${loan.id}`;
+  const op = (async () => {
+    try {
+      const cleaned = cleanForFirestore(loan);
+      await setDoc(doc(db, 'users', userId, 'loans', loan.id), cleaned, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const updateLoanInFirestore = async (uid: string, loan: Loan): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/loans/${loan.id}`;
+  const op = (async () => {
+    try {
+      const loanRef = doc(db, 'users', userId, 'loans', loan.id);
+      const cleaned = cleanForFirestore(loan) as unknown as Record<string, any>;
+      if (!loan.lenderRIF) cleaned.lenderRIF = deleteField();
+      if (!loan.lenderPhone) cleaned.lenderPhone = deleteField();
+      if (!loan.reference) cleaned.reference = deleteField();
+      if (!loan.description) cleaned.description = deleteField();
+      if (!loan.bankAccountId) cleaned.bankAccountId = deleteField();
+      if (!loan.bankAccountLabel) cleaned.bankAccountLabel = deleteField();
+      if (!loan.notes) cleaned.notes = deleteField();
+      try {
+        await updateDoc(loanRef, cleaned);
+      } catch (err: any) {
+        if (err?.code === 'not-found') {
+          await setDoc(loanRef, cleanForFirestore(loan), { merge: true });
+        } else {
+          throw err;
+        }
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const deleteLoanFromFirestore = async (uid: string, loanId: string): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/loans/${loanId}`;
+  const op = (async () => {
+    try {
+      await deleteDoc(doc(db, 'users', userId, 'loans', loanId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Transactional atomic abono for Loan (`runTransaction`):
+ * Reads live Loan, applies exact bimonetary abono without rounding drift,
+ * and writes cash outflow Expense when paid from operational cash/bank.
+ */
+export const addAbonoToLoanTransaction = async (
+  uid: string,
+  loanId: string,
+  params: {
+    amount: number;
+    enteredCurrency: 'USD' | 'Bs';
+    method: PaymentMethod | 'externo_dueno';
+    bcvRate: number;
+    reference?: string;
+    notes?: string;
+  }
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/loans/${loanId}`;
+  const op = (async () => {
+    try {
+      await runTransaction(db, async (tx) => {
+        const loanRef = doc(db, 'users', userId, 'loans', loanId);
+        const loanSnap = await tx.get(loanRef);
+        if (!loanSnap.exists()) {
+          throw new Error('Préstamo o crédito no encontrado en Cloud Firestore.');
+        }
+
+        const liveLoan = loanSnap.data() as Loan;
+        const liveRemainingUSD = round2(Number(liveLoan.remainingUSD) || 0);
+        const liveRemainingBs = round2(Number(liveLoan.remainingBs) || 0);
+        if (liveRemainingUSD <= 0.009 && liveRemainingBs <= 0.01) {
+          throw new Error('Este préstamo ya fue pagado completamente.');
+        }
+
+        const safeRate = params.bcvRate > 0 ? params.bcvRate : (liveLoan.bcvRate > 0 ? liveLoan.bcvRate : 1);
+        let payUSD = 0;
+        let payBs = 0;
+        let isSettled = false;
+
+        if (params.enteredCurrency === 'Bs') {
+          const rawPayBs = round2(Math.max(0.01, params.amount));
+          if (liveLoan.enteredCurrency === 'Bs') {
+            payBs = Math.min(liveRemainingBs, rawPayBs);
+            isSettled = (liveRemainingBs - payBs) <= 0.01;
+            payUSD = isSettled ? liveRemainingUSD : round6(payBs / safeRate);
+          } else {
+            const equivUSD = round6(rawPayBs / safeRate);
+            isSettled = equivUSD >= liveRemainingUSD - 0.009;
+            payUSD = isSettled ? liveRemainingUSD : Math.min(liveRemainingUSD, round2(equivUSD));
+            payBs = rawPayBs;
+          }
+        } else {
+          const rawPayUSD = round2(Math.max(0.01, params.amount));
+          payUSD = Math.min(liveRemainingUSD, rawPayUSD);
+          isSettled = (liveRemainingUSD - payUSD) <= 0.009;
+          payBs = isSettled && liveLoan.enteredCurrency === 'Bs'
+            ? liveRemainingBs
+            : round2(payUSD * safeRate);
+        }
+
+        const newPaidUSD = round2((Number(liveLoan.paidAmountUSD) || 0) + payUSD);
+        const newPaidBs = round2((Number(liveLoan.paidAmountBs) || 0) + payBs);
+        const newRemainingUSD = isSettled ? 0 : round2(Math.max(0, liveLoan.originalAmountUSD - newPaidUSD));
+        const newRemainingBs = isSettled
+          ? 0
+          : liveLoan.enteredCurrency === 'Bs'
+            ? round2(Math.max(0, liveLoan.originalAmountBs - newPaidBs))
+            : round2(newRemainingUSD * safeRate);
+
+        const finalizedSettled = isSettled || (newRemainingUSD <= 0.009 && newRemainingBs <= 0.01);
+        const nowIso = new Date().toISOString();
+
+        const newAbono: LoanAbono = {
+          id: 'abono-loan-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
+          date: nowIso,
+          amountUSD: round2(payUSD),
+          amountBs: round2(payBs),
+          bcvRate: safeRate,
+          enteredCurrency: params.enteredCurrency,
+          paymentMethod: params.method,
+          reference: params.reference,
+          notes: params.notes || 'Abono a préstamo / crédito'
+        };
+
+        tx.update(loanRef, {
+          paidAmountUSD: newPaidUSD,
+          paidAmountBs: newPaidBs,
+          remainingUSD: finalizedSettled ? 0 : newRemainingUSD,
+          remainingBs: finalizedSettled ? 0 : newRemainingBs,
+          status: finalizedSettled ? 'pagado' : 'parcial',
+          abonos: cleanForFirestore([newAbono, ...(liveLoan.abonos || [])])
+        });
+
+        if (params.method !== 'externo_dueno') {
+          const cashOutflowExpense: Expense = {
+            id: 'exp-loan-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
+            date: nowIso,
+            invoiceNumber: liveLoan.reference || 'PRESTAMO-ABONO',
+            controlNumber: '00-00000',
+            supplierName: liveLoan.lenderName,
+            supplierRIF: liveLoan.lenderRIF || 'N/A',
+            supplierPhone: liveLoan.lenderPhone,
+            description: `Abono Préstamo/Crédito (${liveLoan.lenderName})${params.notes ? ` - ${params.notes}` : ''}`,
+            category: 'Otros',
+            amountUSD: round2(payUSD),
+            amountBs: round2(payBs),
+            baseImponibleBs: round2(payBs),
+            ivaBs: 0,
+            retencionIVABs: 0,
+            retencionISLRBs: 0,
+            bcvRate: safeRate,
+            enteredCurrency: params.enteredCurrency,
+            paymentMethod: mapMethodToExpenseMethod(params.method),
+            reference: params.reference,
+            linkedLoanId: liveLoan.id
+          };
+          tx.set(doc(db, 'users', userId, 'expenses', cashOutflowExpense.id), cleanForFirestore(cashOutflowExpense));
+        }
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
 export const saveCuentaPorPagarToFirestore = async (
   uid: string,
   cuenta: CuentaPorPagar,
@@ -2295,6 +2505,7 @@ export const fetchFullStoreSnapshotForBackup = async (
     cppSnap,
     gastosSnap,
     suppliersSnap,
+    loansSnap,
     shiftHistSnap,
     creditNotesSnap,
     dischargesSnap,
@@ -2310,6 +2521,7 @@ export const fetchFullStoreSnapshotForBackup = async (
     getDocs(collection(db, 'users', userId, 'cuentasPorPagar')),
     getDocs(collection(db, 'users', userId, 'gastosOperativos')),
     getDocs(collection(db, 'users', userId, 'suppliers')),
+    getDocs(collection(db, 'users', userId, 'loans')),
     getDocs(collection(db, 'users', userId, 'cashShiftHistory')),
     getDocs(collection(db, 'users', userId, 'creditNotes')),
     getDocs(collection(db, 'users', userId, 'inventoryDischarges')),
@@ -2329,6 +2541,7 @@ export const fetchFullStoreSnapshotForBackup = async (
   const creditNotes = creditNotesSnap.docs.map((d) => d.data() as CreditNote).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const inventoryDischarges = dischargesSnap.docs.map((d) => d.data() as InventoryDischarge).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const kardex = kardexSnap.docs.map((d) => d.data() as KardexEntry).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const loans = loansSnap.docs.map((d) => d.data() as Loan).sort((a, b) => new Date(b.grantDate || b.createdAt).getTime() - new Date(a.grantDate || a.createdAt).getTime());
 
   return {
     version: '2.2',
@@ -2360,6 +2573,7 @@ export const fetchFullStoreSnapshotForBackup = async (
     gastosOperativos: gastosSnap.docs.map((d) => d.data() as GastoOperativo),
     clients: clientsSnap.docs.map((d) => d.data() as Client),
     suppliers: suppliersSnap.docs.map((d) => d.data() as Supplier).sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+    loans,
     creditNotes,
     inventoryDischarges,
     kardex,
@@ -2383,6 +2597,7 @@ export const restoreStoreDataToFirestore = async (
     cuentasPorPagar: CuentaPorPagar[];
     gastosOperativos: GastoOperativo[];
     suppliers?: Supplier[];
+    loans?: Loan[];
     creditNotes?: CreditNote[];
     inventoryDischarges?: InventoryDischarge[];
     kardex?: KardexEntry[];
@@ -2424,6 +2639,7 @@ export const restoreStoreDataToFirestore = async (
   await writeCollection('cuentasPorPagar', 'cpp', data.cuentasPorPagar || []);
   await writeCollection('gastosOperativos', 'gasto', data.gastosOperativos || []);
   await writeCollection('suppliers', 'sup', data.suppliers || []);
+  await writeCollection('loans', 'loan', data.loans || []);
   await writeCollection('creditNotes', 'nc', data.creditNotes || []);
   await writeCollection('inventoryDischarges', 'disc', data.inventoryDischarges || []);
   await writeCollection('cashShiftHistory', 'shift', data.cashShiftHistory || []);
@@ -2482,6 +2698,7 @@ export const clearUserFirestoreCollections = async (uid: string): Promise<void> 
     'cuentasPorPagar',
     'gastosOperativos',
     'suppliers',
+    'loans',
     'cashShiftHistory',
     'creditNotes',
     'inventoryDischarges'

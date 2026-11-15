@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Sale, Expense, BusinessInfo, CashShift, CreditNote, Abono } from '../types';
+import { Sale, Expense, BusinessInfo, CashShift, CreditNote, Abono, Loan } from '../types';
 import { formatBs, formatUSD, getLocalDateStr, round2, safeDiv } from './exportUtils';
 
 // 1. Reporte Z / Cierre Diario SENIAT
@@ -250,14 +250,23 @@ export const generateTicketVentaPDF = (
   doc.setFont('helvetica', 'normal');
 
   sale.items.forEach(item => {
-    const itemTotalBs = item.totalUSD * sale.bcvRate;
+    const hasFixedBs = typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0;
+    const itemTotalBs = hasFixedBs
+      ? round2(item.quantity * item.product.priceBsFixed!)
+      : round2(item.totalUSD * sale.bcvRate);
     const nameStr = `${item.quantity}x ${item.product.name}${item.product.isExemptFromIVA ? ' (E)' : ''}`;
     doc.text(nameStr.substring(0, 26), 6, y);
     doc.text(`Bs. ${formatBs(itemTotalBs)}`, pageWidth - 6, y, { align: 'right' });
     y += 3.5;
     doc.setFontSize(6);
     doc.setTextColor(110);
-    doc.text(`   $ ${formatUSD(item.product.priceUSD)} c/u  =  $ ${formatUSD(item.totalUSD)}`, 6, y);
+    doc.text(
+      hasFixedBs
+        ? `   Bs. ${formatBs(item.product.priceBsFixed!)} c/u  ($ ${formatUSD(item.unitPriceUSD ?? item.product.priceUSD)})`
+        : `   $ ${formatUSD(item.product.priceUSD)} c/u  =  $ ${formatUSD(item.totalUSD)}`,
+      6,
+      y
+    );
     doc.setTextColor(0);
     doc.setFontSize(7);
     y += 4;
@@ -759,6 +768,7 @@ export const generateCorteParcialXPDF = (
     expenses: Expense[];
     creditNotes: CreditNote[];
     fiadoAbonos: Abono[];
+    loans?: Loan[];
     bcvRate: number;
     businessInfo: BusinessInfo;
     cashierName?: string;
@@ -772,6 +782,7 @@ export const generateCorteParcialXPDF = (
     expenses,
     creditNotes,
     fiadoAbonos,
+    loans = [],
     bcvRate,
     businessInfo,
     cashierName
@@ -860,6 +871,22 @@ export const generateCorteParcialXPDF = (
     else if (a.paymentMethod === 'pago_movil') pmSalesBs += a.amountBs;
     else if (a.paymentMethod === 'debito') debitoSalesBs += a.amountBs;
     else if (a.paymentMethod === 'transferencia') transferenciaSalesBs += a.amountBs;
+  });
+
+  let loansCashUsd = 0;
+  let loansCashBs = 0;
+  let loansBankBs = 0;
+  loans.forEach(l => {
+    if (l.cashDestination === 'efectivo_usd') {
+      loansCashUsd += l.originalAmountUSD;
+      cashUsdSales += l.originalAmountUSD;
+    } else if (l.cashDestination === 'efectivo_bs') {
+      loansCashBs += l.originalAmountBs;
+      cashBsSales += l.originalAmountBs;
+    } else if (l.cashDestination === 'banco_pago_movil') {
+      loansBankBs += l.originalAmountBs;
+      transferenciaSalesBs += l.originalAmountBs;
+    }
   });
 
   const cashUsdRefund = creditNotes.filter(cn => cn.refundMethod === 'efectivo_usd').reduce((a, cn) => a + cn.totalUSD, 0);
@@ -986,6 +1013,25 @@ export const generateCorteParcialXPDF = (
   // @ts-ignore
   y = doc.lastAutoTable.finalY + 8;
 
+  const totalLoansDrawerAndBankUSD = round2(loansCashUsd + safeDiv(loansCashBs + loansBankBs, bcvRate));
+  const summaryRows: string[][] = [
+      [`Ventas Brutas (${sales.length} facturas)`, `$ ${formatUSD(totalSalesGrossUSD)}`, `Bs. ${formatBs(totalSalesGrossUSD * bcvRate)}`],
+      [`Abonos a Fiados Recibidos (${fiadoAbonos.length})`, `+$ ${formatUSD(totalAbonosUSD)}`, `+Bs. ${formatBs(totalAbonosUSD * bcvRate)}`]
+  ];
+  if (totalLoansDrawerAndBankUSD > 0) {
+    summaryRows.push([
+      `Ingresos por Préstamos a Caja/Banco`,
+      `+$ ${formatUSD(totalLoansDrawerAndBankUSD)}`,
+      `+Bs. ${formatBs(totalLoansDrawerAndBankUSD * bcvRate)}`
+    ]);
+  }
+  summaryRows.push(
+      [`Notas de Crédito Emitidas (${creditNotes.length})`, `-$ ${formatUSD(totalNcUSD)}`, `-Bs. ${formatBs(totalNcUSD * bcvRate)}`],
+      [`Egresos y Pagos de Caja (${expenses.length})`, `-$ ${formatUSD(totalExpUSD)}`, `-Bs. ${formatBs(totalExpUSD * bcvRate)}`],
+      ['IGTF 3% Percibido en Divisas', `$ ${formatUSD(igtfTotalUSD)}`, `Bs. ${formatBs(igtfTotalBs)}`],
+      ['FLUJOS NETOS DEL TURNO (SIN FONDO BASE)', `$ ${formatUSD(netConsolidatedUSD)}`, `Bs. ${formatBs(netConsolidatedBs)}`]
+  );
+
   // Section 3: Summary Totals
   autoTable(doc, {
     startY: y,
@@ -993,14 +1039,7 @@ export const generateCorteParcialXPDF = (
     headStyles: { fillColor: [11, 21, 40], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5 },
     bodyStyles: { fontSize: 8.5 },
     head: [['Resumen Consolidado del Corte X', 'Monto USD', 'Equivalente Bs (BCV)']],
-    body: [
-      [`Ventas Brutas (${sales.length} facturas)`, `$ ${formatUSD(totalSalesGrossUSD)}`, `Bs. ${formatBs(totalSalesGrossUSD * bcvRate)}`],
-      [`Abonos a Fiados Recibidos (${fiadoAbonos.length})`, `+$ ${formatUSD(totalAbonosUSD)}`, `+Bs. ${formatBs(totalAbonosUSD * bcvRate)}`],
-      [`Notas de Crédito Emitidas (${creditNotes.length})`, `-$ ${formatUSD(totalNcUSD)}`, `-Bs. ${formatBs(totalNcUSD * bcvRate)}`],
-      [`Egresos y Pagos de Caja (${expenses.length})`, `-$ ${formatUSD(totalExpUSD)}`, `-Bs. ${formatBs(totalExpUSD * bcvRate)}`],
-      ['IGTF 3% Percibido en Divisas', `$ ${formatUSD(igtfTotalUSD)}`, `Bs. ${formatBs(igtfTotalBs)}`],
-      ['FLUJOS NETOS DEL TURNO (SIN FONDO BASE)', `$ ${formatUSD(netConsolidatedUSD)}`, `Bs. ${formatBs(netConsolidatedBs)}`]
-    ],
+    body: summaryRows,
     margin: { left: 14, right: 14 }
   });
 

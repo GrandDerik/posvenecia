@@ -38,6 +38,7 @@ export const Navbar: React.FC = () => {
     clients,
     cuentasPorPagar,
     gastosOperativos,
+    loans,
     activeTab, 
     setActiveTab, 
     cart, 
@@ -64,7 +65,8 @@ export const Navbar: React.FC = () => {
   const activeFiadosCount = fiados.filter(f => f.status !== 'saldado').length;
   const activeCuentasPorPagarCount =
     cuentasPorPagar.filter(c => c.status !== 'pagada').length +
-    gastosOperativos.filter(g => g.status !== 'pagado').length;
+    gastosOperativos.filter(g => g.status !== 'pagado').length +
+    loans.filter(l => l.status !== 'pagado' && (l.remainingUSD > 0.009 || l.remainingBs > 0.01)).length;
   const cartItemCount = cart.reduce((acc, item) => acc + item.quantity, 0);
 
   const handleSaveRate = (e: React.FormEvent) => {

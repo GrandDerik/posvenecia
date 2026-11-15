@@ -92,7 +92,8 @@
         "paymentMethod": { "type": "string", "maxLength": 50 },
         "reference": { "type": "string", "maxLength": 100 },
         "linkedGastoId": { "type": "string", "maxLength": 128 },
-        "linkedCuentaId": { "type": "string", "maxLength": 128 }
+        "linkedCuentaId": { "type": "string", "maxLength": 128 },
+        "linkedLoanId": { "type": "string", "maxLength": 128 }
       },
       "required": ["id", "date", "supplierName", "amountUSD", "amountBs", "category"]
     },
@@ -312,6 +313,37 @@
         "createdAt": { "type": "string", "maxLength": 100 }
       },
       "required": ["id", "name", "rif", "phone", "creditDays", "accumulatedBalanceUSD", "createdAt"]
+    },
+    "Loan": {
+      "title": "Loan",
+      "description": "Credits and loans payable to individuals or financial institutions with cash destination tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "lenderName": { "type": "string", "maxLength": 200 },
+        "lenderRIF": { "type": "string", "maxLength": 50 },
+        "lenderPhone": { "type": "string", "maxLength": 50 },
+        "reference": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "grantDate": { "type": "string", "maxLength": 100 },
+        "dueDate": { "type": "string", "maxLength": 100 },
+        "enteredCurrency": { "type": "string", "maxLength": 10 },
+        "originalAmountUSD": { "type": "number" },
+        "originalAmountBs": { "type": "number" },
+        "bcvRate": { "type": "number" },
+        "paidAmountUSD": { "type": "number" },
+        "paidAmountBs": { "type": "number" },
+        "remainingUSD": { "type": "number" },
+        "remainingBs": { "type": "number" },
+        "cashDestination": { "type": "string", "maxLength": 50 },
+        "bankAccountId": { "type": "string", "maxLength": 128 },
+        "bankAccountLabel": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "maxLength": 50 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "abonos": { "type": "array" },
+        "createdAt": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "lenderName", "grantDate", "dueDate", "enteredCurrency", "originalAmountUSD", "originalAmountBs", "cashDestination", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -370,6 +402,10 @@
     "/users/{userId}/suppliers/{supplierId}": {
       "schema": { "$ref": "Supplier" },
       "description": "Centralized supplier master directory"
+    },
+    "/users/{userId}/loans/{loanId}": {
+      "schema": { "$ref": "Loan" },
+      "description": "Credits and loans payable with cash register destination tracking"
     }
   }
 }

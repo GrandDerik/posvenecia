@@ -20,7 +20,8 @@ import {
   CreditNote,
   InventoryDischarge,
   KardexEntry,
-  BaseCurrency
+  BaseCurrency,
+  Loan
 } from '../types';
 
 export { auth };
@@ -161,6 +162,7 @@ export interface AppDatabasePayload {
   gastosOperativos: GastoOperativo[];
   clients: Client[];
   suppliers?: Supplier[];
+  loans?: Loan[];
   creditNotes?: CreditNote[];
   inventoryDischarges?: InventoryDischarge[];
   kardex?: KardexEntry[];
@@ -746,6 +748,16 @@ export const mergeDatabasePayloads = (
   (remote.suppliers || []).forEach(s => { if (s?.id) suppliersMap.set(s.id, s); });
   (local.suppliers || []).forEach(s => { if (s?.id) suppliersMap.set(s.id, s); });
 
+  const loansMap = new Map<string, Loan>();
+  (remote.loans || []).forEach(l => { if (l?.id) loansMap.set(l.id, l); });
+  (local.loans || []).forEach(l => {
+    if (!l?.id) return;
+    const existing = loansMap.get(l.id);
+    if (!existing || (l.abonos?.length || 0) >= (existing.abonos?.length || 0)) {
+      loansMap.set(l.id, l);
+    }
+  });
+
   const creditNotesMap = new Map<string, CreditNote>();
   (remote.creditNotes || []).forEach(cn => { if (cn?.id) creditNotesMap.set(cn.id, cn); });
   (local.creditNotes || []).forEach(cn => { if (cn?.id) creditNotesMap.set(cn.id, cn); });
@@ -789,6 +801,7 @@ export const mergeDatabasePayloads = (
     cuentasPorPagar: mergedCPP,
     gastosOperativos: mergedGastos,
     suppliers: Array.from(suppliersMap.values()),
+    loans: Array.from(loansMap.values()),
     creditNotes: Array.from(creditNotesMap.values()),
     inventoryDischarges: Array.from(dischargesMap.values()),
     kardex: Array.from(kardexMap.values()).sort(

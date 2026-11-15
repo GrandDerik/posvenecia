@@ -31,6 +31,7 @@ export const CuadreCajaModal: React.FC = () => {
     expenses,
     creditNotes,
     fiados,
+    loans,
     bcvRate, 
     businessInfo,
     cashShift,
@@ -62,6 +63,9 @@ export const CuadreCajaModal: React.FC = () => {
   const todayFiadoAbonos = fiados
     .flatMap(f => f.abonos || [])
     .filter(a => (useShiftWindow ? a.date >= openedAtIso : isSameLocalDate(a.date, todayStr)));
+  const todayLoans = loans.filter(l =>
+    useShiftWindow ? (l.grantDate || l.createdAt) >= openedAtIso : isSameLocalDate(l.grantDate || l.createdAt, todayStr)
+  );
 
   // Compute breakdown by method (including contributions from pago_combinado & fiado abonos)
   let cashUsdSalesAmount = 0;
@@ -105,6 +109,23 @@ export const CuadreCajaModal: React.FC = () => {
     else if (a.paymentMethod === 'pago_movil') pmSalesBs += a.amountBs;
     else if (a.paymentMethod === 'debito') debitoSalesBs += a.amountBs;
     else if (a.paymentMethod === 'transferencia') transferenciaSalesBs += a.amountBs;
+  });
+
+  // Include Loans injected into caja/banco during shift/day
+  let loansCashUsd = 0;
+  let loansCashBs = 0;
+  let loansBankBs = 0;
+  todayLoans.forEach(l => {
+    if (l.cashDestination === 'efectivo_usd') {
+      loansCashUsd += l.originalAmountUSD;
+      cashUsdSalesAmount += l.originalAmountUSD;
+    } else if (l.cashDestination === 'efectivo_bs') {
+      loansCashBs += l.originalAmountBs;
+      cashBsSalesAmount += l.originalAmountBs;
+    } else if (l.cashDestination === 'banco_pago_movil') {
+      loansBankBs += l.originalAmountBs;
+      transferenciaSalesBs += l.originalAmountBs;
+    }
   });
 
   // Credit Note refunds by method
@@ -179,6 +200,7 @@ export const CuadreCajaModal: React.FC = () => {
         expenses: todayExpenses,
         creditNotes: todayCreditNotes,
         fiadoAbonos: todayFiadoAbonos,
+        loans: todayLoans,
         bcvRate,
         businessInfo,
         cashierName: googleUser?.name || cashShift?.openedBy || 'Cajero'
@@ -508,6 +530,11 @@ export const CuadreCajaModal: React.FC = () => {
                 <p className="text-xs text-slate-300">
                   Efectivo físico esperado en gaveta (c/ fondo): <strong className="text-emerald-300 font-mono-numbers">${formatUSD(totalCashInDrawerUSD)}</strong>
                 </p>
+                {(loansCashUsd > 0 || loansCashBs > 0 || loansBankBs > 0) && (
+                  <p className="text-[11px] text-blue-300 mt-0.5 font-mono-numbers">
+                    Incluye ingresos por préstamos: {loansCashUsd > 0 ? `+$${formatUSD(loansCashUsd)} gaveta USD` : ''}{loansCashBs > 0 ? `${loansCashUsd > 0 ? ' • ' : ''}+Bs ${formatBs(loansCashBs)} gaveta Bs` : ''}{loansBankBs > 0 ? `${(loansCashUsd > 0 || loansCashBs > 0) ? ' • ' : ''}+Bs ${formatBs(loansBankBs)} banco` : ''}
+                  </p>
+                )}
               </div>
 
               <div className="text-left sm:text-right">

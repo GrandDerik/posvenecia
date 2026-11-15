@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Printer, Download, Share2, Check } from 'lucide-react';
 import { Sale, BusinessInfo } from '../../types';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs, formatUSD, round2 } from '../../utils/exportUtils';
 import { generateTicketVentaPDF } from '../../utils/pdfReceiptUtils';
 
 interface ComprobanteTicketModalProps {
@@ -80,21 +80,29 @@ export const ComprobanteTicketModal: React.FC<ComprobanteTicketModalProps> = ({
                 <span>CANT / ARTÍCULO</span>
                 <span>TOTAL Bs</span>
               </div>
-              {sale.items.map((item, idx) => (
-                <div key={idx} className="text-[10px]">
-                  <div className="flex justify-between font-medium">
-                    <span>
-                      {item.quantity}x {item.product.name} {item.product.isExemptFromIVA ? '(E)' : ''}
-                    </span>
-                    <span className="font-bold font-mono">
-                      Bs. {formatBs(item.totalUSD * sale.bcvRate)}
-                    </span>
+              {sale.items.map((item, idx) => {
+                const hasFixedBs = typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0;
+                const lineBs = hasFixedBs
+                  ? round2(item.quantity * item.product.priceBsFixed!)
+                  : round2(item.totalUSD * sale.bcvRate);
+                return (
+                  <div key={idx} className="text-[10px]">
+                    <div className="flex justify-between font-medium">
+                      <span>
+                        {item.quantity}x {item.product.name} {item.product.isExemptFromIVA ? '(E)' : ''}
+                      </span>
+                      <span className="font-bold font-mono">
+                        Bs. {formatBs(lineBs)}
+                      </span>
+                    </div>
+                    <div className="text-[9px] text-slate-400">
+                      {hasFixedBs
+                        ? `Bs. ${formatBs(item.product.priceBsFixed!)} c/u ($ ${formatUSD(item.unitPriceUSD ?? item.product.priceUSD)})`
+                        : `$ ${formatUSD(item.product.priceUSD)} c/u = $ ${formatUSD(item.totalUSD)}`}
+                    </div>
                   </div>
-                  <div className="text-[9px] text-slate-400">
-                    $ {formatUSD(item.product.priceUSD)} c/u = $ {formatUSD(item.totalUSD)}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Totals Breakdown */}

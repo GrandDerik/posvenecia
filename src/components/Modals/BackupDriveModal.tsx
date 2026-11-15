@@ -85,6 +85,7 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
         gastosOperativos: full.gastosOperativos,
         cashShiftHistory: full.cashShiftHistory,
         suppliers: full.suppliers,
+        loans: full.loans,
         creditNotes: full.creditNotes,
         inventoryDischarges: full.inventoryDischarges,
         kardex: full.kardex,

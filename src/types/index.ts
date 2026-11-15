@@ -244,6 +244,7 @@ export interface Expense {
   costStrategy?: PurchaseCostStrategy;
   linkedGastoId?: string;
   linkedCuentaId?: string;
+  linkedLoanId?: string;
   syncStatus?: 'synced' | 'pending_sync';
 }
 
@@ -470,6 +471,8 @@ export interface CashShift {
   totalCreditNotesBs?: number;
   totalFiadoAbonosUSD?: number;
   totalFiadoAbonosBs?: number;
+  totalLoansInflowUSD?: number;
+  totalLoansInflowBs?: number;
   closedBy?: string;
 }
 
@@ -512,5 +515,51 @@ export interface Supplier {
   creditDays: number;
   accumulatedBalanceUSD: number;
   notes?: string;
+  createdAt: string;
+}
+
+export type LoanCashDestination =
+  | 'efectivo_usd'
+  | 'efectivo_bs'
+  | 'banco_pago_movil'
+  | 'externo_dueno';
+
+export type LoanStatus = 'pendiente' | 'parcial' | 'pagado' | 'vencido';
+
+export interface LoanAbono {
+  id: string;
+  date: string;
+  amountUSD: number;
+  amountBs: number;
+  bcvRate: number;
+  enteredCurrency?: 'USD' | 'Bs';
+  paymentMethod: PaymentMethod | 'externo_dueno';
+  reference?: string;
+  notes?: string;
+}
+
+export interface Loan {
+  id: string;
+  lenderName: string;
+  lenderRIF?: string;
+  lenderPhone?: string;
+  reference?: string;
+  description?: string;
+  grantDate: string; // ISO string
+  dueDate: string;   // ISO string
+  enteredCurrency: 'USD' | 'Bs';
+  originalAmountUSD: number;
+  originalAmountBs: number;
+  bcvRate: number;
+  paidAmountUSD: number;
+  paidAmountBs: number;
+  remainingUSD: number;
+  remainingBs: number;
+  cashDestination: LoanCashDestination;
+  bankAccountId?: string;
+  bankAccountLabel?: string;
+  status: LoanStatus;
+  notes?: string;
+  abonos: LoanAbono[];
   createdAt: string;
 }
