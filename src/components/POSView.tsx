@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   Search, 
@@ -30,7 +30,12 @@ import {
   ShieldCheck,
   FileText,
   RefreshCw,
-  TrendingUp
+  TrendingUp,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw
 } from 'lucide-react';
 import { Product, PaymentMethod, PaymentDetails, Sale, Client } from '../types';
 import { formatBs, formatUSD, round2, safeDiv, getProductPriceBs, getProductPriceUSD } from '../utils/exportUtils';
@@ -76,10 +81,12 @@ export const POSView: React.FC = () => {
     isOnline
   } = useApp();
 
-  // Search & Filters
+  // Search & Filters (starts empty/unselected until explicit category click or search)
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [isCategoriesExpanded, setIsCategoriesExpanded] = useState(false);
   const [barcodeInput, setBarcodeInput] = useState('');
+  const categoryScrollRef = useRef<HTMLDivElement | null>(null);
 
   // View Mode: Grid (tarjetas con foto) vs List (filas compactas)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -171,16 +178,67 @@ export const POSView: React.FC = () => {
     }
   }, [selectedClientForPOS]);
 
-  // Categories list dynamic from context
-  const categories = ['Todos', ...appCategories];
+  // Categories list dynamic from context + product counts
+  const categoryStats = useMemo(() => {
+    const counts = new Map<string, number>();
+    const extraCategories: string[] = [];
 
-  // Filter products
-  const filteredProducts = products.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          p.code.includes(searchTerm);
-    const matchesCategory = selectedCategory === 'Todos' || p.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
+    products.forEach((p) => {
+      const cat = (p.category || '').trim();
+      if (!cat) return;
+      counts.set(cat, (counts.get(cat) || 0) + 1);
+      if (!appCategories.includes(cat) && !extraCategories.includes(cat)) {
+        extraCategories.push(cat);
+      }
+    });
+
+    const orderedCategories = [...appCategories, ...extraCategories];
+    return {
+      allCategories: ['Todos', ...orderedCategories],
+      counts,
+      namedCount: orderedCategories.length
+    };
+  }, [products, appCategories]);
+
+  const trimmedSearch = searchTerm.trim();
+  const isCatalogActive = selectedCategory !== null || trimmedSearch.length > 0;
+
+  // Filter products exclusively when a category is selected or a search term is typed
+  const filteredProducts = useMemo(() => {
+    if (!isCatalogActive) return [];
+    const normalizedSearch = trimmedSearch.toLowerCase();
+    return products.filter((p) => {
+      const matchesSearch =
+        !normalizedSearch ||
+        p.name.toLowerCase().includes(normalizedSearch) ||
+        (p.code || '').toLowerCase().includes(normalizedSearch);
+      const matchesCategory =
+        selectedCategory === null ||
+        selectedCategory === 'Todos' ||
+        p.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+    });
+  }, [isCatalogActive, trimmedSearch, products, selectedCategory]);
+
+  const handleSelectCategory = (cat: string) => {
+    setSelectedCategory((prev) => (prev === cat ? null : cat));
+    if (isCategoriesExpanded) {
+      setIsCategoriesExpanded(false);
+    }
+  };
+
+  const handleResetCatalogFilters = () => {
+    setSelectedCategory(null);
+    setSearchTerm('');
+  };
+
+  const scrollCategories = (direction: 'left' | 'right') => {
+    if (!categoryScrollRef.current) return;
+    categoryScrollRef.current.scrollBy({
+      left: direction === 'left' ? -240 : 240,
+      behavior: 'smooth'
+    });
+  };
 
   // Barcode / Code search and cart addition
   const handleBarcodeSubmit = (e: React.FormEvent) => {
@@ -465,41 +523,96 @@ export const POSView: React.FC = () => {
         </div>
       )}
 
+      {/* Independent Top Quick Actions Toolbar */}
+      <div className="mb-4 bg-white/95 border border-[#DCE4F0] rounded-2xl px-3.5 py-2.5 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.05)] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-extrabold text-[#0B1528] tracking-tight whitespace-nowrap shrink-0">
+            Acciones rápidas
+          </span>
+          <span className="text-xs text-slate-400 hidden md:inline truncate">
+            · Servicios rápidos, recargos de delivery y devoluciones
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-0.5 sm:pb-0">
+          <button
+            type="button"
+            onClick={() => setIsServicioModalOpen(true)}
+            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#EBF3FE] hover:bg-blue-100 text-[#1D4ED8] border border-[#C5DCFC] text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            title="Venta rápida de copias, impresiones o redacción de documentos"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <span>+ Servicio</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsRecargoModalOpen(true)}
+            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#FFF3E8] hover:bg-[#FFE6CE] text-[#9A4B12] border border-[#F5D3B3] text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            title="Agregar recargo de delivery, propina o servicio adicional"
+          >
+            <Truck className="w-3.5 h-3.5 text-[#D96B27] shrink-0" />
+            <span>+ Recargo</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsCreditNoteModalOpen(true)}
+            className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#FEECEF] hover:bg-rose-100 text-[#BE123C] border border-[#FBC4CD] text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            title="Emitir Nota de Crédito o devolución de productos"
+          >
+            <FileText className="w-3.5 h-3.5 text-[#BE123C] shrink-0" />
+            <span>Nota de Crédito</span>
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         
         {/* Left Side: Product Catalog & Search (8 Columns) */}
         <div className="lg:col-span-8 space-y-4">
           
-          {/* Top Search & Barcode Scan Tool */}
-          <div className="bg-white/95 p-4 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] space-y-3">
+          {/* Top Search, Barcode Scan & Dedicated Category Navigator */}
+          <div className="bg-white/95 p-4 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] space-y-3.5">
             <div className="flex flex-col sm:flex-row items-center gap-2.5">
               {/* Product search */}
               <div className="relative flex-1 w-full">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
                   placeholder="Buscar producto por nombre o código..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full min-h-[42px] pl-10 pr-9 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-medium text-[#0B1528] placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
                 />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchTerm('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 w-6 h-6 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 flex items-center justify-center transition-colors cursor-pointer"
+                    aria-label="Limpiar búsqueda"
+                    title="Limpiar búsqueda"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
               {/* Barcode Scanner simulation input */}
               <form onSubmit={handleBarcodeSubmit} className="flex items-center gap-1.5 w-full sm:w-auto">
                 <div className="relative flex-1 sm:w-44">
-                  <Barcode className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
+                  <Barcode className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     type="text"
                     placeholder="Escanear código..."
                     value={barcodeInput}
                     onChange={(e) => setBarcodeInput(e.target.value)}
-                    className="w-full pl-8 pr-2 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-mono-numbers"
+                    className="w-full min-h-[42px] pl-9 pr-2.5 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-mono-numbers focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
                 <button
                   type="submit"
-                  className="px-3.5 py-2 bg-[#0B1528] hover:bg-[#152440] text-white text-xs font-bold rounded-xl whitespace-nowrap shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[42px] px-3.5 py-2 bg-[#0B1528] hover:bg-[#152440] text-white text-xs font-bold rounded-xl whitespace-nowrap shrink-0 shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Barcode className="w-3.5 h-3.5 text-blue-300" />
                   <span>Escanear</span>
@@ -507,26 +620,165 @@ export const POSView: React.FC = () => {
               </form>
             </div>
 
-            {/* Category Filter Chips & Quick Service Button */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-100">
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none flex-1">
-                {categories.map((cat) => (
+            {/* Intuitive Category Navigator (Horizontal Swipe Carousel + Expandable Grid) */}
+            <div className="pt-3 border-t border-slate-100 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs min-w-0">
+                  <span className="font-bold text-[#0B1528] whitespace-nowrap">Categorías</span>
+                  <span aria-hidden="true" className="text-slate-300">·</span>
+                  <span className="text-slate-500 font-mono-numbers truncate">
+                    {selectedCategory
+                      ? `Activa: ${selectedCategory}`
+                      : `${categoryStats.namedCount} disponibles`}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {selectedCategory && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCategory(null)}
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-slate-600 hover:text-[#0B1528] hover:bg-slate-100 flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap"
+                    >
+                      <X className="w-3 h-3" />
+                      <span>Quitar</span>
+                    </button>
+                  )}
+
+                  {!isCategoriesExpanded && (
+                    <div className="hidden sm:flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => scrollCategories('left')}
+                        className="w-7 h-7 rounded-lg border border-[#DCE4F0] bg-[#F8FAFC] hover:bg-slate-100 text-slate-600 flex items-center justify-center transition-colors cursor-pointer"
+                        aria-label="Desplazar categorías a la izquierda"
+                        title="Desplazar a la izquierda"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollCategories('right')}
+                        className="w-7 h-7 rounded-lg border border-[#DCE4F0] bg-[#F8FAFC] hover:bg-slate-100 text-slate-600 flex items-center justify-center transition-colors cursor-pointer"
+                        aria-label="Desplazar categorías a la derecha"
+                        title="Desplazar a la derecha"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
                   <button
-                    key={cat}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                      selectedCategory === cat
-                        ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_10px_-2px_rgba(37,99,235,0.4)]'
-                        : 'bg-[#F8FAFC] border border-[#DCE4F0] hover:bg-slate-100 text-slate-600'
-                    }`}
+                    type="button"
+                    onClick={() => setIsCategoriesExpanded((prev) => !prev)}
+                    className="px-2.5 py-1.5 rounded-lg border border-[#DCE4F0] bg-[#F8FAFC] hover:bg-slate-100 text-[11px] font-bold text-[#0B1528] flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap"
                   >
-                    {cat}
+                    <span>{isCategoriesExpanded ? 'Carrusel' : 'Ver todas'}</span>
+                    {isCategoriesExpanded ? (
+                      <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                    )}
                   </button>
-                ))}
+                </div>
               </div>
 
-              {/* Quick Actions: Servicio, Recargo & View Switcher */}
-              <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+              {isCategoriesExpanded ? (
+                /* Expanded responsive grid panel for effortless mobile & desktop picking */
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 pt-0.5">
+                  {categoryStats.allCategories.map((cat) => {
+                    const isSelected = selectedCategory === cat;
+                    const count = cat === 'Todos' ? products.length : (categoryStats.counts.get(cat) || 0);
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => handleSelectCategory(cat)}
+                        className={`min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 transition-all cursor-pointer text-left ${
+                          isSelected
+                            ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_12px_-2px_rgba(37,99,235,0.4)]'
+                            : 'bg-[#F8FAFC] border border-[#DCE4F0] hover:border-[#93C5FD] hover:bg-[#EBF3FE]/60 text-slate-700'
+                        }`}
+                      >
+                        <span className="truncate">{cat}</span>
+                        <span
+                          className={`text-[11px] font-mono-numbers shrink-0 ${
+                            isSelected ? 'text-blue-100 font-bold' : 'text-slate-400'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                /* Smooth horizontal swipeable carousel */
+                <div
+                  ref={categoryScrollRef}
+                  className="flex items-center gap-2 overflow-x-auto snap-x snap-proximity scroll-smooth scrollbar-none py-0.5 -mx-0.5 px-0.5"
+                >
+                  {categoryStats.allCategories.map((cat) => {
+                    const isSelected = selectedCategory === cat;
+                    const count = cat === 'Todos' ? products.length : (categoryStats.counts.get(cat) || 0);
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => handleSelectCategory(cat)}
+                        className={`snap-start min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-2 transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-[0_4px_12px_-2px_rgba(37,99,235,0.4)]'
+                            : 'bg-[#F8FAFC] border border-[#DCE4F0] hover:border-[#93C5FD] hover:bg-[#EBF3FE]/60 text-slate-700'
+                        }`}
+                      >
+                        <span>{cat}</span>
+                        <span
+                          className={`text-[11px] font-mono-numbers ${
+                            isSelected ? 'text-blue-100 font-bold' : 'text-slate-400'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Active Filter Summary & View Switcher (shown only when browsing/searching) */}
+          {isCatalogActive && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className="flex items-center gap-2 text-xs text-slate-600 min-w-0">
+                <span className="font-bold text-[#0B1528] font-mono-numbers">
+                  {filteredProducts.length} {filteredProducts.length === 1 ? 'producto' : 'productos'}
+                </span>
+                {selectedCategory && (
+                  <>
+                    <span aria-hidden="true" className="text-slate-300">·</span>
+                    <span className="truncate">Categoría: <strong className="text-[#0B1528]">{selectedCategory}</strong></span>
+                  </>
+                )}
+                {trimmedSearch && (
+                  <>
+                    <span aria-hidden="true" className="text-slate-300">·</span>
+                    <span className="truncate">Búsqueda: <strong className="text-[#0B1528]">"{trimmedSearch}"</strong></span>
+                  </>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleResetCatalogFilters}
+                  className="px-2.5 py-1.5 rounded-xl bg-white border border-[#DCE4F0] hover:bg-slate-50 text-slate-600 hover:text-[#0B1528] text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Limpiar filtro</span>
+                </button>
+
                 {/* View Switcher: Grid vs List */}
                 <div className="flex items-center bg-[#EEF2F7] p-0.5 rounded-xl border border-[#DCE4F0]">
                   <button
@@ -538,6 +790,7 @@ export const POSView: React.FC = () => {
                         : 'text-slate-500 hover:text-[#0B1528]'
                     }`}
                     title="Vista Cuadrícula (Fotos y Tarjetas)"
+                    aria-label="Vista cuadrícula"
                   >
                     <LayoutGrid className="w-3.5 h-3.5" />
                   </button>
@@ -550,47 +803,19 @@ export const POSView: React.FC = () => {
                         : 'text-slate-500 hover:text-[#0B1528]'
                     }`}
                     title="Vista Lista Compacta"
+                    aria-label="Vista lista"
                   >
                     <List className="w-3.5 h-3.5" />
                   </button>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => setIsServicioModalOpen(true)}
-                  className="px-2.5 py-1.5 rounded-xl bg-[#EBF3FE] hover:bg-blue-100 text-[#1D4ED8] border border-[#C5DCFC] text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap"
-                  title="Venta rápida de copias, impresiones o redacción de documentos"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                  <span>+ Servicio</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsRecargoModalOpen(true)}
-                  className="px-2.5 py-1.5 rounded-xl bg-[#FFF3E8] hover:bg-[#FFE6CE] text-[#9A4B12] border border-[#F5D3B3] text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap"
-                  title="Agregar recargo de delivery, propina o servicio adicional"
-                >
-                  <Truck className="w-3.5 h-3.5 text-[#D96B27]" />
-                  <span>+ Recargo</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsCreditNoteModalOpen(true)}
-                  className="px-2.5 py-1.5 rounded-xl bg-[#FEECEF] hover:bg-rose-100 text-[#BE123C] border border-[#FBC4CD] text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap"
-                  title="Emitir Nota de Crédito o devolución de productos"
-                >
-                  <FileText className="w-3.5 h-3.5 text-[#BE123C]" />
-                  <span>Nota de Crédito</span>
-                </button>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Product Catalog Display (Grid or List View) */}
-          {viewMode === 'grid' ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+          {/* Product Catalog Display (Only rendered when a category or search filter is active) */}
+          {isCatalogActive && filteredProducts.length > 0 && (
+            viewMode === 'grid' ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
               {filteredProducts.map((prod) => {
                 const inCartItem = cart.find(c => c.product.id === prod.id);
                 const priceBs = getProductPriceBs(prod, bcvRate);
@@ -851,37 +1076,77 @@ export const POSView: React.FC = () => {
                 );
               })}
             </div>
+          )
           )}
 
-          {filteredProducts.length === 0 && (
-            <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] p-8 text-center text-slate-400 space-y-3">
-              <Package className="w-10 h-10 mx-auto text-blue-300" />
+          {/* Idle Guidance State (before selecting a category or searching) */}
+          {!isCatalogActive && (
+            <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] px-6 py-12 text-center space-y-4">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-[#EBF3FE] border border-[#C5DCFC] flex items-center justify-center text-[#1D4ED8]">
+                {products.length === 0 ? (
+                  <Package className="w-7 h-7 stroke-[1.75]" />
+                ) : (
+                  <Search className="w-7 h-7 stroke-[1.75]" />
+                )}
+              </div>
+
               {products.length === 0 ? (
-                <div className="space-y-3">
-                  <h4 className="text-sm font-bold text-[#0B1528]">Catálogo en Cero (Listo para arrancar)</h4>
-                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                    Aún no tienes artículos registrados. Puedes ir a la pestaña <strong>Productos</strong> para cargar tu inventario, o vender servicios y recargos directamente.
+                <div className="space-y-2.5 max-w-md mx-auto">
+                  <h4 className="text-sm sm:text-base font-extrabold text-[#0B1528]">
+                    Catálogo en Cero (Listo para arrancar)
+                  </h4>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Aún no tienes artículos registrados. Puedes ir a la pestaña <strong>Productos</strong> para cargar tu inventario, o usar la barra superior para vender servicios y recargos directamente.
                   </p>
-                  <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => setIsServicioModalOpen(true)}
-                      className="px-3.5 py-2 bg-gradient-to-b from-blue-600 to-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
-                    >
-                      + Vender Servicio Rápido
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsRecargoModalOpen(true)}
-                      className="px-3.5 py-2 bg-[#FFF3E8] border border-[#F5D3B3] text-[#9A4B12] hover:bg-[#FFE6CE] rounded-xl text-xs font-bold transition-all cursor-pointer"
-                    >
-                      + Agregar Recargo / Delivery
-                    </button>
-                  </div>
                 </div>
               ) : (
-                <p className="text-xs">No se encontraron productos con el filtro aplicado.</p>
+                <div className="space-y-2 max-w-md mx-auto">
+                  <h4 className="text-sm sm:text-base font-extrabold text-[#0B1528] text-balance">
+                    Seleccione una categoría o busque un producto para comenzar
+                  </h4>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Elige una categoría en el carrusel superior, escribe un nombre o escanea un código de barras para mostrar los artículos del inventario.
+                  </p>
+                  <div className="pt-1 text-[11px] text-slate-400 font-mono-numbers">
+                    {products.length} {products.length === 1 ? 'producto disponible' : 'productos disponibles'} · {categoryStats.namedCount} {categoryStats.namedCount === 1 ? 'categoría' : 'categorías'}
+                  </div>
+                </div>
               )}
+            </div>
+          )}
+
+          {/* Empty Search/Category Results State */}
+          {isCatalogActive && filteredProducts.length === 0 && (
+            <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] px-6 py-10 text-center space-y-3">
+              <div className="w-12 h-12 mx-auto rounded-2xl bg-[#F8FAFC] border border-[#DCE4F0] flex items-center justify-center text-slate-400">
+                <Package className="w-6 h-6 stroke-[1.75]" />
+              </div>
+              <div className="space-y-1 max-w-sm mx-auto">
+                <h4 className="text-sm font-bold text-[#0B1528]">
+                  Sin coincidencias en el inventario
+                </h4>
+                <p className="text-xs text-slate-500">
+                  No se encontraron productos para el filtro actual.
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
+                {selectedCategory && selectedCategory !== 'Todos' && trimmedSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory(null)}
+                    className="px-3.5 py-2 rounded-xl bg-[#EBF3FE] hover:bg-blue-100 text-[#1D4ED8] border border-[#C5DCFC] text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Buscar &ldquo;{trimmedSearch}&rdquo; en todas las categorías
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleResetCatalogFilters}
+                  className="px-3.5 py-2 rounded-xl bg-[#F8FAFC] hover:bg-slate-100 text-slate-700 border border-[#DCE4F0] text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Limpiar filtros
+                </button>
+              </div>
             </div>
           )}
         </div>
