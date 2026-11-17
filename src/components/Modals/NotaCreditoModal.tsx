@@ -136,7 +136,10 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
         const itemTotal = Number((item.unitPriceUSD * clampedQty).toFixed(2));
         subUSD += itemTotal;
         count += clampedQty;
-        if (!item.product.isExemptFromIVA) {
+        const itemExempt = typeof item.isExemptFromIVA === 'boolean'
+          ? item.isExemptFromIVA
+          : Boolean(item.product.isExemptFromIVA);
+        if (!itemExempt) {
           taxUSD += itemTotal;
         }
       }
@@ -564,7 +567,9 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
                               Vendido: {item.quantity} {item.product.unit}
                               {priorReturned > 0 ? ` • Ya devuelto: ${priorReturned}` : ''}
                               {` • Disponible: ${remaining}`} • ${formatUSD(item.unitPriceUSD)} c/u
-                              {item.product.isExemptFromIVA ? ' (Exento IVA)' : ' (Gravable 16%)'}
+                              {(typeof item.isExemptFromIVA === 'boolean' ? item.isExemptFromIVA : Boolean(item.product.isExemptFromIVA))
+                                ? ' (Exento E)'
+                                : ' (Gravable 16% G)'}
                             </p>
                           </div>
                         </div>

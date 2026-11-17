@@ -931,7 +931,9 @@ export const ContabilidadView: React.FC = () => {
                       <td className="py-2 px-3 text-right font-bold text-[#0B1528] font-mono-numbers">{formatBs(sale.totalBs)}</td>
                       <td className="py-2 px-3 text-right text-slate-500 font-mono-numbers">{formatBs(sale.exemptBs)}</td>
                       <td className="py-2 px-3 text-right font-semibold text-slate-700 font-mono-numbers">{formatBs(sale.taxableBs)}</td>
-                      <td className="py-2 px-3 text-center text-slate-500">16%</td>
+                      <td className="py-2 px-3 text-center text-slate-500">
+                        {sale.taxableBs > 0 ? '16%' : '0% (E)'}
+                      </td>
                       <td className="py-2 px-3 text-right font-bold text-[#1D4ED8] font-mono-numbers">{formatBs(sale.ivaBs)}</td>
                       <td className="py-2 px-3 text-right text-[#065F46] font-mono-numbers">{formatBs(sale.igtfBs)}</td>
                       <td className="py-2 px-3 text-right font-bold text-[#0B1528] font-mono-numbers">${formatUSD(sale.totalUSD)}</td>
@@ -945,7 +947,7 @@ export const ContabilidadView: React.FC = () => {
                     <td className="py-3 px-3 text-right">Bs. {formatBs(totalSalesBs)}</td>
                     <td className="py-3 px-3 text-right">Bs. {formatBs(totalExemptBs)}</td>
                     <td className="py-3 px-3 text-right">Bs. {formatBs(totalTaxableBs)}</td>
-                    <td className="py-3 px-3 text-center">16%</td>
+                    <td className="py-3 px-3 text-center">{totalTaxableBs > 0 ? '16%' : '0%'}</td>
                     <td className="py-3 px-3 text-right text-blue-300">Bs. {formatBs(totalIvaBs)}</td>
                     <td className="py-3 px-3 text-right text-emerald-300">Bs. {formatBs(totalIgtfBs)}</td>
                     <td className="py-3 px-3 text-right text-white">${formatUSD(totalSalesUSD)}</td>

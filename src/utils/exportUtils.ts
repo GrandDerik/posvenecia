@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Sale, Expense, CashShift, CuentaPorPagar, GastoOperativo, Product } from '../types';
+import { Sale, Expense, CashShift, CuentaPorPagar, GastoOperativo, Product, CartItem, PaymentMethod } from '../types';
 
 export const round2 = (n: number): number => {
   if (!Number.isFinite(n)) return 0;
@@ -32,6 +32,139 @@ export const getProductPriceUSD = (
     return round6(prod.priceBsFixed / bcvRate);
   }
   return prod.priceUSD || 0;
+};
+
+/**
+ * Evaluates whether a product record from Firestore is exempt from IVA (SENIAT).
+ * Safely handles booleans as well as legacy/imported string representations.
+ */
+export const isProductExempt = (product?: Partial<Product> | null): boolean => {
+  if (!product) return false;
+  const raw = product.isExemptFromIVA as unknown;
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'exento' || normalized === 'si' || normalized === 'sí';
+  }
+  return Boolean(raw);
+};
+
+/**
+ * Evaluates effective IVA exemption for an individual CartItem.
+ * Respects per-item cart override first, then the product's Firestore tax setting.
+ * When globalApplyIVA is false (Manager PIN override), all items become exempt for the invoice.
+ */
+export const isCartItemExempt = (item: Pick<CartItem, 'product' | 'isExemptFromIVA'>, globalApplyIVA = true): boolean => {
+  if (!globalApplyIVA) return true;
+  if (typeof item.isExemptFromIVA === 'boolean') {
+    return item.isExemptFromIVA;
+  }
+  return isProductExempt(item.product);
+};
+
+export interface CartFiscalTotals {
+  exemptUSD: number;
+  taxableUSD: number;
+  subtotalUSD: number;
+  ivaUSD: number;
+  igtfUSD: number;
+  totalUSD: number;
+  exemptBs: number;
+  taxableBs: number;
+  subtotalBs: number;
+  ivaBs: number;
+  igtfBs: number;
+  totalBs: number;
+  hasFixedBsItems: boolean;
+  exemptItemsCount: number;
+  taxableItemsCount: number;
+}
+
+/**
+ * Single source of truth for SENIAT bimonetary fiscal math in both POSView and completeSale.
+ * Separates Exento (E) and Base Imponible Gravada (G) strictly per item, applying 16% IVA
+ * exclusively to Base Imponible (G) and ensuring exact accounting identity in USD and Bs.
+ */
+export const calculateCartFiscalTotals = (params: {
+  cart: CartItem[];
+  bcvRate: number;
+  applyIVA: boolean;
+  applyIGTF: boolean;
+  paymentMethod: PaymentMethod;
+  combinedUsdCash?: number;
+}): CartFiscalTotals => {
+  const { cart, bcvRate, applyIVA, applyIGTF, paymentMethod, combinedUsdCash = 0 } = params;
+  const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
+
+  let rawExemptUSD = 0;
+  let rawTaxableUSD = 0;
+  let rawExemptBs = 0;
+  let rawTaxableBs = 0;
+  let hasFixedBsItems = false;
+  let exemptItemsCount = 0;
+  let taxableItemsCount = 0;
+
+  cart.forEach((item) => {
+    const itemTotalUSD = round2(item.quantity * item.unitPriceUSD);
+    const hasFixedBs = typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0;
+    if (hasFixedBs) hasFixedBsItems = true;
+    const itemTotalBs = hasFixedBs
+      ? round2(item.quantity * item.product.priceBsFixed!)
+      : round2(itemTotalUSD * safeRate);
+
+    if (isCartItemExempt(item, applyIVA)) {
+      rawExemptUSD += itemTotalUSD;
+      rawExemptBs += itemTotalBs;
+      exemptItemsCount += 1;
+    } else {
+      rawTaxableUSD += itemTotalUSD;
+      rawTaxableBs += itemTotalBs;
+      taxableItemsCount += 1;
+    }
+  });
+
+  const exemptUSD = round2(rawExemptUSD);
+  const taxableUSD = round2(rawTaxableUSD);
+  const subtotalUSD = round2(exemptUSD + taxableUSD);
+  const ivaUSD = applyIVA && taxableUSD > 0 ? round2(taxableUSD * 0.16) : 0;
+
+  let igtfUSD = 0;
+  if (applyIGTF) {
+    if (paymentMethod === 'efectivo_usd') {
+      igtfUSD = round2((subtotalUSD + ivaUSD) * 0.03);
+    } else if (paymentMethod === 'pago_combinado' && combinedUsdCash > 0) {
+      igtfUSD = round2(combinedUsdCash * 0.03);
+    }
+  }
+
+  const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
+
+  const exemptBs = hasFixedBsItems ? round2(rawExemptBs) : round2(exemptUSD * safeRate);
+  const taxableBs = hasFixedBsItems ? round2(rawTaxableBs) : round2(taxableUSD * safeRate);
+  const subtotalBs = round2(exemptBs + taxableBs);
+  const ivaBs = applyIVA && taxableBs > 0
+    ? (hasFixedBsItems ? round2(taxableBs * 0.16) : round2(ivaUSD * safeRate))
+    : 0;
+  const igtfBs = igtfUSD > 0 ? round2(igtfUSD * safeRate) : 0;
+  const totalBs = round2(subtotalBs + ivaBs + igtfBs);
+
+  return {
+    exemptUSD,
+    taxableUSD,
+    subtotalUSD,
+    ivaUSD,
+    igtfUSD,
+    totalUSD,
+    exemptBs,
+    taxableBs,
+    subtotalBs,
+    ivaBs,
+    igtfBs,
+    totalBs,
+    hasFixedBsItems,
+    exemptItemsCount,
+    taxableItemsCount
+  };
 };
 
 export const safeDiv = (numerator: number, denominator: number, fallback = 0): number => {
@@ -87,7 +220,7 @@ export const exportLibroVentasExcel = (sales: Sale[], businessInfo: { name: stri
     'Total Ventas con IVA (Bs)': Number(sale.totalBs.toFixed(2)),
     'Ventas Exentas (Bs)': Number(sale.exemptBs.toFixed(2)),
     'Base Imponible (Bs)': Number(sale.taxableBs.toFixed(2)),
-    '% Alícuota': '16%',
+    '% Alícuota': sale.taxableBs > 0 ? '16%' : '0% (E)',
     'Impuesto IVA (Bs)': Number(sale.ivaBs.toFixed(2)),
     'IGTF 3% (Bs)': Number(sale.igtfBs.toFixed(2)),
     'Total USD': Number(sale.totalUSD.toFixed(2)),
@@ -128,7 +261,7 @@ export const exportLibroVentasPDF = (sales: Sale[], businessInfo: { name: string
     formatBs(sale.totalBs),
     formatBs(sale.exemptBs),
     formatBs(sale.taxableBs),
-    '16%',
+    sale.taxableBs > 0 ? '16%' : '0% (E)',
     formatBs(sale.ivaBs),
     formatBs(sale.igtfBs),
     formatUSD(sale.totalUSD)

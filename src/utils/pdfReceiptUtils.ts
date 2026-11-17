@@ -1,7 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Sale, Expense, BusinessInfo, CashShift, CreditNote, Abono, Loan } from '../types';
-import { formatBs, formatUSD, getLocalDateStr, round2, safeDiv } from './exportUtils';
+import { formatBs, formatUSD, getLocalDateStr, round2, safeDiv, isCartItemExempt } from './exportUtils';
 
 // 1. Reporte Z / Cierre Diario SENIAT
 export const generateReporteZPDF = (
@@ -254,8 +254,9 @@ export const generateTicketVentaPDF = (
     const itemTotalBs = hasFixedBs
       ? round2(item.quantity * item.product.priceBsFixed!)
       : round2(item.totalUSD * sale.bcvRate);
-    const nameStr = `${item.quantity}x ${item.product.name}${item.product.isExemptFromIVA ? ' (E)' : ''}`;
-    doc.text(nameStr.substring(0, 26), 6, y);
+    const itemExempt = isCartItemExempt(item);
+    const nameStr = `${item.quantity}x ${item.product.name} ${itemExempt ? '(E)' : '(G)'}`;
+    doc.text(nameStr.substring(0, 28), 6, y);
     doc.text(`Bs. ${formatBs(itemTotalBs)}`, pageWidth - 6, y, { align: 'right' });
     y += 3.5;
     doc.setFontSize(6);
@@ -263,7 +264,7 @@ export const generateTicketVentaPDF = (
     doc.text(
       hasFixedBs
         ? `   Bs. ${formatBs(item.product.priceBsFixed!)} c/u  ($ ${formatUSD(item.unitPriceUSD ?? item.product.priceUSD)})`
-        : `   $ ${formatUSD(item.product.priceUSD)} c/u  =  $ ${formatUSD(item.totalUSD)}`,
+        : `   $ ${formatUSD(item.unitPriceUSD ?? item.product.priceUSD)} c/u  =  $ ${formatUSD(item.totalUSD)}`,
       6,
       y
     );
@@ -275,25 +276,22 @@ export const generateTicketVentaPDF = (
   doc.line(6, y, pageWidth - 6, y);
   y += 4;
 
-  // Totals
+  // Totals (SENIAT Separation)
   doc.text('SUBTOTAL:', 6, y);
   doc.text(`Bs. ${formatBs(sale.subtotalBs)}`, pageWidth - 6, y, { align: 'right' });
   y += 3.5;
 
-  if (sale.exemptBs > 0) {
-    doc.text('VENTAS EXENTAS (E):', 6, y);
-    doc.text(`Bs. ${formatBs(sale.exemptBs)}`, pageWidth - 6, y, { align: 'right' });
-    y += 3.5;
-  }
+  doc.text('SUBTOTAL EXENTO (E):', 6, y);
+  doc.text(`Bs. ${formatBs(sale.exemptBs)}`, pageWidth - 6, y, { align: 'right' });
+  y += 3.5;
 
-  if (sale.taxableBs > 0) {
-    doc.text('BASE IMPONIBLE (16%):', 6, y);
-    doc.text(`Bs. ${formatBs(sale.taxableBs)}`, pageWidth - 6, y, { align: 'right' });
-    y += 3.5;
-    doc.text('IVA (16%):', 6, y);
-    doc.text(`Bs. ${formatBs(sale.ivaBs)}`, pageWidth - 6, y, { align: 'right' });
-    y += 3.5;
-  }
+  doc.text('BASE IMPONIBLE (G):', 6, y);
+  doc.text(`Bs. ${formatBs(sale.taxableBs)}`, pageWidth - 6, y, { align: 'right' });
+  y += 3.5;
+
+  doc.text('IVA (16%):', 6, y);
+  doc.text(`Bs. ${formatBs(sale.ivaBs)}`, pageWidth - 6, y, { align: 'right' });
+  y += 3.5;
 
   if (sale.igtfBs > 0) {
     doc.text('IGTF (3% DIVISAS):', 6, y);

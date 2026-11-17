@@ -1175,7 +1175,11 @@ export const saveCreditNoteAtomic = async (
           const totalItemUSD = round2(requestedQty * unitPriceUSD);
           refundedSubtotalUSD = round2(refundedSubtotalUSD + totalItemUSD);
 
-          if (originalItem.product.isExemptFromIVA) {
+          const itemExempt = typeof originalItem.isExemptFromIVA === 'boolean'
+            ? originalItem.isExemptFromIVA
+            : Boolean(originalItem.product.isExemptFromIVA);
+
+          if (itemExempt) {
             refundedExemptUSD = round2(refundedExemptUSD + totalItemUSD);
           } else {
             refundedTaxableUSD = round2(refundedTaxableUSD + totalItemUSD);
@@ -1187,7 +1191,7 @@ export const saveCreditNoteAtomic = async (
             quantity: requestedQty,
             unitPriceUSD,
             totalUSD: totalItemUSD,
-            isExemptFromIVA: Boolean(originalItem.product.isExemptFromIVA)
+            isExemptFromIVA: itemExempt
           });
 
           if (!originalItem.product.isService && originalItem.product.itemType !== 'servicio') {

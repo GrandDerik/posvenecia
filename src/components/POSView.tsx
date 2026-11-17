@@ -38,7 +38,17 @@ import {
   RotateCcw
 } from 'lucide-react';
 import { Product, PaymentMethod, PaymentDetails, Sale, Client } from '../types';
-import { formatBs, formatUSD, round2, safeDiv, getProductPriceBs, getProductPriceUSD } from '../utils/exportUtils';
+import {
+  formatBs,
+  formatUSD,
+  round2,
+  safeDiv,
+  getProductPriceBs,
+  getProductPriceUSD,
+  isProductExempt,
+  isCartItemExempt,
+  calculateCartFiscalTotals
+} from '../utils/exportUtils';
 import { PagoMovilModal } from './Modals/PagoMovilModal';
 import { VentaFiadaModal } from './Modals/VentaFiadaModal';
 import { PagoCombinadoModal } from './Modals/PagoCombinadoModal';
@@ -56,6 +66,7 @@ export const POSView: React.FC = () => {
     addToCart, 
     removeFromCart, 
     updateCartQuantity, 
+    setCartItemExempt,
     clearCart,
     applyIVA,
     setApplyIVA,
@@ -271,52 +282,28 @@ export const POSView: React.FC = () => {
     }
   };
 
-  // Cart calculations
-  let exemptUSD = 0;
-  let taxableUSD = 0;
-  let exemptBsRaw = 0;
-  let taxableBsRaw = 0;
-  let hasFixedBsItems = false;
-
-  cart.forEach(item => {
-    const itemTotalUSD = round2(item.quantity * item.unitPriceUSD);
-    const hasFixedBs = typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0;
-    if (hasFixedBs) hasFixedBsItems = true;
-    const itemTotalBs = hasFixedBs
-      ? round2(item.quantity * item.product.priceBsFixed!)
-      : round2(itemTotalUSD * bcvRate);
-
-    if (applyIVA && !item.product.isExemptFromIVA) {
-      taxableUSD += itemTotalUSD;
-      taxableBsRaw += itemTotalBs;
-    } else {
-      exemptUSD += itemTotalUSD;
-      exemptBsRaw += itemTotalBs;
-    }
+  // Cart fiscal calculations (Single Source of Truth shared with completeSale)
+  const {
+    exemptUSD,
+    taxableUSD,
+    subtotalUSD,
+    ivaUSD,
+    igtfUSD,
+    totalUSD,
+    exemptBs,
+    taxableBs,
+    subtotalBs,
+    ivaBs,
+    igtfBs,
+    totalBs
+  } = calculateCartFiscalTotals({
+    cart,
+    bcvRate,
+    applyIVA,
+    applyIGTF,
+    paymentMethod: selectedMethod,
+    combinedUsdCash: combinedData?.usdCash || 0
   });
-
-  exemptUSD = round2(exemptUSD);
-  taxableUSD = round2(taxableUSD);
-  const subtotalUSD = round2(exemptUSD + taxableUSD);
-  const ivaUSD = round2(taxableUSD * 0.16);
-
-  let igtfUSD = 0;
-  if (applyIGTF) {
-    if (selectedMethod === 'efectivo_usd') {
-      igtfUSD = round2((subtotalUSD + ivaUSD) * 0.03);
-    } else if (selectedMethod === 'pago_combinado' && combinedData?.usdCash) {
-      igtfUSD = round2(combinedData.usdCash * 0.03);
-    }
-  }
-
-  const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
-
-  const exemptBs = hasFixedBsItems ? round2(exemptBsRaw) : round2(exemptUSD * bcvRate);
-  const taxableBs = hasFixedBsItems ? round2(taxableBsRaw) : round2(taxableUSD * bcvRate);
-  const subtotalBs = hasFixedBsItems ? round2(exemptBs + taxableBs) : round2(subtotalUSD * bcvRate);
-  const ivaBs = hasFixedBsItems ? round2(taxableBs * 0.16) : round2(ivaUSD * bcvRate);
-  const igtfBs = round2(igtfUSD * bcvRate);
-  const totalBs = hasFixedBsItems ? round2(subtotalBs + ivaBs + igtfBs) : round2(totalUSD * bcvRate);
 
   // Handle Payment Method Selection
   const handleSelectPaymentMethod = (method: PaymentMethod) => {
@@ -870,18 +857,23 @@ export const POSView: React.FC = () => {
                       </h4>
                       <div className="flex items-center justify-between gap-1 mt-0.5">
                         <span className="text-[10px] text-slate-400 font-mono-numbers truncate">{prod.code}</span>
-                        {!isService && (
-                          <span className={`text-[10px] font-mono-numbers font-bold shrink-0 ${
-                            isOutOfStock
-                              ? 'text-[#BE123C]'
-                              : prod.stock <= (prod.minStock || 5)
-                              ? 'text-[#D96B27]'
-                              : 'text-slate-500'
-                          }`}>
-                            Stock: {prod.stock} {prod.unit}
-                          </span>
-                        )}
+                        <span className={`text-[10px] font-bold shrink-0 ${
+                          isProductExempt(prod) ? 'text-emerald-700' : 'text-blue-700'
+                        }`}>
+                          {isProductExempt(prod) ? 'Exento (E)' : 'IVA 16% (G)'}
+                        </span>
                       </div>
+                      {!isService && (
+                        <div className={`text-[10px] font-mono-numbers font-bold mt-0.5 ${
+                          isOutOfStock
+                            ? 'text-[#BE123C]'
+                            : prod.stock <= (prod.minStock || 5)
+                            ? 'text-[#D96B27]'
+                            : 'text-slate-500'
+                        }`}>
+                          Stock: {prod.stock} {prod.unit}
+                        </div>
+                      )}
                     </div>
 
                     {/* Bimonetary Prices & Controls */}
@@ -1002,18 +994,25 @@ export const POSView: React.FC = () => {
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono-numbers mt-0.5">
+                        <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono-numbers mt-0.5 flex-wrap">
                           <span>{prod.code}</span>
+                          <span aria-hidden="true" className="text-slate-300">·</span>
+                          <span className={`font-sans font-bold ${isProductExempt(prod) ? 'text-emerald-700' : 'text-blue-700'}`}>
+                            {isProductExempt(prod) ? 'Exento (E)' : 'IVA 16% (G)'}
+                          </span>
                           {!isService && (
-                            <span className={
-                              isOutOfStock
-                                ? 'text-[#BE123C] font-bold'
-                                : prod.stock <= (prod.minStock || 5)
-                                ? 'text-[#D96B27] font-bold'
-                                : 'text-slate-500'
-                            }>
-                              Stock: {prod.stock} {prod.unit}
-                            </span>
+                            <>
+                              <span aria-hidden="true" className="text-slate-300">·</span>
+                              <span className={
+                                isOutOfStock
+                                  ? 'text-[#BE123C] font-bold'
+                                  : prod.stock <= (prod.minStock || 5)
+                                  ? 'text-[#D96B27] font-bold'
+                                  : 'text-slate-500'
+                              }>
+                                Stock: {prod.stock} {prod.unit}
+                              </span>
+                            </>
                           )}
                         </div>
                       </div>
@@ -1256,63 +1255,114 @@ export const POSView: React.FC = () => {
                 <p className="text-xs">El carrito está vacío. Agregue productos para iniciar la venta.</p>
               </div>
             ) : (
-              cart.map((item) => (
-                <div key={item.product.id} className="pt-2 pb-2 flex items-center justify-between text-xs">
-                  <div className="flex-1 pr-2">
-                    <div className="font-bold text-slate-800 leading-tight">
-                      {item.product.name}
-                      {item.product.isExemptFromIVA && (
-                        <span className="ml-1 text-[9px] font-semibold text-emerald-700">(E)</span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-slate-500 font-mono">
-                      ${formatUSD(item.unitPriceUSD)} c/u • Bs. {formatBs(
-                        typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0
-                          ? item.product.priceBsFixed
-                          : round2(item.unitPriceUSD * bcvRate)
-                      )}
-                    </div>
-                  </div>
+              cart.map((item) => {
+                const effectiveExempt = isCartItemExempt(item, applyIVA);
+                const productDefaultExempt = isProductExempt(item.product);
+                const isOverridden = applyIVA && effectiveExempt !== productDefaultExempt;
+                const lineBs = typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0
+                  ? round2(item.quantity * item.product.priceBsFixed)
+                  : round2(item.totalUSD * bcvRate);
 
-                  {/* Quantity controls */}
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)}
-                      className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 hover:text-rose-600 transition-colors cursor-pointer"
-                      title="Disminuir cantidad"
-                    >
-                      <Minus className="w-3 h-3" />
-                    </button>
-                    <span className="w-6 text-center font-bold font-mono text-slate-900">
-                      {item.quantity}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={!item.product.isService && item.quantity >= item.product.stock}
-                      onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)}
-                      className={`w-6 h-6 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
-                        !item.product.isService && item.quantity >= item.product.stock
-                          ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
-                          : 'bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-700'
-                      }`}
-                      title={!item.product.isService && item.quantity >= item.product.stock ? 'Stock máximo' : 'Aumentar cantidad'}
-                    >
-                      <Plus className="w-3 h-3" />
-                    </button>
-                  </div>
+                return (
+                  <div key={item.product.id} className="pt-2.5 pb-2.5 space-y-1.5 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-slate-800 leading-tight">
+                          {item.product.name}
+                          <span
+                            className={`ml-1.5 text-[10px] font-extrabold font-mono-numbers ${
+                              effectiveExempt ? 'text-emerald-700' : 'text-blue-700'
+                            }`}
+                          >
+                            {effectiveExempt ? '(E)' : '(G)'}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono-numbers">
+                          ${formatUSD(item.unitPriceUSD)} c/u • Bs. {formatBs(
+                            typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0
+                              ? item.product.priceBsFixed
+                              : round2(item.unitPriceUSD * bcvRate)
+                          )}
+                        </div>
+                      </div>
 
-                  {/* Line Total */}
-                  <div className="w-20 text-right font-mono">
-                    <div className="font-bold text-slate-900">${formatUSD(item.totalUSD)}</div>
-                    <div className="text-[10px] text-blue-700">Bs {formatBs(
-                      typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0
-                        ? round2(item.quantity * item.product.priceBsFixed)
-                        : round2(item.totalUSD * bcvRate)
-                    )}</div>
+                      {/* Quantity controls */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)}
+                          className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 hover:text-rose-600 transition-colors cursor-pointer"
+                          title="Disminuir cantidad"
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="w-6 text-center font-bold font-mono-numbers text-slate-900">
+                          {item.quantity}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={!item.product.isService && item.quantity >= item.product.stock}
+                          onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)}
+                          className={`w-6 h-6 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
+                            !item.product.isService && item.quantity >= item.product.stock
+                              ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                              : 'bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-700'
+                          }`}
+                          title={!item.product.isService && item.quantity >= item.product.stock ? 'Stock máximo' : 'Aumentar cantidad'}
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      {/* Line Total */}
+                      <div className="w-20 text-right font-mono-numbers shrink-0">
+                        <div className="font-bold text-slate-900">${formatUSD(item.totalUSD)}</div>
+                        <div className="text-[10px] text-blue-700">Bs {formatBs(lineBs)}</div>
+                      </div>
+                    </div>
+
+                    {/* Per-item SENIAT IVA selector: Exento (E) vs Gravado 16% (G) */}
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
+                      <div className="inline-flex items-center bg-[#EEF2F7] p-0.5 rounded-lg border border-[#DCE4F0]">
+                        <button
+                          type="button"
+                          onClick={() => setCartItemExempt(item.product.id, true)}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                            effectiveExempt
+                              ? 'bg-emerald-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-[#0B1528]'
+                          }`}
+                          title="Marcar este ítem como Exento de IVA (E)"
+                        >
+                          Exento (E)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCartItemExempt(item.product.id, false)}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                            !effectiveExempt
+                              ? 'bg-blue-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-[#0B1528]'
+                          }`}
+                          title="Aplicar IVA 16% (G) a este ítem"
+                        >
+                          IVA 16% (G)
+                        </button>
+                      </div>
+
+                      <span className="text-[10px] text-slate-400 truncate">
+                        {!applyIVA
+                          ? 'IVA general desactivado'
+                          : isOverridden
+                            ? `Ficha: ${productDefaultExempt ? 'Exento' : 'Gravado'} · Ajustado`
+                            : productDefaultExempt
+                              ? 'Según ficha: Exento'
+                              : 'Según ficha: Gravado'}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 
@@ -1337,7 +1387,7 @@ export const POSView: React.FC = () => {
                     }}
                     className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
                   />
-                  <span className="font-semibold text-slate-700 text-[11px]">IVA 16% Fiscal</span>
+                  <span className="font-semibold text-slate-700 text-[11px]">IVA 16% (Ítems G)</span>
                 </label>
 
                 <label className="flex items-center gap-1.5 cursor-pointer bg-slate-50 p-2 rounded-xl border border-slate-200">
@@ -1351,20 +1401,25 @@ export const POSView: React.FC = () => {
                 </label>
               </div>
 
-              {/* Subtotal & Breakdown */}
-              <div className="space-y-1 text-xs font-mono pt-1 text-slate-600">
+              {/* Subtotal & Breakdown (Strict SENIAT Separation) */}
+              <div className="space-y-1 text-xs font-mono-numbers pt-1 text-slate-600">
                 <div className="flex justify-between">
-                  <span>Subtotal Exento (E):</span>
-                  <span>${formatUSD(exemptUSD)} (Bs {formatBs(exemptBs)})</span>
+                  <span className="text-emerald-800 font-semibold">Subtotal Exento (E):</span>
+                  <span className="font-semibold text-emerald-800">${formatUSD(exemptUSD)} (Bs {formatBs(exemptBs)})</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Base Imponible (G):</span>
-                  <span>${formatUSD(taxableUSD)} (Bs {formatBs(taxableBs)})</span>
+                  <span className="text-slate-700 font-semibold">Base Imponible (G):</span>
+                  <span className="font-semibold text-slate-800">${formatUSD(taxableUSD)} (Bs {formatBs(taxableBs)})</span>
                 </div>
-                {applyIVA && taxableUSD > 0 && (
-                  <div className="flex justify-between text-blue-700 font-semibold">
-                    <span>IVA (16%):</span>
+                {applyIVA && taxableUSD > 0 ? (
+                  <div className="flex justify-between text-blue-700 font-bold">
+                    <span>IVA (16% s/ Base G):</span>
                     <span>+${formatUSD(ivaUSD)} (+Bs {formatBs(ivaBs)})</span>
+                  </div>
+                ) : (
+                  <div className="flex justify-between text-emerald-700 text-[11px]">
+                    <span>IVA (16%):</span>
+                    <span>$0.00 (Bs 0,00 · Exento)</span>
                   </div>
                 )}
                 {applyIGTF && igtfUSD > 0 && (

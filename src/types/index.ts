@@ -63,6 +63,7 @@ export interface CartItem {
   quantity: number;
   unitPriceUSD: number;
   totalUSD: number;
+  isExemptFromIVA?: boolean; // Tratamiento fiscal individual del ítem en el carrito (E = true, G = false)
 }
 
 export interface PaymentDetails {

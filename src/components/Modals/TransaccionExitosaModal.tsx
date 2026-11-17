@@ -120,6 +120,20 @@ export const TransaccionExitosaModal: React.FC<TransaccionExitosaModalProps> = (
               <span>•</span>
               <span>Tasa: Bs. {formatBs(sale.bcvRate)}</span>
             </div>
+            <div className="mt-3 pt-2.5 border-t border-slate-200 grid grid-cols-3 gap-2 text-[10px] font-mono-numbers">
+              <div>
+                <span className="block text-slate-400 font-sans">Exento (E)</span>
+                <span className="font-bold text-emerald-700">Bs. {formatBs(sale.exemptBs)}</span>
+              </div>
+              <div>
+                <span className="block text-slate-400 font-sans">Base Imp. (G)</span>
+                <span className="font-bold text-slate-700">Bs. {formatBs(sale.taxableBs)}</span>
+              </div>
+              <div>
+                <span className="block text-slate-400 font-sans">IVA 16%</span>
+                <span className="font-bold text-blue-700">Bs. {formatBs(sale.ivaBs)}</span>
+              </div>
+            </div>
           </div>
 
           {/* Client summary or Add Client Box */}

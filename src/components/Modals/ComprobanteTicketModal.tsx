@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Printer, Download, Share2, Check } from 'lucide-react';
 import { Sale, BusinessInfo } from '../../types';
-import { formatBs, formatUSD, round2 } from '../../utils/exportUtils';
+import { formatBs, formatUSD, round2, isCartItemExempt } from '../../utils/exportUtils';
 import { generateTicketVentaPDF } from '../../utils/pdfReceiptUtils';
 
 interface ComprobanteTicketModalProps {
@@ -85,11 +85,12 @@ export const ComprobanteTicketModal: React.FC<ComprobanteTicketModalProps> = ({
                 const lineBs = hasFixedBs
                   ? round2(item.quantity * item.product.priceBsFixed!)
                   : round2(item.totalUSD * sale.bcvRate);
+                const itemExempt = isCartItemExempt(item);
                 return (
                   <div key={idx} className="text-[10px]">
                     <div className="flex justify-between font-medium">
                       <span>
-                        {item.quantity}x {item.product.name} {item.product.isExemptFromIVA ? '(E)' : ''}
+                        {item.quantity}x {item.product.name} {itemExempt ? '(E)' : '(G)'}
                       </span>
                       <span className="font-bold font-mono">
                         Bs. {formatBs(lineBs)}
@@ -98,37 +99,31 @@ export const ComprobanteTicketModal: React.FC<ComprobanteTicketModalProps> = ({
                     <div className="text-[9px] text-slate-400">
                       {hasFixedBs
                         ? `Bs. ${formatBs(item.product.priceBsFixed!)} c/u ($ ${formatUSD(item.unitPriceUSD ?? item.product.priceUSD)})`
-                        : `$ ${formatUSD(item.product.priceUSD)} c/u = $ ${formatUSD(item.totalUSD)}`}
+                        : `$ ${formatUSD(item.unitPriceUSD ?? item.product.priceUSD)} c/u = $ ${formatUSD(item.totalUSD)}`}
                     </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* Totals Breakdown */}
+            {/* Totals Breakdown (SENIAT Separation) */}
             <div className="space-y-1 text-[10px] border-b border-dashed border-slate-300 pb-2">
               <div className="flex justify-between">
                 <span>SUBTOTAL:</span>
                 <span>Bs. {formatBs(sale.subtotalBs)}</span>
               </div>
-              {sale.exemptBs > 0 && (
-                <div className="flex justify-between text-slate-600">
-                  <span>EXENTO (E):</span>
-                  <span>Bs. {formatBs(sale.exemptBs)}</span>
-                </div>
-              )}
-              {sale.taxableBs > 0 && (
-                <>
-                  <div className="flex justify-between text-slate-600">
-                    <span>BASE IMPONIBLE (16%):</span>
-                    <span>Bs. {formatBs(sale.taxableBs)}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>IVA (16%):</span>
-                    <span>Bs. {formatBs(sale.ivaBs)}</span>
-                  </div>
-                </>
-              )}
+              <div className="flex justify-between text-slate-600">
+                <span>SUBTOTAL EXENTO (E):</span>
+                <span>Bs. {formatBs(sale.exemptBs)}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>BASE IMPONIBLE (G):</span>
+                <span>Bs. {formatBs(sale.taxableBs)}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>IVA (16%):</span>
+                <span>Bs. {formatBs(sale.ivaBs)}</span>
+              </div>
               {sale.igtfBs > 0 && (
                 <div className="flex justify-between text-emerald-700 font-semibold">
                   <span>IGTF (3% DIVISAS):</span>

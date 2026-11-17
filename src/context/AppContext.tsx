@@ -100,7 +100,15 @@ import {
   clearUserFirestoreCollections
 } from '../services/firestoreSyncService';
 import { BackupDataPayload } from '../utils/cloudBackupUtils';
-import { round2, round6, getLocalDateStr, getProductPriceUSD } from '../utils/exportUtils';
+import {
+  round2,
+  round6,
+  getLocalDateStr,
+  getProductPriceUSD,
+  isProductExempt,
+  isCartItemExempt,
+  calculateCartFiscalTotals
+} from '../utils/exportUtils';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
 export type FirestoreSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated';
@@ -375,9 +383,10 @@ interface AppContextType {
 
   // Cart
   cart: CartItem[];
-  addToCart: (product: Product, quantity?: number) => void;
+  addToCart: (product: Product, quantity?: number, options?: { isExemptFromIVA?: boolean }) => void;
   removeFromCart: (productId: string) => void;
   updateCartQuantity: (productId: string, quantity: number) => void;
+  setCartItemExempt: (productId: string, isExemptFromIVA: boolean) => void;
   clearCart: () => void;
   applyIVA: boolean;
   setApplyIVA: (apply: boolean) => void;
@@ -1901,17 +1910,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Cart operations
-  const addToCart = (product: Product, quantity = 1) => {
+  const addToCart = (product: Product, quantity = 1, options?: { isExemptFromIVA?: boolean }) => {
     const effectiveUnitUSD = getProductPriceUSD(product, bcvRate);
+    const defaultExempt = typeof options?.isExemptFromIVA === 'boolean'
+      ? options.isExemptFromIVA
+      : isProductExempt(product);
+
     setCart(prev => {
       const existing = prev.find(item => item.product.id === product.id);
       if (existing) {
+        const nextQty = existing.quantity + quantity;
+        const nextExempt = typeof options?.isExemptFromIVA === 'boolean'
+          ? options.isExemptFromIVA
+          : (typeof existing.isExemptFromIVA === 'boolean' ? existing.isExemptFromIVA : defaultExempt);
         return prev.map(item =>
           item.product.id === product.id
             ? {
                 ...item,
-                quantity: item.quantity + quantity,
-                totalUSD: round2((item.quantity + quantity) * item.unitPriceUSD)
+                product,
+                quantity: nextQty,
+                unitPriceUSD: effectiveUnitUSD,
+                totalUSD: round2(nextQty * effectiveUnitUSD),
+                isExemptFromIVA: nextExempt
               }
             : item
         );
@@ -1922,7 +1942,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           product,
           quantity,
           unitPriceUSD: effectiveUnitUSD,
-          totalUSD: round2(quantity * effectiveUnitUSD)
+          totalUSD: round2(quantity * effectiveUnitUSD),
+          isExemptFromIVA: defaultExempt
         }
       ];
     });
@@ -1943,8 +1964,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? {
               ...item,
               quantity,
-              totalUSD: Number((quantity * item.unitPriceUSD).toFixed(2))
+              totalUSD: round2(quantity * item.unitPriceUSD)
             }
+          : item
+      )
+    );
+  };
+
+  const setCartItemExempt = (productId: string, isExemptFromIVA: boolean) => {
+    if (!isExemptFromIVA && !applyIVA) {
+      // If global IVA was disabled, enabling IVA on a specific item reactivates IVA
+      // while keeping all other cart items exempt so no unintended tax is added.
+      setApplyIVA(true);
+      setCart(prev =>
+        prev.map(item => ({
+          ...item,
+          isExemptFromIVA: item.product.id === productId ? false : true
+        }))
+      );
+      return;
+    }
+
+    setCart(prev =>
+      prev.map(item =>
+        item.product.id === productId
+          ? { ...item, isExemptFromIVA }
           : item
       )
     );
@@ -2006,55 +2050,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isCompletingSaleRef.current = true;
 
     try {
-      let rawSubtotalUSD = 0;
-      let rawExemptUSD = 0;
-      let rawTaxableUSD = 0;
-      let rawExemptBs = 0;
-      let rawTaxableBs = 0;
-      let hasFixedBsItems = false;
-
-      cart.forEach(item => {
-        const itemTotal = round2(item.quantity * item.unitPriceUSD);
-        const hasFixedBs = typeof item.product.priceBsFixed === 'number' && item.product.priceBsFixed > 0;
-        if (hasFixedBs) hasFixedBsItems = true;
-        const itemTotalBs = hasFixedBs
-          ? round2(item.quantity * item.product.priceBsFixed!)
-          : round2(itemTotal * bcvRate);
-
-        rawSubtotalUSD += itemTotal;
-        if (!applyIVA || item.product.isExemptFromIVA) {
-          rawExemptUSD += itemTotal;
-          rawExemptBs += itemTotalBs;
-        } else {
-          rawTaxableUSD += itemTotal;
-          rawTaxableBs += itemTotalBs;
-        }
+      const fiscalTotals = calculateCartFiscalTotals({
+        cart,
+        bcvRate,
+        applyIVA,
+        applyIGTF,
+        paymentMethod: paymentDetails.method,
+        combinedUsdCash: paymentDetails.combinedBreakdown?.usdCash || 0
       });
 
-      const subtotalUSD = round2(rawSubtotalUSD);
-      const exemptUSD = round2(rawExemptUSD);
-      const taxableUSD = round2(rawTaxableUSD);
+      const {
+        subtotalUSD,
+        exemptUSD,
+        taxableUSD,
+        ivaUSD,
+        igtfUSD,
+        totalUSD,
+        subtotalBs,
+        exemptBs,
+        taxableBs,
+        ivaBs,
+        igtfBs,
+        totalBs
+      } = fiscalTotals;
 
-      const ivaUSD = applyIVA ? round2(taxableUSD * 0.16) : 0;
-      let igtfUSD = 0;
-      if (applyIGTF && paymentDetails.method === 'efectivo_usd') {
-        igtfUSD = round2((subtotalUSD + ivaUSD) * 0.03);
-      } else if (applyIGTF && paymentDetails.method === 'pago_combinado' && paymentDetails.combinedBreakdown?.usdCash) {
-        igtfUSD = round2(paymentDetails.combinedBreakdown.usdCash * 0.03);
-      }
-
-      const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
-      const exemptBs = hasFixedBsItems ? round2(rawExemptBs) : round2(exemptUSD * bcvRate);
-      const taxableBs = hasFixedBsItems ? round2(rawTaxableBs) : round2(taxableUSD * bcvRate);
-      const subtotalBs = hasFixedBsItems ? round2(exemptBs + taxableBs) : round2(subtotalUSD * bcvRate);
-      const ivaBs = hasFixedBsItems ? (applyIVA ? round2(taxableBs * 0.16) : 0) : round2(ivaUSD * bcvRate);
-      const igtfBs = round2(igtfUSD * bcvRate);
-      const totalBs = hasFixedBsItems ? round2(subtotalBs + ivaBs + igtfBs) : round2(totalUSD * bcvRate);
-
-      const snapshotItems: CartItem[] = cart.map(item => ({
-        ...item,
-        product: { ...item.product }
-      }));
+      const snapshotItems: CartItem[] = cart.map(item => {
+        const effectiveExempt = isCartItemExempt(item, applyIVA);
+        return {
+          ...item,
+          isExemptFromIVA: effectiveExempt,
+          product: {
+            ...item.product,
+            isExemptFromIVA: effectiveExempt
+          }
+        };
+      });
 
       const newSale: Sale = {
         id: 'sale-' + Date.now(),
@@ -3216,6 +3246,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addToCart,
         removeFromCart,
         updateCartQuantity,
+        setCartItemExempt,
         clearCart,
         applyIVA,
         setApplyIVA,
