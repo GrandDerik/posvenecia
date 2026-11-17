@@ -255,7 +255,8 @@ export const generateTicketVentaPDF = (
       ? round2(item.quantity * item.product.priceBsFixed!)
       : round2(item.totalUSD * sale.bcvRate);
     const itemExempt = isCartItemExempt(item);
-    const nameStr = `${item.quantity}x ${item.product.name} ${itemExempt ? '(E)' : '(G)'}`;
+    const taxTag = itemExempt ? '(E)' : Boolean(item.product.priceIncludesIVA) ? '(G·Inc)' : '(G)';
+    const nameStr = `${item.quantity}x ${item.product.name} ${taxTag}`;
     doc.text(nameStr.substring(0, 28), 6, y);
     doc.text(`Bs. ${formatBs(itemTotalBs)}`, pageWidth - 6, y, { align: 'right' });
     y += 3.5;

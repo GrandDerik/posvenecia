@@ -547,6 +547,9 @@ interface AppContextType {
   // Network Connectivity
   isOnline: boolean;
 
+  // Collections awaiting updated firestore.rules deployment in external Firebase Console
+  missingRuleCollections: string[];
+
   // Factory Reset / Arrancar de 0
   factoryReset: (mode?: 'clean_zero' | 'restore_demo') => Promise<void>;
 }
@@ -648,6 +651,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [kardex, setKardex] = useState<KardexEntry[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [missingRuleCollections, setMissingRuleCollections] = useState<string[]>([]);
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(DEFAULT_BUSINESS_INFO);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
 
@@ -1487,6 +1491,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onKardex: (entries) => setKardex(entries),
       onSuppliers: (list) => setSuppliers(list),
       onLoans: (list) => setLoans(list),
+      onMissingCollectionPermissions: (colName) => {
+        setMissingRuleCollections((prev) => (prev.includes(colName) ? prev : [...prev, colName]));
+      },
+      onCollectionPermissionOk: (colName) => {
+        setMissingRuleCollections((prev) => prev.filter((c) => c !== colName));
+      },
       onCashShiftHistory: (newHistory) => setCashShiftHistory(newHistory),
       onCashRegisterStatus: (status: CashRegisterStatusDoc) => {
         devLog(`[PosVenecia Realtime] Caja sincronizada en vivo: ${status.isOpen ? 'ABIERTA' : 'CERRADA'}`);
@@ -1621,6 +1631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         activeFirestoreUidRef.current = null;
         setGoogleUser(null);
+        setMissingRuleCollections([]);
         setFirestoreSyncStatus('unauthenticated');
         setDriveSyncStatus('unauthenticated');
         clearAllInMemoryState();
@@ -3352,6 +3363,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         managerPin,
         updateManagerPin,
         isOnline,
+        missingRuleCollections,
         factoryReset
       }}
     >

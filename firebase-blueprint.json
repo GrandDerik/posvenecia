@@ -18,6 +18,7 @@
         "stock": { "type": "number" },
         "minStock": { "type": "number" },
         "isExemptFromIVA": { "type": "boolean" },
+        "priceIncludesIVA": { "type": "boolean" },
         "unit": { "type": "string", "maxLength": 50 },
         "imageUrl": { "type": "string", "maxLength": 350000 },
         "itemType": { "type": "string", "maxLength": 50 },

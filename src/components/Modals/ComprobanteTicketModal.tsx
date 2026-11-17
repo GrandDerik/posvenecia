@@ -90,7 +90,7 @@ export const ComprobanteTicketModal: React.FC<ComprobanteTicketModalProps> = ({
                   <div key={idx} className="text-[10px]">
                     <div className="flex justify-between font-medium">
                       <span>
-                        {item.quantity}x {item.product.name} {itemExempt ? '(E)' : '(G)'}
+                        {item.quantity}x {item.product.name} {itemExempt ? '(E)' : Boolean(item.product.priceIncludesIVA) ? '(G · IVA inc.)' : '(G)'}
                       </span>
                       <span className="font-bold font-mono">
                         Bs. {formatBs(lineBs)}

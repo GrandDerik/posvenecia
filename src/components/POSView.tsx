@@ -46,6 +46,7 @@ import {
   getProductPriceBs,
   getProductPriceUSD,
   isProductExempt,
+  isProductPriceIncludesIVA,
   isCartItemExempt,
   calculateCartFiscalTotals
 } from '../utils/exportUtils';
@@ -295,7 +296,8 @@ export const POSView: React.FC = () => {
     subtotalBs,
     ivaBs,
     igtfBs,
-    totalBs
+    totalBs,
+    inclusiveItemsCount
   } = calculateCartFiscalTotals({
     cart,
     bcvRate,
@@ -860,7 +862,11 @@ export const POSView: React.FC = () => {
                         <span className={`text-[10px] font-bold shrink-0 ${
                           isProductExempt(prod) ? 'text-emerald-700' : 'text-blue-700'
                         }`}>
-                          {isProductExempt(prod) ? 'Exento (E)' : 'IVA 16% (G)'}
+                          {isProductExempt(prod)
+                            ? 'Exento (E)'
+                            : isProductPriceIncludesIVA(prod)
+                              ? 'IVA inc. (G)'
+                              : 'IVA +16% (G)'}
                         </span>
                       </div>
                       {!isService && (
@@ -998,7 +1004,11 @@ export const POSView: React.FC = () => {
                           <span>{prod.code}</span>
                           <span aria-hidden="true" className="text-slate-300">·</span>
                           <span className={`font-sans font-bold ${isProductExempt(prod) ? 'text-emerald-700' : 'text-blue-700'}`}>
-                            {isProductExempt(prod) ? 'Exento (E)' : 'IVA 16% (G)'}
+                            {isProductExempt(prod)
+                              ? 'Exento (E)'
+                              : isProductPriceIncludesIVA(prod)
+                                ? 'IVA inc. (G)'
+                                : 'IVA +16% (G)'}
                           </span>
                           {!isService && (
                             <>
@@ -1274,7 +1284,11 @@ export const POSView: React.FC = () => {
                               effectiveExempt ? 'text-emerald-700' : 'text-blue-700'
                             }`}
                           >
-                            {effectiveExempt ? '(E)' : '(G)'}
+                            {effectiveExempt
+                              ? '(E)'
+                              : Boolean(item.product.priceIncludesIVA)
+                                ? '(G · IVA inc.)'
+                                : '(G)'}
                           </span>
                         </div>
                         <div className="text-[11px] text-slate-500 font-mono-numbers">
@@ -1357,7 +1371,9 @@ export const POSView: React.FC = () => {
                             ? `Ficha: ${productDefaultExempt ? 'Exento' : 'Gravado'} · Ajustado`
                             : productDefaultExempt
                               ? 'Según ficha: Exento'
-                              : 'Según ficha: Gravado'}
+                              : Boolean(item.product.priceIncludesIVA)
+                                ? 'Precio final (IVA inc.)'
+                                : 'Según ficha: Gravado +16%'}
                       </span>
                     </div>
                   </div>
@@ -1412,10 +1428,17 @@ export const POSView: React.FC = () => {
                   <span className="font-semibold text-slate-800">${formatUSD(taxableUSD)} (Bs {formatBs(taxableBs)})</span>
                 </div>
                 {applyIVA && taxableUSD > 0 ? (
-                  <div className="flex justify-between text-blue-700 font-bold">
-                    <span>IVA (16% s/ Base G):</span>
-                    <span>+${formatUSD(ivaUSD)} (+Bs {formatBs(ivaBs)})</span>
-                  </div>
+                  <>
+                    <div className="flex justify-between text-blue-700 font-bold">
+                      <span>IVA (16% s/ Base G):</span>
+                      <span>${formatUSD(ivaUSD)} (Bs {formatBs(ivaBs)})</span>
+                    </div>
+                    {inclusiveItemsCount > 0 && (
+                      <div className="text-[10px] font-sans text-slate-500 leading-tight">
+                        Desglose SENIAT aplicado (Precio ÷ 1,16) en ítems con IVA incluido, sin recargo extra.
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="flex justify-between text-emerald-700 text-[11px]">
                     <span>IVA (16%):</span>

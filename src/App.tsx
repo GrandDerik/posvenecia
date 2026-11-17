@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
@@ -17,8 +17,9 @@ import { NotaCreditoModal } from './components/Modals/NotaCreditoModal';
 import { DesincorporarStockModal } from './components/Modals/DesincorporarStockModal';
 import { ComprobanteNotaCreditoModal } from './components/Modals/ComprobanteNotaCreditoModal';
 import { LoginView } from './components/LoginView';
-import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X, Copy, Check } from 'lucide-react';
 import { formatBs } from './utils/exportUtils';
+import firestoreRulesSource from '../firestore.rules?raw';
 
 const AppContent: React.FC = () => {
   const { 
@@ -38,8 +39,22 @@ const AppContent: React.FC = () => {
     lastCompletedCreditNote,
     setLastCompletedCreditNote,
     notification,
-    dismissNotification
+    dismissNotification,
+    missingRuleCollections
   } = useApp();
+
+  const [dismissedRulesBanner, setDismissedRulesBanner] = useState(false);
+  const [copiedRules, setCopiedRules] = useState(false);
+
+  const handleCopyFirestoreRules = async () => {
+    try {
+      await navigator.clipboard.writeText(firestoreRulesSource);
+      setCopiedRules(true);
+      setTimeout(() => setCopiedRules(false), 3000);
+    } catch {
+      setCopiedRules(false);
+    }
+  };
 
   if (isAuthLoading) {
     return (
@@ -67,6 +82,43 @@ const AppContent: React.FC = () => {
     <div className="min-h-screen flex flex-col relative bg-[#EEF2F7] text-slate-900">
       {/* Top Navbar with BCV ticker and tabs */}
       <Navbar />
+
+      {/* Actionable Banner when external Firebase Console still runs older firestore.rules */}
+      {missingRuleCollections.length > 0 && !dismissedRulesBanner && (
+        <div className="max-w-6xl w-full mx-auto px-3 sm:px-6 pt-3">
+          <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-2xs">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5 min-w-0">
+                <div className="font-extrabold">
+                  Actualiza tus reglas de Firestore para habilitar: {missingRuleCollections.join(', ')}
+                </div>
+                <p className="text-[11px] text-amber-800 leading-snug">
+                  Copia el archivo <code className="font-mono font-bold">firestore.rules</code> actualizado y pégalo en <strong>Firebase Console → Firestore Database → Reglas → Publicar</strong>.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleCopyFirestoreRules}
+                className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                {copiedRules ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedRules ? 'Reglas copiadas' : 'Copiar firestore.rules'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDismissedRulesBanner(true)}
+                aria-label="Cerrar aviso"
+                className="p-1.5 rounded-lg hover:bg-amber-200/60 text-amber-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Global Dismissible Notification Banner / Toast */}
       {notification && (

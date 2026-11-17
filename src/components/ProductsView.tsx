@@ -77,6 +77,7 @@ export const ProductsView: React.FC = () => {
   const [minStock, setMinStock] = useState('5');
   const [unit, setUnit] = useState('unidad');
   const [isExemptFromIVA, setIsExemptFromIVA] = useState(true);
+  const [priceIncludesIVA, setPriceIncludesIVA] = useState(true);
   const [isService, setIsService] = useState(false);
 
   // Photo & Purchase Note
@@ -119,6 +120,7 @@ export const ProductsView: React.FC = () => {
     setMinStock('5');
     setUnit('unidad');
     setIsExemptFromIVA(true);
+    setPriceIncludesIVA(true);
     setIsService(false);
     setImageUrl('');
     setPurchaseNote('');
@@ -170,6 +172,7 @@ export const ProductsView: React.FC = () => {
     setMinStock(p.minStock.toString());
     setUnit(p.unit);
     setIsExemptFromIVA(p.isExemptFromIVA);
+    setPriceIncludesIVA(p.isExemptFromIVA ? true : Boolean(p.priceIncludesIVA));
     setIsService(Boolean(p.isService || p.itemType === 'servicio'));
     setImageUrl(p.imageUrl || '');
     setPurchaseNote(p.purchaseNote || '');
@@ -338,6 +341,7 @@ export const ProductsView: React.FC = () => {
       minStock: isService ? 0 : (parseInt(minStock) || 5),
       unit: unit.trim() || (isService ? 'servicio' : 'unidad'),
       isExemptFromIVA,
+      priceIncludesIVA: isExemptFromIVA ? false : priceIncludesIVA,
       itemType: isService ? 'servicio' : 'producto',
       isService,
       imageUrl: imageUrl.trim() || undefined,
@@ -378,7 +382,9 @@ export const ProductsView: React.FC = () => {
       'Stock Actual': (p.isService || p.itemType === 'servicio') ? 'Ilimitado' : p.stock,
       'Stock Mínimo': (p.isService || p.itemType === 'servicio') ? '-' : p.minStock,
       'Unidad': p.unit,
-      'Tratamiento Fiscal': p.isExemptFromIVA ? 'Exento de IVA' : 'Gravado 16%',
+      'Tratamiento Fiscal': p.isExemptFromIVA
+        ? 'Exento de IVA'
+        : (p.priceIncludesIVA ? 'Gravado 16% (IVA incluido)' : 'Gravado +16%'),
       'Nota de Compra / Factura': p.purchaseNote || '-'
     }));
 
@@ -669,12 +675,16 @@ export const ProductsView: React.FC = () => {
                     </td>
 
                     <td className="py-3 px-4 text-center">
-                      <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${
+                      <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold whitespace-nowrap ${
                         prod.isExemptFromIVA 
                           ? 'bg-[#E7F8EE] border-[#A7E6C4] text-[#065F46]' 
                           : 'bg-[#EBF3FE] border-[#C5DCFC] text-[#1D4ED8]'
                       }`}>
-                        {prod.isExemptFromIVA ? 'Exento (E)' : 'Gravado 16%'}
+                        {prod.isExemptFromIVA
+                          ? 'Exento (E)'
+                          : prod.priceIncludesIVA
+                            ? 'Gravado (IVA inc.)'
+                            : 'Gravado +16%'}
                       </span>
                     </td>
 
@@ -1408,8 +1418,8 @@ export const ProductsView: React.FC = () => {
                 />
               </div>
 
-              {/* Treatment SENIAT (Exempt from IVA) */}
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+              {/* Treatment SENIAT (Exempt from IVA & IVA-Included Pricing) */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
                 <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-800">
                   <input
                     type="checkbox"
@@ -1419,6 +1429,56 @@ export const ProductsView: React.FC = () => {
                   />
                   <span>Producto Exento de IVA (Alimentos de la cesta básica según SENIAT)</span>
                 </label>
+
+                {!isExemptFromIVA && (
+                  <div className="pt-2.5 border-t border-slate-200 space-y-2">
+                    <label className="flex items-start gap-2 cursor-pointer text-xs font-bold text-[#0B1528]">
+                      <input
+                        type="checkbox"
+                        checked={priceIncludesIVA}
+                        onChange={(e) => setPriceIncludesIVA(e.target.checked)}
+                        className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
+                      />
+                      <span className="leading-snug">
+                        Precio con IVA incluido (16%)
+                        <span className="block text-[11px] font-normal text-slate-500 mt-0.5">
+                          {priceIncludesIVA
+                            ? 'El precio ingresado es el PVP final. El sistema desglosará Base Imponible (Precio ÷ 1,16) e IVA 16% internamente sin sumar 16% adicional.'
+                            : 'El precio ingresado es la Base Imponible (G). Al vender, el sistema sumará el 16% de IVA por encima.'}
+                        </span>
+                      </span>
+                    </label>
+
+                    {(() => {
+                      const enteredVal = activeCurrencyInput === 'Bs'
+                        ? (parseFloat(priceBs) || 0)
+                        : (parseFloat(priceUSD) || 0);
+                      if (enteredVal <= 0) return null;
+
+                      const baseVal = priceIncludesIVA ? round2(enteredVal / 1.16) : round2(enteredVal);
+                      const ivaVal = priceIncludesIVA ? round2(enteredVal - baseVal) : round2(baseVal * 0.16);
+                      const pvpVal = priceIncludesIVA ? round2(enteredVal) : round2(baseVal + ivaVal);
+                      const fmt = (n: number) => activeCurrencyInput === 'Bs' ? `Bs. ${formatBs(n)}` : `$${formatUSD(n)}`;
+
+                      return (
+                        <div className="grid grid-cols-3 gap-2 bg-white border border-[#DCE4F0] rounded-xl p-2.5 text-[11px] font-mono-numbers">
+                          <div>
+                            <span className="block text-[10px] font-sans font-semibold text-slate-500">Base Imponible (G)</span>
+                            <span className="font-bold text-[#0B1528]">{fmt(baseVal)}</span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-sans font-semibold text-slate-500">IVA (16%)</span>
+                            <span className="font-bold text-[#1D4ED8]">{fmt(ivaVal)}</span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-sans font-semibold text-slate-500">PVP Final</span>
+                            <span className="font-extrabold text-emerald-700">{fmt(pvpVal)}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
 
               {formError && (

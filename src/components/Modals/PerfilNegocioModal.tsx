@@ -38,10 +38,12 @@ import {
   Server,
   HardDrive,
   CheckCircle2,
-  Shield
+  Shield,
+  Copy
 } from 'lucide-react';
 import { PagoMovilAccount, POSTerminal, BankAccount } from '../../types';
 import { BackupDriveModal } from './BackupDriveModal';
+import firestoreRulesSource from '../../../firestore.rules?raw';
 
 interface PerfilNegocioModalProps {
   isOpen: boolean;
@@ -111,6 +113,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
   const [newBankHolder, setNewBankHolder] = useState('');
   const [newBankCI, setNewBankCI] = useState('');
   const [newBankEmail, setNewBankEmail] = useState('');
+  const [copiedFirestoreRules, setCopiedFirestoreRules] = useState(false);
 
   // Account CRUD async state & delete confirmation modal
   const [isSavingAccountAction, setIsSavingAccountAction] = useState(false);
@@ -1639,6 +1642,35 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                     <div className="text-[11px] text-slate-500 mt-0.5">Agrega las variables VITE_* y despliega</div>
                   </div>
                 </div>
+              </div>
+
+              {/* Firestore Security Rules Copy Helper */}
+              <div className="border border-blue-200 rounded-2xl p-4 bg-blue-50/40 space-y-3 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-black text-[#0B1528] uppercase tracking-wider">
+                    <ShieldCheck className="w-4 h-4 text-[#1D4ED8]" />
+                    <span>Reglas de Firestore (firestore.rules)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(firestoreRulesSource);
+                        setCopiedFirestoreRules(true);
+                        setTimeout(() => setCopiedFirestoreRules(false), 3000);
+                      } catch {
+                        setCopiedFirestoreRules(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-[#1D4ED8] hover:bg-blue-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    {copiedFirestoreRules ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedFirestoreRules ? 'Reglas copiadas' : 'Copiar firestore.rules'}</span>
+                  </button>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Si utilizas tu propio proyecto en Firebase Console, pega estas reglas en <strong>Firestore Database → Reglas → Publicar</strong> para habilitar todas las colecciones aisladas bajo <code className="font-mono font-bold text-[#0B1528]">users/{'{userId}'}</code> (incluyendo <code className="font-mono">suppliers</code>, <code className="font-mono">kardex</code> y <code className="font-mono">loans</code>).
+                </p>
               </div>
 
             </div>

@@ -94,6 +94,8 @@ export interface FirestoreStoreListeners {
   onKardex?: (entries: KardexEntry[]) => void;
   onSuppliers?: (suppliers: Supplier[]) => void;
   onLoans?: (loans: Loan[]) => void;
+  onMissingCollectionPermissions?: (collectionName: string) => void;
+  onCollectionPermissionOk?: (collectionName: string) => void;
   onError?: (error: Error) => void;
 }
 
@@ -334,6 +336,26 @@ const mapGastoCategoryToExpenseCategory = (cat: GastoOperativoCategory): Expense
   return 'Otros';
 };
 
+const deniedOptionalCollections = new Set<string>();
+
+export const isPermissionDeniedError = (err: unknown): boolean => {
+  const code = (err as any)?.code;
+  const msg = err instanceof Error ? err.message : String(err || '');
+  return code === 'permission-denied' || /missing or insufficient permissions|permission-denied/i.test(msg);
+};
+
+const isOptionalCollectionDenied = (userId: string, colName: string): boolean => {
+  return deniedOptionalCollections.has(`${userId}:${colName}`);
+};
+
+const markOptionalCollectionDenied = (userId: string, colName: string): void => {
+  deniedOptionalCollections.add(`${userId}:${colName}`);
+};
+
+const clearOptionalCollectionDenied = (userId: string, colName: string): void => {
+  deniedOptionalCollections.delete(`${userId}:${colName}`);
+};
+
 /**
  * Subscribe to all user-scoped collections in real-time via onSnapshot for instant multi-device sync.
  * All paths strictly live under `users/{uid}/...`.
@@ -534,6 +556,8 @@ export const subscribeToStoreRealtime = (
     onSnapshot(
       collection(db, 'users', userId, 'kardex'),
       (snapshot) => {
+        clearOptionalCollectionDenied(userId, 'kardex');
+        callbacks.onCollectionPermissionOk?.('kardex');
         const entries: KardexEntry[] = [];
         snapshot.forEach((d) => {
           entries.push(d.data() as KardexEntry);
@@ -543,7 +567,15 @@ export const subscribeToStoreRealtime = (
           callbacks.onKardex(entries);
         }
       },
-      (err) => handleErr(OperationType.GET, kardexPath, err)
+      (err) => {
+        if (isPermissionDeniedError(err)) {
+          markOptionalCollectionDenied(userId, 'kardex');
+          callbacks.onKardex?.([]);
+          callbacks.onMissingCollectionPermissions?.('kardex');
+          return;
+        }
+        handleErr(OperationType.LIST, kardexPath, err);
+      }
     )
   );
 
@@ -553,6 +585,8 @@ export const subscribeToStoreRealtime = (
     onSnapshot(
       collection(db, 'users', userId, 'suppliers'),
       (snapshot) => {
+        clearOptionalCollectionDenied(userId, 'suppliers');
+        callbacks.onCollectionPermissionOk?.('suppliers');
         const suppliers: Supplier[] = [];
         snapshot.forEach((d) => {
           suppliers.push(d.data() as Supplier);
@@ -562,7 +596,15 @@ export const subscribeToStoreRealtime = (
           callbacks.onSuppliers(suppliers);
         }
       },
-      (err) => handleErr(OperationType.GET, suppliersPath, err)
+      (err) => {
+        if (isPermissionDeniedError(err)) {
+          markOptionalCollectionDenied(userId, 'suppliers');
+          callbacks.onSuppliers?.([]);
+          callbacks.onMissingCollectionPermissions?.('suppliers');
+          return;
+        }
+        handleErr(OperationType.LIST, suppliersPath, err);
+      }
     )
   );
 
@@ -572,6 +614,8 @@ export const subscribeToStoreRealtime = (
     onSnapshot(
       collection(db, 'users', userId, 'loans'),
       (snapshot) => {
+        clearOptionalCollectionDenied(userId, 'loans');
+        callbacks.onCollectionPermissionOk?.('loans');
         const loans: Loan[] = [];
         snapshot.forEach((d) => {
           loans.push(d.data() as Loan);
@@ -581,7 +625,15 @@ export const subscribeToStoreRealtime = (
           callbacks.onLoans(loans);
         }
       },
-      (err) => handleErr(OperationType.GET, loansPath, err)
+      (err) => {
+        if (isPermissionDeniedError(err)) {
+          markOptionalCollectionDenied(userId, 'loans');
+          callbacks.onLoans?.([]);
+          callbacks.onMissingCollectionPermissions?.('loans');
+          return;
+        }
+        handleErr(OperationType.LIST, loansPath, err);
+      }
     )
   );
 
@@ -907,8 +959,10 @@ export const saveSaleAtomic = async (
 
         for (const item of preparedUpdates) {
           tx.update(item.ref, item.patch);
-          const kRef = doc(db, 'users', userId, 'kardex', item.kardex.id);
-          tx.set(kRef, cleanForFirestore(item.kardex));
+          if (!isOptionalCollectionDenied(userId, 'kardex')) {
+            const kRef = doc(db, 'users', userId, 'kardex', item.kardex.id);
+            tx.set(kRef, cleanForFirestore(item.kardex));
+          }
         }
 
         if (newFiado) {
@@ -1050,7 +1104,9 @@ export const cancelSaleAtomic = async (
 
         for (const u of prodUpdates) {
           tx.update(u.ref, u.patch);
-          tx.set(doc(db, 'users', userId, 'kardex', u.kardex.id), cleanForFirestore(u.kardex));
+          if (!isOptionalCollectionDenied(userId, 'kardex')) {
+            tx.set(doc(db, 'users', userId, 'kardex', u.kardex.id), cleanForFirestore(u.kardex));
+          }
         }
 
         for (let i = 0; i < fiadoRefs.length; i++) {
@@ -1144,9 +1200,9 @@ export const saveCreditNoteAtomic = async (
           });
         }
 
-        let refundedSubtotalUSD = 0;
-        let refundedTaxableUSD = 0;
         let refundedExemptUSD = 0;
+        let refundedInclusiveGrossUSD = 0;
+        let refundedExclusiveTaxableUSD = 0;
         const ncItems: CreditNoteItem[] = [];
         const stockRestorationMap = new Map<string, number>();
         const nextReturnedQuantities: Record<string, number> = { ...priorReturnedMap };
@@ -1173,7 +1229,6 @@ export const saveCreditNoteAtomic = async (
           nextReturnedQuantities[originalItem.product.id] = round2(alreadyReturned + requestedQty);
           const unitPriceUSD = originalItem.unitPriceUSD;
           const totalItemUSD = round2(requestedQty * unitPriceUSD);
-          refundedSubtotalUSD = round2(refundedSubtotalUSD + totalItemUSD);
 
           const itemExempt = typeof originalItem.isExemptFromIVA === 'boolean'
             ? originalItem.isExemptFromIVA
@@ -1181,8 +1236,10 @@ export const saveCreditNoteAtomic = async (
 
           if (itemExempt) {
             refundedExemptUSD = round2(refundedExemptUSD + totalItemUSD);
+          } else if (Boolean(originalItem.product.priceIncludesIVA)) {
+            refundedInclusiveGrossUSD = round2(refundedInclusiveGrossUSD + totalItemUSD);
           } else {
-            refundedTaxableUSD = round2(refundedTaxableUSD + totalItemUSD);
+            refundedExclusiveTaxableUSD = round2(refundedExclusiveTaxableUSD + totalItemUSD);
           }
 
           ncItems.push({
@@ -1216,13 +1273,20 @@ export const saveCreditNoteAtomic = async (
           Promise.all(fiadoRefs.map((ref) => tx.get(ref)))
         ]);
 
+        const incBaseUSD = refundedInclusiveGrossUSD > 0 ? round2(refundedInclusiveGrossUSD / 1.16) : 0;
+        const incIvaUSD = refundedInclusiveGrossUSD > 0 ? round2(refundedInclusiveGrossUSD - incBaseUSD) : 0;
+        const excIvaUSD = refundedExclusiveTaxableUSD > 0 ? round2(refundedExclusiveTaxableUSD * 0.16) : 0;
+        const refundedTaxableUSD = round2(incBaseUSD + refundedExclusiveTaxableUSD);
+        const refundedSubtotalUSD = round2(refundedExemptUSD + refundedTaxableUSD);
+        const rawRefundedIvaUSD = round2(incIvaUSD + excIvaUSD);
+
         const remainingIvaBudget = round2(
           Math.max(
             0,
             liveSale.ivaUSD - priorCreditNotesForSale.reduce((sum, nc) => sum + (nc.ivaUSD || 0), 0)
           )
         );
-        const refundedIvaUSD = liveSale.ivaUSD > 0 ? Math.min(remainingIvaBudget, round2(refundedTaxableUSD * 0.16)) : 0;
+        const refundedIvaUSD = liveSale.ivaUSD > 0 ? Math.min(remainingIvaBudget, rawRefundedIvaUSD) : 0;
 
         const remainingIgtfBudget = round2(
           Math.max(
@@ -1332,7 +1396,9 @@ export const saveCreditNoteAtomic = async (
 
         for (const u of prodUpdates) {
           tx.update(u.ref, u.patch);
-          tx.set(doc(db, 'users', userId, 'kardex', u.kardex.id), cleanForFirestore(u.kardex));
+          if (!isOptionalCollectionDenied(userId, 'kardex')) {
+            tx.set(doc(db, 'users', userId, 'kardex', u.kardex.id), cleanForFirestore(u.kardex));
+          }
         }
 
         for (let i = 0; i < fiadoRefs.length; i++) {
@@ -1428,7 +1494,9 @@ export const saveInventoryDischargeAtomic = async (
         if (associatedExpense) {
           tx.set(doc(db, 'users', userId, 'expenses', associatedExpense.id), cleanForFirestore(associatedExpense));
         }
-        tx.set(doc(db, 'users', userId, 'kardex', kardexEntry.id), cleanForFirestore(kardexEntry));
+        if (!isOptionalCollectionDenied(userId, 'kardex')) {
+          tx.set(doc(db, 'users', userId, 'kardex', kardexEntry.id), cleanForFirestore(kardexEntry));
+        }
       });
       devLog(`[PosVenecia Firestore] Desincorporación ${discharge.dischargeNumber} guardada transaccionalmente.`);
     } catch (err) {
@@ -1495,7 +1563,7 @@ export const saveProductWithKardexAtomic = async (
       if (product.priceBsFixed === undefined) cleaned.priceBsFixed = deleteField();
       if (product.costBsFixed === undefined) cleaned.costBsFixed = deleteField();
       batch.set(doc(db, 'users', userId, 'products', product.id), cleaned, { merge: true });
-      if (kardexEntry) {
+      if (kardexEntry && !isOptionalCollectionDenied(userId, 'kardex')) {
         batch.set(doc(db, 'users', userId, 'kardex', kardexEntry.id), cleanForFirestore(kardexEntry));
       }
       await batch.commit();
@@ -1560,7 +1628,9 @@ export const adjustProductStockInFirestore = async (
             notes: kardexMeta?.notes || 'Ajuste manual directo desde catálogo',
             userName: kardexMeta?.userName
           });
-          tx.set(doc(db, 'users', userId, 'kardex', kardex.id), cleanForFirestore(kardex));
+          if (!isOptionalCollectionDenied(userId, 'kardex')) {
+            tx.set(doc(db, 'users', userId, 'kardex', kardex.id), cleanForFirestore(kardex));
+          }
         }
       });
     } catch (err) {
@@ -1737,8 +1807,10 @@ export const saveExpenseWithInventoryAtomic = async (
           }
         }
 
-        for (const kEntry of kardexEntries) {
-          tx.set(doc(db, 'users', userId, 'kardex', kEntry.id), cleanForFirestore(kEntry));
+        if (!isOptionalCollectionDenied(userId, 'kardex')) {
+          for (const kEntry of kardexEntries) {
+            tx.set(doc(db, 'users', userId, 'kardex', kEntry.id), cleanForFirestore(kEntry));
+          }
         }
       });
 
@@ -2500,6 +2572,18 @@ export const fetchFullStoreSnapshotForBackup = async (
   userEmail: string = ''
 ): Promise<BackupDataPayload> => {
   const userId = getCanonicalUserId(uid);
+  const safeGetOptionalDocs = async (colName: string) => {
+    try {
+      return await getDocs(collection(db, 'users', userId, colName));
+    } catch (err) {
+      if (isPermissionDeniedError(err)) {
+        markOptionalCollectionDenied(userId, colName);
+        return { docs: [] as Array<{ data: () => unknown }> };
+      }
+      throw err;
+    }
+  };
+
   const [
     productsSnap,
     salesSnap,
@@ -2524,12 +2608,12 @@ export const fetchFullStoreSnapshotForBackup = async (
     getDocs(collection(db, 'users', userId, 'clients')),
     getDocs(collection(db, 'users', userId, 'cuentasPorPagar')),
     getDocs(collection(db, 'users', userId, 'gastosOperativos')),
-    getDocs(collection(db, 'users', userId, 'suppliers')),
-    getDocs(collection(db, 'users', userId, 'loans')),
+    safeGetOptionalDocs('suppliers'),
+    safeGetOptionalDocs('loans'),
     getDocs(collection(db, 'users', userId, 'cashShiftHistory')),
     getDocs(collection(db, 'users', userId, 'creditNotes')),
     getDocs(collection(db, 'users', userId, 'inventoryDischarges')),
-    getDocs(collection(db, 'users', userId, 'kardex')),
+    safeGetOptionalDocs('kardex'),
     getDoc(doc(db, 'users', userId, 'businessProfile', 'profile')),
     getDoc(doc(db, 'users', userId, 'cashRegister', 'status'))
   ]);
@@ -2710,7 +2794,15 @@ export const clearUserFirestoreCollections = async (uid: string): Promise<void> 
 
   const op = (async () => {
     for (const colName of collectionsToClear) {
-      const snap = await getDocs(collection(db, 'users', userId, colName));
+      let snap;
+      try {
+        snap = await getDocs(collection(db, 'users', userId, colName));
+      } catch (err) {
+        if (isPermissionDeniedError(err) && (colName === 'suppliers' || colName === 'loans')) {
+          continue;
+        }
+        throw err;
+      }
       if (snap.empty) continue;
       const docs = snap.docs;
       const chunkSize = 400;

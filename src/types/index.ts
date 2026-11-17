@@ -26,6 +26,7 @@ export interface Product {
   stock: number;
   minStock: number;
   isExemptFromIVA: boolean; // Alimentos básicos exentos de IVA según ley venezolana
+  priceIncludesIVA?: boolean; // True si el precio de venta ya incluye el 16% de IVA (desglose SENIAT)
   unit: string;
   imageUrl?: string;
   itemType?: ItemType; // 'producto' o 'servicio'

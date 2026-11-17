@@ -62,6 +62,14 @@ export const isCartItemExempt = (item: Pick<CartItem, 'product' | 'isExemptFromI
   return isProductExempt(item.product);
 };
 
+/**
+ * Evaluates whether a taxable (non-exempt) product has its sale price configured as IVA-inclusive.
+ */
+export const isProductPriceIncludesIVA = (product?: Partial<Product> | null): boolean => {
+  if (!product || isProductExempt(product)) return false;
+  return Boolean(product.priceIncludesIVA);
+};
+
 export interface CartFiscalTotals {
   exemptUSD: number;
   taxableUSD: number;
@@ -78,12 +86,15 @@ export interface CartFiscalTotals {
   hasFixedBsItems: boolean;
   exemptItemsCount: number;
   taxableItemsCount: number;
+  inclusiveItemsCount: number;
 }
 
 /**
  * Single source of truth for SENIAT bimonetary fiscal math in both POSView and completeSale.
- * Separates Exento (E) and Base Imponible Gravada (G) strictly per item, applying 16% IVA
- * exclusively to Base Imponible (G) and ensuring exact accounting identity in USD and Bs.
+ * Separates Exento (E) and Base Imponible Gravada (G) strictly per item:
+ * - Gravado with priceIncludesIVA: decomposes Base = Precio / 1.16 and IVA = Precio - Base (no extra 16%).
+ * - Gravado standard (!priceIncludesIVA): treats Precio as Base Imponible and adds 16% IVA on top.
+ * Guarantees exact accounting identity (Subtotal Exento + Base Imponible + IVA + IGTF = Total) in USD and Bs.
  */
 export const calculateCartFiscalTotals = (params: {
   cart: CartItem[];
@@ -97,12 +108,17 @@ export const calculateCartFiscalTotals = (params: {
   const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
 
   let rawExemptUSD = 0;
-  let rawTaxableUSD = 0;
+  let rawInclusiveGrossUSD = 0;
+  let rawExclusiveTaxableUSD = 0;
+
   let rawExemptBs = 0;
-  let rawTaxableBs = 0;
+  let rawInclusiveGrossBs = 0;
+  let rawExclusiveTaxableBs = 0;
+
   let hasFixedBsItems = false;
   let exemptItemsCount = 0;
   let taxableItemsCount = 0;
+  let inclusiveItemsCount = 0;
 
   cart.forEach((item) => {
     const itemTotalUSD = round2(item.quantity * item.unitPriceUSD);
@@ -116,17 +132,30 @@ export const calculateCartFiscalTotals = (params: {
       rawExemptUSD += itemTotalUSD;
       rawExemptBs += itemTotalBs;
       exemptItemsCount += 1;
+    } else if (Boolean(item.product.priceIncludesIVA)) {
+      rawInclusiveGrossUSD += itemTotalUSD;
+      rawInclusiveGrossBs += itemTotalBs;
+      taxableItemsCount += 1;
+      inclusiveItemsCount += 1;
     } else {
-      rawTaxableUSD += itemTotalUSD;
-      rawTaxableBs += itemTotalBs;
+      rawExclusiveTaxableUSD += itemTotalUSD;
+      rawExclusiveTaxableBs += itemTotalBs;
       taxableItemsCount += 1;
     }
   });
 
+  // USD fiscal breakdown
   const exemptUSD = round2(rawExemptUSD);
-  const taxableUSD = round2(rawTaxableUSD);
+  const incGrossUSD = round2(rawInclusiveGrossUSD);
+  const incBaseUSD = incGrossUSD > 0 ? round2(incGrossUSD / 1.16) : 0;
+  const incIvaUSD = incGrossUSD > 0 ? round2(incGrossUSD - incBaseUSD) : 0;
+
+  const excBaseUSD = round2(rawExclusiveTaxableUSD);
+  const excIvaUSD = applyIVA && excBaseUSD > 0 ? round2(excBaseUSD * 0.16) : 0;
+
+  const taxableUSD = round2(incBaseUSD + excBaseUSD);
+  const ivaUSD = applyIVA ? round2(incIvaUSD + excIvaUSD) : 0;
   const subtotalUSD = round2(exemptUSD + taxableUSD);
-  const ivaUSD = applyIVA && taxableUSD > 0 ? round2(taxableUSD * 0.16) : 0;
 
   let igtfUSD = 0;
   if (applyIGTF) {
@@ -139,12 +168,20 @@ export const calculateCartFiscalTotals = (params: {
 
   const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
 
+  // Bs fiscal breakdown (exact preservation of Bs-fixed prices & IVA-included PVP)
   const exemptBs = hasFixedBsItems ? round2(rawExemptBs) : round2(exemptUSD * safeRate);
-  const taxableBs = hasFixedBsItems ? round2(rawTaxableBs) : round2(taxableUSD * safeRate);
-  const subtotalBs = round2(exemptBs + taxableBs);
-  const ivaBs = applyIVA && taxableBs > 0
-    ? (hasFixedBsItems ? round2(taxableBs * 0.16) : round2(ivaUSD * safeRate))
+  const incGrossBs = hasFixedBsItems ? round2(rawInclusiveGrossBs) : round2(incGrossUSD * safeRate);
+  const incBaseBs = incGrossBs > 0 ? round2(incGrossBs / 1.16) : 0;
+  const incIvaBs = incGrossBs > 0 ? round2(incGrossBs - incBaseBs) : 0;
+
+  const excBaseBs = hasFixedBsItems ? round2(rawExclusiveTaxableBs) : round2(excBaseUSD * safeRate);
+  const excIvaBs = applyIVA && excBaseBs > 0
+    ? (hasFixedBsItems ? round2(excBaseBs * 0.16) : round2(excIvaUSD * safeRate))
     : 0;
+
+  const taxableBs = round2(incBaseBs + excBaseBs);
+  const ivaBs = applyIVA ? round2(incIvaBs + excIvaBs) : 0;
+  const subtotalBs = round2(exemptBs + taxableBs);
   const igtfBs = igtfUSD > 0 ? round2(igtfUSD * safeRate) : 0;
   const totalBs = round2(subtotalBs + ivaBs + igtfBs);
 
@@ -163,7 +200,8 @@ export const calculateCartFiscalTotals = (params: {
     totalBs,
     hasFixedBsItems,
     exemptItemsCount,
-    taxableItemsCount
+    taxableItemsCount,
+    inclusiveItemsCount
   };
 };
 

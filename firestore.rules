@@ -69,6 +69,7 @@ service cloud.firestore {
         && isOptNumber(data, 'stock')
         && isOptNumber(data, 'minStock')
         && isOptBool(data, 'isExemptFromIVA')
+        && isOptBool(data, 'priceIncludesIVA')
         && isOptString(data, 'unit', 50)
         && isOptString(data, 'imageUrl', 350000)
         && isOptString(data, 'itemType', 50)

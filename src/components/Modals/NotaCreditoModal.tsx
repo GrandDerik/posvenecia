@@ -123,8 +123,9 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
   const refundTotals = useMemo(() => {
     if (!selectedSale) return { subtotalUSD: 0, ivaUSD: 0, igtfUSD: 0, totalUSD: 0, totalBs: 0, count: 0 };
     
-    let subUSD = 0;
-    let taxUSD = 0;
+    let exemptReturnUSD = 0;
+    let incGrossReturnUSD = 0;
+    let excTaxableReturnUSD = 0;
     let count = 0;
 
     selectedSale.items.forEach(item => {
@@ -134,23 +135,32 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
       if (ret && ret.selected && ret.quantity > 0 && remaining > 0) {
         const clampedQty = Math.min(ret.quantity, remaining);
         const itemTotal = Number((item.unitPriceUSD * clampedQty).toFixed(2));
-        subUSD += itemTotal;
         count += clampedQty;
         const itemExempt = typeof item.isExemptFromIVA === 'boolean'
           ? item.isExemptFromIVA
           : Boolean(item.product.isExemptFromIVA);
-        if (!itemExempt) {
-          taxUSD += itemTotal;
+        if (itemExempt) {
+          exemptReturnUSD += itemTotal;
+        } else if (Boolean(item.product.priceIncludesIVA)) {
+          incGrossReturnUSD += itemTotal;
+        } else {
+          excTaxableReturnUSD += itemTotal;
         }
       }
     });
+
+    const incBaseUSD = incGrossReturnUSD > 0 ? Number((incGrossReturnUSD / 1.16).toFixed(2)) : 0;
+    const incIvaUSD = incGrossReturnUSD > 0 ? Number((incGrossReturnUSD - incBaseUSD).toFixed(2)) : 0;
+    const excIvaUSD = excTaxableReturnUSD > 0 ? Number((excTaxableReturnUSD * 0.16).toFixed(2)) : 0;
+    const subUSD = Number((exemptReturnUSD + incBaseUSD + excTaxableReturnUSD).toFixed(2));
+    const rawIvaUSD = Number((incIvaUSD + excIvaUSD).toFixed(2));
 
     const rate = selectedSale.bcvRate || bcvRate;
     const remainingIvaBudget = Number(Math.max(0, selectedSale.ivaUSD - creditNotes
       .filter(nc => nc.saleId === selectedSale.id)
       .reduce((sum, nc) => sum + (nc.ivaUSD || 0), 0)).toFixed(2));
     const ivaUSD = selectedSale.ivaUSD > 0
-      ? Math.min(remainingIvaBudget, Number((taxUSD * 0.16).toFixed(2)))
+      ? Math.min(remainingIvaBudget, rawIvaUSD)
       : 0;
     const remainingIgtfBudget = Number(Math.max(0, selectedSale.igtfUSD - creditNotes
       .filter(nc => nc.saleId === selectedSale.id)
@@ -161,7 +171,7 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
     const totalUSD = Number((subUSD + ivaUSD + igtfUSD).toFixed(2));
     const totalBs = Number((totalUSD * rate).toFixed(2));
 
-    return { subtotalUSD: Number(subUSD.toFixed(2)), ivaUSD, igtfUSD, totalUSD, totalBs, count };
+    return { subtotalUSD: subUSD, ivaUSD, igtfUSD, totalUSD, totalBs, count };
   }, [selectedSale, returnItems, refundMethod, bcvRate, creditNotes]);
 
   if (!isOpen) return null;

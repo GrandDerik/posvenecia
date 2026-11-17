@@ -135,7 +135,9 @@ export const downloadComprehensiveAccountingExcel = (data: {
     'Stock': (p.isService || p.itemType === 'servicio') ? 'Ilimitado' : p.stock,
     'Stock Mínimo': (p.isService || p.itemType === 'servicio') ? '-' : p.minStock,
     'Unidad': p.unit,
-    'Tratamiento IVA': p.isExemptFromIVA ? 'Exento' : 'Gravado 16%',
+    'Tratamiento IVA': p.isExemptFromIVA
+      ? 'Exento'
+      : (p.priceIncludesIVA ? 'Gravado 16% (IVA incluido)' : 'Gravado +16%'),
     'Nota de Compra / Factura': p.purchaseNote || '-'
   }));
   const wsProducts = XLSX.utils.json_to_sheet(productsSheetData);
