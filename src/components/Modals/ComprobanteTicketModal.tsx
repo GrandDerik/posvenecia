@@ -108,8 +108,20 @@ export const ComprobanteTicketModal: React.FC<ComprobanteTicketModalProps> = ({
 
             {/* Totals Breakdown (SENIAT Separation) */}
             <div className="space-y-1 text-[10px] border-b border-dashed border-slate-300 pb-2">
+              {((sale.discountBs ?? 0) > 0 || (sale.discountUSD ?? 0) > 0) && (
+                <>
+                  <div className="flex justify-between text-slate-600">
+                    <span>SUBTOTAL BRUTO:</span>
+                    <span>Bs. {formatBs(sale.grossSubtotalBs ?? round2(sale.subtotalBs + (sale.discountBs || 0)))}</span>
+                  </div>
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>DESCUENTO{sale.discountReason ? ` (${sale.discountReason})` : ''}:</span>
+                    <span>-Bs. {formatBs(sale.discountBs || 0)} (-${formatUSD(sale.discountUSD || 0)})</span>
+                  </div>
+                </>
+              )}
               <div className="flex justify-between">
-                <span>SUBTOTAL:</span>
+                <span>{((sale.discountBs ?? 0) > 0 || (sale.discountUSD ?? 0) > 0) ? 'SUBTOTAL NETO:' : 'SUBTOTAL:'}</span>
                 <span>Bs. {formatBs(sale.subtotalBs)}</span>
               </div>
               <div className="flex justify-between text-slate-600">

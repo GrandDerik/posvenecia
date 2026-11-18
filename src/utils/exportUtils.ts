@@ -1,7 +1,20 @@
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Sale, Expense, CashShift, CuentaPorPagar, GastoOperativo, Product, CartItem, PaymentMethod } from '../types';
+import {
+  Sale,
+  Expense,
+  CashShift,
+  CuentaPorPagar,
+  GastoOperativo,
+  Product,
+  CartItem,
+  CartDiscount,
+  PaymentMethod,
+  ProductAnchorCurrency,
+  RatePriceRecalcMode,
+  RatePriceCurrencyScope
+} from '../types';
 
 export const round2 = (n: number): number => {
   if (!Number.isFinite(n)) return 0;
@@ -13,25 +26,226 @@ export const round6 = (n: number): number => {
   return Math.round((n + Number.EPSILON) * 1000000) / 1000000;
 };
 
+/**
+ * Regla de Redondeo Comercial hacia Arriba (Sin Decimales):
+ * Siempre redondea hacia arriba eliminando cualquier decimal (ej. 132.10 -> 133, 132.80 -> 133).
+ * Permite opcionalmente múltiplos comerciales (1, 5, 10, 50, 100 Bs).
+ */
+export const roundUpCommercialBs = (amount: number, step: number = 1): number => {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  const safeStep = Number.isFinite(step) && step >= 1 ? Math.floor(step) : 1;
+  // Evita ruido binario IEEE-754 (ej. 132.00000000000003) cuando el resultado ya es exacto
+  const cleaned = Math.round(amount * 10000) / 10000;
+  return Math.ceil(cleaned / safeStep) * safeStep;
+};
+
+export const getProductAnchorCurrency = (
+  prod: Pick<Product, 'priceAnchorCurrency' | 'priceCurrency'>
+): ProductAnchorCurrency => {
+  if (prod.priceAnchorCurrency === 'EUR' || prod.priceCurrency === 'EUR') {
+    return 'EUR';
+  }
+  return 'USD';
+};
+
 export const getProductPriceBs = (
-  prod: Pick<Product, 'priceUSD' | 'priceBsFixed' | 'priceCurrency'>,
-  bcvRate: number
+  prod: Pick<Product, 'priceUSD' | 'priceEUR' | 'priceBsFixed' | 'priceCurrency' | 'priceAnchorCurrency'>,
+  bcvRate: number,
+  bcvEuroRate?: number
 ): number => {
   if (typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0) {
     return round2(prod.priceBsFixed);
+  }
+  const safeEuroRate = typeof bcvEuroRate === 'number' && Number.isFinite(bcvEuroRate) && bcvEuroRate > 0 ? bcvEuroRate : 0;
+  if (prod.priceCurrency === 'EUR' && typeof prod.priceEUR === 'number' && prod.priceEUR > 0 && safeEuroRate > 0) {
+    return round2(prod.priceEUR * safeEuroRate);
   }
   const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
   return round2((prod.priceUSD || 0) * safeRate);
 };
 
 export const getProductPriceUSD = (
-  prod: Pick<Product, 'priceUSD' | 'priceBsFixed' | 'priceCurrency'>,
-  bcvRate: number
+  prod: Pick<Product, 'priceUSD' | 'priceEUR' | 'priceBsFixed' | 'priceCurrency' | 'priceAnchorCurrency'>,
+  bcvRate: number,
+  bcvEuroRate?: number
 ): number => {
-  if (typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0 && Number.isFinite(bcvRate) && bcvRate > 0) {
-    return round6(prod.priceBsFixed / bcvRate);
+  const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
+  if (typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0 && safeRate > 0) {
+    return round6(prod.priceBsFixed / safeRate);
+  }
+  const safeEuroRate = typeof bcvEuroRate === 'number' && Number.isFinite(bcvEuroRate) && bcvEuroRate > 0 ? bcvEuroRate : 0;
+  if (prod.priceCurrency === 'EUR' && typeof prod.priceEUR === 'number' && prod.priceEUR > 0 && safeEuroRate > 0 && safeRate > 0) {
+    return round6((prod.priceEUR * safeEuroRate) / safeRate);
   }
   return prod.priceUSD || 0;
+};
+
+export const getProductPriceEUR = (
+  prod: Pick<Product, 'priceUSD' | 'priceEUR' | 'priceBsFixed' | 'priceCurrency' | 'priceAnchorCurrency'>,
+  bcvRate: number,
+  bcvEuroRate: number
+): number => {
+  const safeEuroRate = Number.isFinite(bcvEuroRate) && bcvEuroRate > 0 ? bcvEuroRate : 0;
+  if (typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0 && safeEuroRate > 0) {
+    return round6(prod.priceBsFixed / safeEuroRate);
+  }
+  if (typeof prod.priceEUR === 'number' && prod.priceEUR > 0) {
+    return prod.priceEUR;
+  }
+  const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
+  if (safeEuroRate > 0 && safeRate > 0 && (prod.priceUSD || 0) > 0) {
+    return round6(((prod.priceUSD || 0) * safeRate) / safeEuroRate);
+  }
+  return 0;
+};
+
+export interface ProductRecalcPreviewItem {
+  product: Product;
+  updatedProduct: Product;
+  anchorCurrency: ProductAnchorCurrency;
+  anchorAmount: number;
+  currentBs: number;
+  rawNewBs: number;
+  newBs: number;
+  currentUSD: number;
+  newUSD: number;
+  currentEUR: number;
+  newEUR: number;
+  bsDelta: number;
+}
+
+/**
+ * Fuente única de verdad para el recálculo masivo del catálogo ante cambios de tasa BCV ($ o €).
+ * - mode === 'update_bs_upward': Multiplica la divisa ancla ($ o €) por la nueva tasa BCV y aplica
+ *   Redondeo Comercial hacia Arriba (cero decimales), guardando el nuevo Bs estático y preservando el ancla.
+ * - mode === 'keep_static_bs': Mantiene intacto el precio estático actual en Bolívares (Bs) y recalcula
+ *   únicamente los equivalentes nominales en USD y EUR a la baja con la nueva tasa.
+ */
+export const computeCatalogPriceRecalculation = (params: {
+  products: Product[];
+  mode: RatePriceRecalcMode;
+  currencyScope: RatePriceCurrencyScope;
+  roundingStep: number;
+  previousUsdRate: number;
+  newUsdRate: number;
+  previousEurRate: number;
+  newEurRate: number;
+}): ProductRecalcPreviewItem[] => {
+  const {
+    products,
+    mode,
+    currencyScope,
+    roundingStep,
+    previousUsdRate,
+    newUsdRate,
+    previousEurRate,
+    newEurRate
+  } = params;
+
+  const safeNewUsd = Number.isFinite(newUsdRate) && newUsdRate > 0 ? newUsdRate : 1;
+  const safePrevUsd = Number.isFinite(previousUsdRate) && previousUsdRate > 0 ? previousUsdRate : safeNewUsd;
+  const safeNewEur = Number.isFinite(newEurRate) && newEurRate > 0 ? newEurRate : safeNewUsd;
+  const safePrevEur = Number.isFinite(previousEurRate) && previousEurRate > 0 ? previousEurRate : safeNewEur;
+
+  const results: ProductRecalcPreviewItem[] = [];
+
+  for (const prod of products) {
+    const productAnchor: ProductAnchorCurrency = getProductAnchorCurrency(prod);
+    const effectiveAnchor: ProductAnchorCurrency =
+      currencyScope === 'auto_anchor' ? productAnchor : currencyScope;
+
+    const hasFixedBs = typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0;
+    const currentBs = hasFixedBs
+      ? round2(prod.priceBsFixed!)
+      : (productAnchor === 'EUR' && typeof prod.priceEUR === 'number' && prod.priceEUR > 0)
+        ? round2(prod.priceEUR * safePrevEur)
+        : round2((prod.priceUSD || 0) * safePrevUsd);
+
+    const currentUSD = (prod.priceUSD && prod.priceUSD > 0)
+      ? round6(prod.priceUSD)
+      : round6(currentBs / safePrevUsd);
+
+    const currentEUR = (typeof prod.priceEUR === 'number' && prod.priceEUR > 0)
+      ? round6(prod.priceEUR)
+      : round6(currentBs / safePrevEur);
+
+    if (currentBs <= 0 && currentUSD <= 0 && currentEUR <= 0) {
+      continue;
+    }
+
+    const anchorAmount = effectiveAnchor === 'EUR' ? currentEUR : currentUSD;
+
+    if (mode === 'update_bs_upward') {
+      const targetRate = effectiveAnchor === 'EUR' ? safeNewEur : safeNewUsd;
+      const rawNewBs = round2(anchorAmount * targetRate);
+      const newBs = roundUpCommercialBs(anchorAmount * targetRate, roundingStep);
+
+      // Conservamos el ancla principal elegida intacta para evitar efecto bola de nieve en futuros redondeos,
+      // mientras sincronizamos la contraparte cruzada con el nuevo precio comercial en Bs.
+      const newUSD = effectiveAnchor === 'USD'
+        ? round6(anchorAmount)
+        : round6(newBs / safeNewUsd);
+      const newEUR = effectiveAnchor === 'EUR'
+        ? round6(anchorAmount)
+        : round6(newBs / safeNewEur);
+
+      const updatedProduct: Product = {
+        ...prod,
+        priceBsFixed: newBs,
+        priceUSD: newUSD,
+        priceEUR: newEUR,
+        priceCurrency: 'Bs',
+        priceAnchorCurrency: effectiveAnchor
+      };
+
+      results.push({
+        product: prod,
+        updatedProduct,
+        anchorCurrency: effectiveAnchor,
+        anchorAmount,
+        currentBs,
+        rawNewBs,
+        newBs,
+        currentUSD,
+        newUSD,
+        currentEUR,
+        newEUR,
+        bsDelta: round2(newBs - currentBs)
+      });
+    } else {
+      // Rechazo / Mantener precios estáticos actuales en Bs:
+      // El precio en Bs NO cambia; solo se recalcula a la baja el equivalente en USD y EUR.
+      const staticBs = currentBs;
+      const newUSD = round6(staticBs / safeNewUsd);
+      const newEUR = round6(staticBs / safeNewEur);
+
+      const updatedProduct: Product = {
+        ...prod,
+        priceBsFixed: staticBs,
+        priceUSD: newUSD,
+        priceEUR: newEUR,
+        priceCurrency: 'Bs',
+        priceAnchorCurrency: effectiveAnchor
+      };
+
+      results.push({
+        product: prod,
+        updatedProduct,
+        anchorCurrency: effectiveAnchor,
+        anchorAmount: effectiveAnchor === 'EUR' ? newEUR : newUSD,
+        currentBs: staticBs,
+        rawNewBs: staticBs,
+        newBs: staticBs,
+        currentUSD,
+        newUSD,
+        currentEUR,
+        newEUR,
+        bsDelta: 0
+      });
+    }
+  }
+
+  return results;
 };
 
 /**
@@ -71,18 +285,27 @@ export const isProductPriceIncludesIVA = (product?: Partial<Product> | null): bo
 };
 
 export interface CartFiscalTotals {
+  grossExemptUSD: number;
+  grossTaxableUSD: number;
+  grossSubtotalUSD: number;
+  discountUSD: number;
   exemptUSD: number;
   taxableUSD: number;
   subtotalUSD: number;
   ivaUSD: number;
   igtfUSD: number;
   totalUSD: number;
+  grossExemptBs: number;
+  grossTaxableBs: number;
+  grossSubtotalBs: number;
+  discountBs: number;
   exemptBs: number;
   taxableBs: number;
   subtotalBs: number;
   ivaBs: number;
   igtfBs: number;
   totalBs: number;
+  discountCurrency?: 'USD' | 'Bs';
   hasFixedBsItems: boolean;
   exemptItemsCount: number;
   taxableItemsCount: number;
@@ -94,6 +317,8 @@ export interface CartFiscalTotals {
  * Separates Exento (E) and Base Imponible Gravada (G) strictly per item:
  * - Gravado with priceIncludesIVA: decomposes Base = Precio / 1.16 and IVA = Precio - Base (no extra 16%).
  * - Gravado standard (!priceIncludesIVA): treats Precio as Base Imponible and adds 16% IVA on top.
+ * - Optional global discount (in exact Bs or USD without reverse cross-rounding) is subtracted from the
+ *   pre-tax subtotal (proportionally across Exento and Base Imponible) BEFORE calculating IVA 16% and IGTF 3%.
  * Guarantees exact accounting identity (Subtotal Exento + Base Imponible + IVA + IGTF = Total) in USD and Bs.
  */
 export const calculateCartFiscalTotals = (params: {
@@ -103,8 +328,9 @@ export const calculateCartFiscalTotals = (params: {
   applyIGTF: boolean;
   paymentMethod: PaymentMethod;
   combinedUsdCash?: number;
+  discount?: CartDiscount | null;
 }): CartFiscalTotals => {
-  const { cart, bcvRate, applyIVA, applyIGTF, paymentMethod, combinedUsdCash = 0 } = params;
+  const { cart, bcvRate, applyIVA, applyIGTF, paymentMethod, combinedUsdCash = 0, discount } = params;
   const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
 
   let rawExemptUSD = 0;
@@ -144,17 +370,80 @@ export const calculateCartFiscalTotals = (params: {
     }
   });
 
-  // USD fiscal breakdown
-  const exemptUSD = round2(rawExemptUSD);
+  // Pre-discount fiscal bases (USD)
+  const grossExemptUSD = round2(rawExemptUSD);
   const incGrossUSD = round2(rawInclusiveGrossUSD);
   const incBaseUSD = incGrossUSD > 0 ? round2(incGrossUSD / 1.16) : 0;
-  const incIvaUSD = incGrossUSD > 0 ? round2(incGrossUSD - incBaseUSD) : 0;
-
+  const incIvaBaseUSD = incGrossUSD > 0 ? round2(incGrossUSD - incBaseUSD) : 0;
   const excBaseUSD = round2(rawExclusiveTaxableUSD);
-  const excIvaUSD = applyIVA && excBaseUSD > 0 ? round2(excBaseUSD * 0.16) : 0;
 
-  const taxableUSD = round2(incBaseUSD + excBaseUSD);
-  const ivaUSD = applyIVA ? round2(incIvaUSD + excIvaUSD) : 0;
+  const grossTaxableUSD = round2(incBaseUSD + excBaseUSD);
+  const grossSubtotalUSD = round2(grossExemptUSD + grossTaxableUSD);
+
+  // Pre-discount fiscal bases (Bs)
+  const grossExemptBs = hasFixedBsItems ? round2(rawExemptBs) : round2(grossExemptUSD * safeRate);
+  const incGrossBs = hasFixedBsItems ? round2(rawInclusiveGrossBs) : round2(incGrossUSD * safeRate);
+  const incBaseBs = incGrossBs > 0 ? round2(incGrossBs / 1.16) : 0;
+  const incIvaBaseBs = incGrossBs > 0 ? round2(incGrossBs - incBaseBs) : 0;
+  const excBaseBs = hasFixedBsItems ? round2(rawExclusiveTaxableBs) : round2(excBaseUSD * safeRate);
+
+  const grossTaxableBs = round2(incBaseBs + excBaseBs);
+  const grossSubtotalBs = round2(grossExemptBs + grossTaxableBs);
+
+  // Global discount resolution (preserves exact entered currency with zero ghost cents)
+  const rawDiscountAmt = discount && Number.isFinite(discount.amount) && discount.amount > 0
+    ? round2(discount.amount)
+    : 0;
+  const discountCurrency: 'USD' | 'Bs' | undefined = rawDiscountAmt > 0 ? discount!.currency : undefined;
+
+  let discountUSD = 0;
+  let discountBs = 0;
+
+  if (rawDiscountAmt > 0 && (grossSubtotalUSD > 0 || grossSubtotalBs > 0)) {
+    if (discountCurrency === 'Bs') {
+      discountBs = round2(Math.min(rawDiscountAmt, grossSubtotalBs));
+      if (grossSubtotalBs > 0 && discountBs >= grossSubtotalBs) {
+        discountUSD = grossSubtotalUSD;
+      } else {
+        discountUSD = round2(Math.min(safeDiv(discountBs, safeRate, 0), grossSubtotalUSD));
+      }
+    } else {
+      discountUSD = round2(Math.min(rawDiscountAmt, grossSubtotalUSD));
+      if (grossSubtotalUSD > 0 && discountUSD >= grossSubtotalUSD) {
+        discountBs = grossSubtotalBs;
+      } else {
+        discountBs = round2(Math.min(discountUSD * safeRate, grossSubtotalBs));
+      }
+    }
+  }
+
+  const hasDiscount = discountUSD > 0 || discountBs > 0;
+  const useIndependentBs = hasFixedBsItems || discountCurrency === 'Bs';
+
+  // Apply discount proportionally across Exempt (E) and Taxable Base (G) BEFORE IVA & IGTF (USD)
+  let exemptUSD = grossExemptUSD;
+  let taxableUSD = grossTaxableUSD;
+  let ivaUSD = 0;
+
+  if (hasDiscount && discountUSD > 0) {
+    if (grossTaxableUSD <= 0) {
+      exemptUSD = round2(Math.max(0, grossExemptUSD - discountUSD));
+      taxableUSD = 0;
+    } else if (grossExemptUSD <= 0) {
+      exemptUSD = 0;
+      taxableUSD = round2(Math.max(0, grossTaxableUSD - discountUSD));
+    } else {
+      const exemptDiscountUSD = round2(discountUSD * (grossExemptUSD / grossSubtotalUSD));
+      const taxableDiscountUSD = round2(discountUSD - exemptDiscountUSD);
+      exemptUSD = round2(Math.max(0, grossExemptUSD - exemptDiscountUSD));
+      taxableUSD = round2(Math.max(0, grossTaxableUSD - taxableDiscountUSD));
+    }
+    ivaUSD = applyIVA && taxableUSD > 0 ? round2(taxableUSD * 0.16) : 0;
+  } else {
+    const excIvaUSD = applyIVA && excBaseUSD > 0 ? round2(excBaseUSD * 0.16) : 0;
+    ivaUSD = applyIVA ? round2(incIvaBaseUSD + excIvaUSD) : 0;
+  }
+
   const subtotalUSD = round2(exemptUSD + taxableUSD);
 
   let igtfUSD = 0;
@@ -168,36 +457,61 @@ export const calculateCartFiscalTotals = (params: {
 
   const totalUSD = round2(subtotalUSD + ivaUSD + igtfUSD);
 
-  // Bs fiscal breakdown (exact preservation of Bs-fixed prices & IVA-included PVP)
-  const exemptBs = hasFixedBsItems ? round2(rawExemptBs) : round2(exemptUSD * safeRate);
-  const incGrossBs = hasFixedBsItems ? round2(rawInclusiveGrossBs) : round2(incGrossUSD * safeRate);
-  const incBaseBs = incGrossBs > 0 ? round2(incGrossBs / 1.16) : 0;
-  const incIvaBs = incGrossBs > 0 ? round2(incGrossBs - incBaseBs) : 0;
+  // Apply discount proportionally across Exempt (E) and Taxable Base (G) BEFORE IVA & IGTF (Bs)
+  let exemptBs = grossExemptBs;
+  let taxableBs = grossTaxableBs;
+  let ivaBs = 0;
 
-  const excBaseBs = hasFixedBsItems ? round2(rawExclusiveTaxableBs) : round2(excBaseUSD * safeRate);
-  const excIvaBs = applyIVA && excBaseBs > 0
-    ? (hasFixedBsItems ? round2(excBaseBs * 0.16) : round2(excIvaUSD * safeRate))
-    : 0;
+  if (hasDiscount && discountBs > 0) {
+    if (grossTaxableBs <= 0) {
+      exemptBs = round2(Math.max(0, grossExemptBs - discountBs));
+      taxableBs = 0;
+    } else if (grossExemptBs <= 0) {
+      exemptBs = 0;
+      taxableBs = round2(Math.max(0, grossTaxableBs - discountBs));
+    } else {
+      const exemptDiscountBs = round2(discountBs * (grossExemptBs / grossSubtotalBs));
+      const taxableDiscountBs = round2(discountBs - exemptDiscountBs);
+      exemptBs = round2(Math.max(0, grossExemptBs - exemptDiscountBs));
+      taxableBs = round2(Math.max(0, grossTaxableBs - taxableDiscountBs));
+    }
+    ivaBs = applyIVA && taxableBs > 0
+      ? (useIndependentBs ? round2(taxableBs * 0.16) : round2(ivaUSD * safeRate))
+      : 0;
+  } else {
+    const excIvaUSD = applyIVA && excBaseUSD > 0 ? round2(excBaseUSD * 0.16) : 0;
+    const excIvaBs = applyIVA && excBaseBs > 0
+      ? (hasFixedBsItems ? round2(excBaseBs * 0.16) : round2(excIvaUSD * safeRate))
+      : 0;
+    ivaBs = applyIVA ? round2(incIvaBaseBs + excIvaBs) : 0;
+  }
 
-  const taxableBs = round2(incBaseBs + excBaseBs);
-  const ivaBs = applyIVA ? round2(incIvaBs + excIvaBs) : 0;
   const subtotalBs = round2(exemptBs + taxableBs);
   const igtfBs = igtfUSD > 0 ? round2(igtfUSD * safeRate) : 0;
   const totalBs = round2(subtotalBs + ivaBs + igtfBs);
 
   return {
+    grossExemptUSD,
+    grossTaxableUSD,
+    grossSubtotalUSD,
+    discountUSD,
     exemptUSD,
     taxableUSD,
     subtotalUSD,
     ivaUSD,
     igtfUSD,
     totalUSD,
+    grossExemptBs,
+    grossTaxableBs,
+    grossSubtotalBs,
+    discountBs,
     exemptBs,
     taxableBs,
     subtotalBs,
     ivaBs,
     igtfBs,
     totalBs,
+    discountCurrency,
     hasFixedBsItems,
     exemptItemsCount,
     taxableItemsCount,

@@ -60,7 +60,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const [itemCostInput, setItemCostInput] = useState('');
   const [itemCostCurrency, setItemCostCurrency] = useState<'USD' | 'Bs'>('USD');
   const [itemStrategy, setItemStrategy] = useState<PurchaseCostStrategy>('fifo');
-  const [customNewPriceUSD, setCustomNewPriceUSD] = useState('');
+  const [customNewPriceInput, setCustomNewPriceInput] = useState('');
+  const [customNewPriceCurrency, setCustomNewPriceCurrency] = useState<'USD' | 'Bs'>('USD');
   const [showItemSection, setShowItemSection] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -95,8 +96,11 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       const prodCost = Number(prod.costUSD) || 0;
       const prodPrice = Number(prod.priceUSD) || 0;
       const isCostBs = prod.costCurrency === 'Bs' || (typeof prod.costBsFixed === 'number' && prod.costBsFixed > 0);
+      const isPriceBs = prod.priceCurrency === 'Bs' || (typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0);
+
+      let defaultCostBs = 0;
       if (isCostBs) {
-        const defaultCostBs = typeof prod.costBsFixed === 'number' && prod.costBsFixed > 0
+        defaultCostBs = typeof prod.costBsFixed === 'number' && prod.costBsFixed > 0
           ? round2(prod.costBsFixed)
           : round2(prodCost * effectiveBcvRate);
         setItemCostInput(defaultCostBs > 0 ? defaultCostBs.toString() : '');
@@ -107,37 +111,73 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
         setItemCostCurrency('USD');
       }
 
-      // Calculate suggested new price
-      const unitCost = prodCost > 0 ? prodCost : (prodPrice * 0.7);
-      const margin = prod.profitMarginPercent 
-        ? prod.profitMarginPercent / 100 
-        : (prodCost > 0 && prodPrice > prodCost 
-            ? (prodPrice - prodCost) / prodCost 
+      // Calculate suggested new price in product's native sale currency
+      const margin = prod.profitMarginPercent
+        ? prod.profitMarginPercent / 100
+        : (prodCost > 0 && prodPrice > prodCost
+            ? (prodPrice - prodCost) / prodCost
             : 0.30);
-      const calculatedPrice = (unitCost * (1 + margin)).toFixed(2);
-      setCustomNewPriceUSD(calculatedPrice);
+
+      const targetPriceCurrency: 'USD' | 'Bs' = isPriceBs ? 'Bs' : (isCostBs ? 'Bs' : 'USD');
+      setCustomNewPriceCurrency(targetPriceCurrency);
+
+      if (targetPriceCurrency === 'Bs') {
+        const basePriceBs = isPriceBs && typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0
+          ? round2(prod.priceBsFixed)
+          : (defaultCostBs > 0
+              ? round2(defaultCostBs * (1 + margin))
+              : round2((prodCost > 0 ? prodCost : prodPrice * 0.7) * (1 + margin) * effectiveBcvRate));
+        setCustomNewPriceInput(basePriceBs > 0 ? basePriceBs.toString() : '');
+      } else {
+        const unitCost = prodCost > 0 ? prodCost : (prodPrice * 0.7);
+        const calculatedPrice = round2(unitCost * (1 + margin));
+        setCustomNewPriceInput(calculatedPrice > 0 ? calculatedPrice.toFixed(2) : '');
+      }
     } else {
       setItemCostInput('');
-      setCustomNewPriceUSD('');
+      setCustomNewPriceInput('');
+      setCustomNewPriceCurrency('USD');
     }
   };
 
-  // Recalculate suggested sale price when cost or product changes
+  // Recalculate suggested sale price when cost or product changes (directly in target currency)
   const handleCostChange = (val: string, curr: 'USD' | 'Bs' = itemCostCurrency) => {
     setItemCostInput(val);
     const numCost = parseFloat(val) || 0;
     const costUSD = curr === 'USD' ? numCost : safeDiv(numCost, effectiveBcvRate, 0);
-    
-    if (selectedProduct && costUSD > 0) {
+
+    if (selectedProduct && numCost > 0 && costUSD > 0) {
       const prodCost = Number(selectedProduct.costUSD) || 0;
       const prodPrice = Number(selectedProduct.priceUSD) || 0;
-      const margin = selectedProduct.profitMarginPercent 
-        ? selectedProduct.profitMarginPercent / 100 
-        : (prodCost > 0 && prodPrice > prodCost 
-            ? (prodPrice - prodCost) / prodCost 
+      const margin = selectedProduct.profitMarginPercent
+        ? selectedProduct.profitMarginPercent / 100
+        : (prodCost > 0 && prodPrice > prodCost
+            ? (prodPrice - prodCost) / prodCost
             : 0.30);
-      const calculatedPrice = (costUSD * (1 + margin)).toFixed(2);
-      setCustomNewPriceUSD(calculatedPrice);
+
+      if (customNewPriceCurrency === 'Bs') {
+        const suggestedBs = curr === 'Bs'
+          ? round2(numCost * (1 + margin))
+          : round2(costUSD * (1 + margin) * effectiveBcvRate);
+        setCustomNewPriceInput(suggestedBs.toFixed(2));
+      } else {
+        const suggestedUSD = round2(costUSD * (1 + margin));
+        setCustomNewPriceInput(suggestedUSD.toFixed(2));
+      }
+    }
+  };
+
+  // Switch suggested price currency cleanly (converts once on explicit toggle; never overwrites typed value afterwards)
+  const handleNewPriceCurrencySwitch = (nextCurrency: 'USD' | 'Bs') => {
+    if (nextCurrency === customNewPriceCurrency) return;
+    const currentNum = parseFloat(customNewPriceInput);
+    setCustomNewPriceCurrency(nextCurrency);
+    if (!isNaN(currentNum) && currentNum > 0 && effectiveBcvRate > 0) {
+      if (nextCurrency === 'Bs') {
+        setCustomNewPriceInput(round2(currentNum * effectiveBcvRate).toFixed(2));
+      } else {
+        setCustomNewPriceInput(round2(safeDiv(currentNum, effectiveBcvRate, 0)).toFixed(2));
+      }
     }
   };
 
@@ -164,10 +204,23 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       : round2(safeDiv(totalCostBs, effectiveBcvRate, 0));
 
     const currentPriceUSD = Number(selectedProduct.priceUSD) || 0;
+    const rawNewPrice = parseFloat(customNewPriceInput);
 
-    const finalNewPriceUSD = itemStrategy === 'average_cost'
-      ? (parseFloat(customNewPriceUSD) || currentPriceUSD)
-      : currentPriceUSD;
+    let finalNewPriceUSD = currentPriceUSD;
+    let finalNewPriceCurrency: 'USD' | 'Bs' | undefined = undefined;
+    let finalNewPriceBs: number | undefined = undefined;
+
+    if (itemStrategy === 'average_cost' && !isNaN(rawNewPrice) && rawNewPrice > 0) {
+      if (customNewPriceCurrency === 'Bs') {
+        finalNewPriceCurrency = 'Bs';
+        finalNewPriceBs = round2(rawNewPrice);
+        finalNewPriceUSD = round6(safeDiv(finalNewPriceBs, effectiveBcvRate, 0));
+      } else {
+        finalNewPriceCurrency = 'USD';
+        finalNewPriceUSD = round6(rawNewPrice);
+        finalNewPriceBs = undefined;
+      }
+    }
 
     const newItem: ExpenseItem = {
       productId: selectedProduct.id,
@@ -181,7 +234,9 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       strategy: itemStrategy,
       previousCostUSD: Number(selectedProduct.costUSD) || 0,
       previousPriceUSD: currentPriceUSD,
-      newPriceUSD: finalNewPriceUSD
+      newPriceUSD: finalNewPriceUSD,
+      newPriceCurrency: finalNewPriceCurrency,
+      newPriceBs: finalNewPriceBs
     };
 
     setPurchasedItems(prev => [...prev, newItem]);
@@ -191,7 +246,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
     setProductSearch('');
     setItemQuantityInput('1');
     setItemCostInput('');
-    setCustomNewPriceUSD('');
+    setCustomNewPriceInput('');
+    setCustomNewPriceCurrency('USD');
   };
 
   const handleRemoveItem = (index: number) => {
@@ -273,7 +329,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setItemCostInput('');
       setItemCostCurrency('USD');
       setItemStrategy('fifo');
-      setCustomNewPriceUSD('');
+      setCustomNewPriceInput('');
+      setCustomNewPriceCurrency('USD');
       setFormError(null);
       setIsSubmitting(false);
     } else if (isOpen && !editingExpense) {
@@ -302,7 +359,8 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setItemCostInput('');
       setItemCostCurrency('USD');
       setItemStrategy('fifo');
-      setCustomNewPriceUSD('');
+      setCustomNewPriceInput('');
+      setCustomNewPriceCurrency('USD');
       setFormError(null);
       setIsSubmitting(false);
     }
@@ -662,8 +720,22 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                   <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-1 text-slate-600 font-mono">
                       <span>Stock Actual: <strong className="text-slate-900">{selectedProduct.stock || 0} {selectedProduct.unit}</strong></span>
-                      <span>Costo Actual: <strong className="text-slate-900">${(selectedProduct.costUSD || 0).toFixed(2)}</strong></span>
-                      <span>Precio Venta Actual: <strong className="text-teal-800">${(selectedProduct.priceUSD || 0).toFixed(2)}</strong></span>
+                      <span>
+                        Costo Actual:{' '}
+                        <strong className="text-slate-900">
+                          {selectedProduct.costCurrency === 'Bs' && typeof selectedProduct.costBsFixed === 'number' && selectedProduct.costBsFixed > 0
+                            ? `Bs. ${formatBs(selectedProduct.costBsFixed)}`
+                            : `$${(selectedProduct.costUSD || 0).toFixed(2)}`}
+                        </strong>
+                      </span>
+                      <span>
+                        Precio Venta Actual:{' '}
+                        <strong className="text-teal-800">
+                          {selectedProduct.priceCurrency === 'Bs' && typeof selectedProduct.priceBsFixed === 'number' && selectedProduct.priceBsFixed > 0
+                            ? `Bs. ${formatBs(selectedProduct.priceBsFixed)}`
+                            : `$${(selectedProduct.priceUSD || 0).toFixed(2)}`}
+                        </strong>
+                      </span>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
@@ -779,23 +851,58 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                         </div>
                       </div>
 
-                      {/* Preview of Price / Stock impact */}
+                      {/* Preview of Price / Stock impact (Bimonetary USD / Bs) */}
                       {itemStrategy === 'average_cost' && (
-                        <div className="p-2 bg-blue-50/70 border border-blue-200 rounded-lg flex items-center justify-between text-[11px]">
-                          <span className="text-blue-900">
-                            Precio de Venta Sugerido (Nuevo Lote):
-                          </span>
-                          <div className="flex items-center gap-1">
-                            <span className="font-bold text-blue-900">$</span>
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={customNewPriceUSD}
-                              onChange={(e) => setCustomNewPriceUSD(e.target.value)}
-                              className="w-20 px-2 py-1 bg-white border border-blue-300 rounded font-mono font-bold text-blue-900 text-xs"
-                            />
+                        <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded-lg space-y-2 text-[11px]">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-blue-900">
+                              Precio de Venta Sugerido (Nuevo Lote):
+                            </span>
+                            <div className="flex gap-1 text-[10px]">
+                              <button
+                                type="button"
+                                onClick={() => handleNewPriceCurrencySwitch('USD')}
+                                className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
+                                  customNewPriceCurrency === 'USD'
+                                    ? 'bg-blue-700 text-white font-bold shadow-2xs'
+                                    : 'text-slate-600 bg-white border border-blue-200 hover:bg-blue-100/60'
+                                }`}
+                              >
+                                $ USD
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleNewPriceCurrencySwitch('Bs')}
+                                className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
+                                  customNewPriceCurrency === 'Bs'
+                                    ? 'bg-blue-700 text-white font-bold shadow-2xs'
+                                    : 'text-slate-600 bg-white border border-blue-200 hover:bg-blue-100/60'
+                                }`}
+                              >
+                                Bs
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-blue-900 font-mono">
+                                {customNewPriceCurrency === 'Bs' ? 'Bs.' : '$'}
+                              </span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                placeholder={customNewPriceCurrency === 'Bs' ? '800.00' : '0.00'}
+                                value={customNewPriceInput}
+                                onChange={(e) => setCustomNewPriceInput(e.target.value)}
+                                className="w-28 px-2.5 py-1 bg-white border border-blue-300 rounded-lg font-mono font-bold text-blue-950 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
                             <span className="text-[10px] text-blue-700 font-mono">
-                              (≈ Bs. {formatBs((parseFloat(customNewPriceUSD) || 0) * bcvRate)})
+                              {customNewPriceCurrency === 'Bs'
+                                ? `(≈ $${formatUSD(safeDiv(parseFloat(customNewPriceInput) || 0, effectiveBcvRate, 0))} USD informativo)`
+                                : `(≈ Bs. ${formatBs(round2((parseFloat(customNewPriceInput) || 0) * effectiveBcvRate))} informativo)`}
                             </span>
                           </div>
                         </div>
@@ -858,8 +965,10 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
                                 FIFO (Lote)
                               </span>
                             ) : (
-                              <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-semibold">
-                                Actualizado (${(Number(item?.newPriceUSD) || 0).toFixed(2)})
+                              <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-semibold whitespace-nowrap">
+                                {item?.newPriceCurrency === 'Bs' && typeof item.newPriceBs === 'number' && item.newPriceBs > 0
+                                  ? `Actualizado (Bs. ${formatBs(item.newPriceBs)})`
+                                  : `Actualizado ($${(Number(item?.newPriceUSD) || 0).toFixed(2)})`}
                               </span>
                             )}
                           </td>

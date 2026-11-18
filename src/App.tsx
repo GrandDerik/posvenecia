@@ -16,6 +16,7 @@ import { PerfilNegocioModal } from './components/Modals/PerfilNegocioModal';
 import { NotaCreditoModal } from './components/Modals/NotaCreditoModal';
 import { DesincorporarStockModal } from './components/Modals/DesincorporarStockModal';
 import { ComprobanteNotaCreditoModal } from './components/Modals/ComprobanteNotaCreditoModal';
+import { RatePriceRecalcModal } from './components/Modals/RatePriceRecalcModal';
 import { LoginView } from './components/LoginView';
 import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X, Copy, Check } from 'lucide-react';
 import { formatBs } from './utils/exportUtils';
@@ -203,6 +204,9 @@ const AppContent: React.FC = () => {
 
       {/* Desincorporación de Inventario Modal */}
       <DesincorporarStockModal />
+
+      {/* Alerta Diaria de Tasa BCV y Recálculo de Precios con Redondeo Comercial Arriba */}
+      <RatePriceRecalcModal />
 
       {/* Footer */}
       <footer className="border-t py-4 px-4 sm:px-8 text-xs bg-white/85 backdrop-blur-xs border-[#DCE4F0] text-slate-500">

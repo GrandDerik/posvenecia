@@ -173,7 +173,8 @@ export const generateTicketVentaPDF = (
   businessInfo: BusinessInfo
 ) => {
   const hasLogo = Boolean(businessInfo.logoUrl && businessInfo.logoUrl.startsWith('data:image'));
-  const dynamicHeight = Math.max(160, 120 + (sale.items.length * 8) + (hasLogo ? 18 : 0));
+  const hasDiscount = (sale.discountBs ?? 0) > 0 || (sale.discountUSD ?? 0) > 0;
+  const dynamicHeight = Math.max(160, 120 + (sale.items.length * 8) + (hasLogo ? 18 : 0) + (hasDiscount ? 10 : 0));
   const doc = new jsPDF({
     unit: 'mm',
     format: [80, dynamicHeight],
@@ -278,7 +279,32 @@ export const generateTicketVentaPDF = (
   y += 4;
 
   // Totals (SENIAT Separation)
-  doc.text('SUBTOTAL:', 6, y);
+  if (hasDiscount) {
+    doc.text('SUBTOTAL BRUTO:', 6, y);
+    doc.text(
+      `Bs. ${formatBs(sale.grossSubtotalBs ?? round2(sale.subtotalBs + (sale.discountBs || 0)))}`,
+      pageWidth - 6,
+      y,
+      { align: 'right' }
+    );
+    y += 3.5;
+
+    doc.setFont('helvetica', 'bold');
+    const discLabel = sale.discountReason
+      ? `DESCUENTO (${sale.discountReason.substring(0, 14)}):`
+      : 'DESCUENTO:';
+    doc.text(discLabel, 6, y);
+    doc.text(
+      `-Bs. ${formatBs(sale.discountBs || 0)} (-$ ${formatUSD(sale.discountUSD || 0)})`,
+      pageWidth - 6,
+      y,
+      { align: 'right' }
+    );
+    doc.setFont('helvetica', 'normal');
+    y += 3.5;
+  }
+
+  doc.text(hasDiscount ? 'SUBTOTAL NETO:' : 'SUBTOTAL:', 6, y);
   doc.text(`Bs. ${formatBs(sale.subtotalBs)}`, pageWidth - 6, y, { align: 'right' });
   y += 3.5;
 

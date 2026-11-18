@@ -6,6 +6,7 @@ import {
   FiadoRecord,
   PaymentMethod,
   CartItem,
+  CartDiscount,
   PaymentDetails,
   BusinessInfo,
   Client,
@@ -27,7 +28,10 @@ import {
   KardexMovementType,
   PurchaseCostStrategy,
   Supplier,
-  Loan
+  Loan,
+  RateChangeModalState,
+  RatePriceRecalcMode,
+  RatePriceCurrencyScope
 } from '../types';
 import { fetchLiveBCVRate, fetchLiveBCVEuroRate } from '../utils/bcvFetcher';
 import {
@@ -97,7 +101,8 @@ import {
   deleteSaleFromFirestore,
   fetchFullStoreSnapshotForBackup,
   restoreStoreDataToFirestore,
-  clearUserFirestoreCollections
+  clearUserFirestoreCollections,
+  batchUpdateProductPricesInFirestore
 } from '../services/firestoreSyncService';
 import { BackupDataPayload } from '../utils/cloudBackupUtils';
 import {
@@ -107,7 +112,8 @@ import {
   getProductPriceUSD,
   isProductExempt,
   isCartItemExempt,
-  calculateCartFiscalTotals
+  calculateCartFiscalTotals,
+  computeCatalogPriceRecalculation
 } from '../utils/exportUtils';
 
 export type DriveSyncStatus = 'synced' | 'syncing' | 'error' | 'offline' | 'unauthenticated' | 'token_expired';
@@ -349,6 +355,23 @@ interface AppContextType {
   fetchLiveEuroRate: () => Promise<number>;
   isFetchingLiveEuroRate: boolean;
 
+  // Mixed Pricing & Daily BCV Rate Change Recalculation
+  commercialRoundingStep: number;
+  rateChangeModalState: RateChangeModalState;
+  openRateRecalcModal: (options?: {
+    previousUsdRate?: number;
+    previousEurRate?: number;
+    newUsdRate?: number;
+    newEurRate?: number;
+    source?: 'daily_auto' | 'manual';
+  }) => void;
+  closeRateRecalcModal: () => void;
+  applyCatalogPriceRecalculation: (options: {
+    mode: RatePriceRecalcMode;
+    currencyScope: RatePriceCurrencyScope;
+    roundingStep: number;
+  }) => Promise<{ updatedCount: number }>;
+
   // Base Currency (USD vs VED / Bolívares)
   baseCurrency: BaseCurrency;
   setBaseCurrency: (currency: BaseCurrency) => void;
@@ -387,6 +410,8 @@ interface AppContextType {
   removeFromCart: (productId: string) => void;
   updateCartQuantity: (productId: string, quantity: number) => void;
   setCartItemExempt: (productId: string, isExemptFromIVA: boolean) => void;
+  cartDiscount: CartDiscount | null;
+  setCartDiscount: (discount: CartDiscount | null) => void;
   clearCart: () => void;
   applyIVA: boolean;
   setApplyIVA: (apply: boolean) => void;
@@ -632,6 +657,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [bcvEuroRate, setBcvEuroRateState] = useState<number>(INITIAL_BCV_EURO_RATE);
   const [isFetchingLiveEuroRate, setIsFetchingLiveEuroRate] = useState(false);
 
+  // Mixed Pricing & Daily BCV Rate Change Recalculation State
+  const [commercialRoundingStep, setCommercialRoundingStep] = useState<number>(1);
+  const [lastRatePromptDate, setLastRatePromptDate] = useState<string | null>(null);
+  const [lastPromptedBcvRate, setLastPromptedBcvRate] = useState<number | null>(null);
+  const [lastPromptedBcvEuroRate, setLastPromptedBcvEuroRate] = useState<number | null>(null);
+  const [profileLoadedSeq, setProfileLoadedSeq] = useState<number>(0);
+  const dailyRateCheckRanKeyRef = useRef<string | null>(null);
+  const [rateChangeModalState, setRateChangeModalState] = useState<RateChangeModalState>({
+    isOpen: false,
+    source: 'manual',
+    previousUsdRate: INITIAL_BCV_RATE,
+    newUsdRate: INITIAL_BCV_RATE,
+    previousEurRate: INITIAL_BCV_EURO_RATE,
+    newEurRate: INITIAL_BCV_EURO_RATE
+  });
+
   // Base Currency (USD vs VED)
   const [baseCurrency, setBaseCurrencyState] = useState<BaseCurrency>('USD');
 
@@ -657,6 +698,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Cart & UI state
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [cartDiscount, setCartDiscount] = useState<CartDiscount | null>(null);
   const [applyIVA, setApplyIVA] = useState(true);
   const [applyIGTF, setApplyIGTF] = useState(false);
   const [lastCompletedSale, setLastCompletedSale] = useState<Sale | null>(null);
@@ -857,6 +899,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRateHistory([]);
     setBcvLastUpdatedDate(null);
     setBcvLastUpdatedAt(null);
+    setCommercialRoundingStep(1);
+    setLastRatePromptDate(null);
+    setLastPromptedBcvRate(null);
+    setLastPromptedBcvEuroRate(null);
+    setProfileLoadedSeq(0);
+    dailyRateCheckRanKeyRef.current = null;
+    setRateChangeModalState({
+      isOpen: false,
+      source: 'manual',
+      previousUsdRate: INITIAL_BCV_RATE,
+      newUsdRate: INITIAL_BCV_RATE,
+      previousEurRate: INITIAL_BCV_EURO_RATE,
+      newEurRate: INITIAL_BCV_EURO_RATE
+    });
     setTransactionsPreset('current_month');
     setTransactionsDateRange(computeTransactionsDateRange('current_month'));
     setIsLoadingHistory(false);
@@ -952,6 +1008,106 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsFetchingLiveEuroRate(false);
     }
   };
+
+  const openRateRecalcModal = useCallback((options?: {
+    previousUsdRate?: number;
+    previousEurRate?: number;
+    newUsdRate?: number;
+    newEurRate?: number;
+    source?: 'daily_auto' | 'manual';
+  }) => {
+    const currentUsd = options?.newUsdRate && options.newUsdRate > 0 ? options.newUsdRate : bcvRate;
+    const currentEur = options?.newEurRate && options.newEurRate > 0 ? options.newEurRate : bcvEuroRate;
+    setRateChangeModalState({
+      isOpen: true,
+      source: options?.source || 'manual',
+      previousUsdRate: options?.previousUsdRate && options.previousUsdRate > 0 ? options.previousUsdRate : currentUsd,
+      newUsdRate: currentUsd,
+      previousEurRate: options?.previousEurRate && options.previousEurRate > 0 ? options.previousEurRate : currentEur,
+      newEurRate: currentEur
+    });
+  }, [bcvRate, bcvEuroRate]);
+
+  const closeRateRecalcModal = useCallback(() => {
+    setRateChangeModalState((prev) => ({ ...prev, isOpen: false }));
+  }, []);
+
+  const applyCatalogPriceRecalculation = useCallback(async (options: {
+    mode: RatePriceRecalcMode;
+    currencyScope: RatePriceCurrencyScope;
+    roundingStep: number;
+  }): Promise<{ updatedCount: number }> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      throw new Error('Debes iniciar sesión con Google para actualizar precios en Cloud Firestore.');
+    }
+
+    const effectiveNewUsd = rateChangeModalState.newUsdRate > 0 ? rateChangeModalState.newUsdRate : bcvRate;
+    const effectivePrevUsd = rateChangeModalState.previousUsdRate > 0 ? rateChangeModalState.previousUsdRate : effectiveNewUsd;
+    const effectiveNewEur = rateChangeModalState.newEurRate > 0 ? rateChangeModalState.newEurRate : bcvEuroRate;
+    const effectivePrevEur = rateChangeModalState.previousEurRate > 0 ? rateChangeModalState.previousEurRate : effectiveNewEur;
+
+    const previewItems = computeCatalogPriceRecalculation({
+      products: latestDataRef.current.products || products,
+      mode: options.mode,
+      currencyScope: options.currencyScope,
+      roundingStep: options.roundingStep,
+      previousUsdRate: effectivePrevUsd,
+      newUsdRate: effectiveNewUsd,
+      previousEurRate: effectivePrevEur,
+      newEurRate: effectiveNewEur
+    });
+
+    const updatedProductsList = previewItems.map((item) => item.updatedProduct);
+    const updatedMap = new Map<string, Product>(updatedProductsList.map((p) => [p.id, p]));
+
+    if (updatedProductsList.length > 0) {
+      await batchUpdateProductPricesInFirestore(uid, updatedProductsList);
+      setProducts((prev) => prev.map((p) => updatedMap.get(p.id) || p));
+      setCart((prevCart) =>
+        prevCart.map((ci) => {
+          const updatedProd = updatedMap.get(ci.product.id);
+          if (!updatedProd) return ci;
+          const nextUnitUSD = getProductPriceUSD(updatedProd, effectiveNewUsd, effectiveNewEur);
+          return {
+            ...ci,
+            product: updatedProd,
+            unitPriceUSD: nextUnitUSD,
+            totalUSD: round2(ci.quantity * nextUnitUSD)
+          };
+        })
+      );
+    }
+
+    const todayStr = getLocalDateStr();
+    setCommercialRoundingStep(options.roundingStep);
+    setLastRatePromptDate(todayStr);
+    setLastPromptedBcvRate(effectiveNewUsd);
+    setLastPromptedBcvEuroRate(effectiveNewEur);
+
+    await saveBusinessProfileToFirestore(uid, {
+      lastRatePromptDate: todayStr,
+      lastPromptedBcvRate: effectiveNewUsd,
+      lastPromptedBcvEuroRate: effectiveNewEur,
+      commercialRoundingStep: options.roundingStep
+    });
+
+    if (options.mode === 'update_bs_upward') {
+      notifyUser(
+        'success',
+        'Precios del catálogo actualizados',
+        `Se recalcularon ${updatedProductsList.length} productos con redondeo comercial hacia arriba (múltiplo de ${options.roundingStep} Bs, sin decimales).`
+      );
+    } else {
+      notifyUser(
+        'info',
+        'Precios estáticos en Bs conservados',
+        `Se mantuvieron intactos los precios en Bolívares de ${updatedProductsList.length} productos y se ajustaron sus equivalentes en USD / EUR a la tasa vigente.`
+      );
+    }
+
+    return { updatedCount: updatedProductsList.length };
+  }, [getActiveUid, rateChangeModalState, bcvRate, bcvEuroRate, products, notifyUser]);
 
   const setBaseCurrency = useCallback((curr: BaseCurrency) => {
     setBaseCurrencyState(curr);
@@ -1516,8 +1672,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setBcvLastUpdatedDate(null);
         }
         setBcvLastUpdatedAt(profile.bcvLastUpdatedAt || null);
+        if (typeof profile.commercialRoundingStep === 'number' && profile.commercialRoundingStep >= 1) {
+          setCommercialRoundingStep(Math.floor(profile.commercialRoundingStep));
+        }
+        setLastRatePromptDate(profile.lastRatePromptDate || null);
+        setLastPromptedBcvRate(typeof profile.lastPromptedBcvRate === 'number' ? profile.lastPromptedBcvRate : null);
+        setLastPromptedBcvEuroRate(typeof profile.lastPromptedBcvEuroRate === 'number' ? profile.lastPromptedBcvEuroRate : null);
         if (profile.customCategories) setCustomCategories(profile.customCategories);
         if (profile.managerPin) setManagerPin(profile.managerPin);
+        setProfileLoadedSeq((seq) => seq + 1);
       },
       onError: (err) => {
         console.warn('[PosVenecia Firestore Realtime] Error:', err);
@@ -1594,6 +1757,141 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
   }, [googleUser?.uid, transactionsDateRange, transactionsPreset, activeShiftOpenedYMD, notifyError]);
+
+  /**
+   * Detección diaria automática de cambio de tasa BCV al iniciar sesión:
+   * - Si aún no se ha actualizado la tasa oficial hoy, consulta el BCV ($ y €) en segundo plano.
+   * - Si la tasa cambió respecto al día anterior (o respecto a la última tasa revisada),
+   *   guarda la tasa nueva y abre el Modal de Alerta Informativa para decidir si actualizar precios
+   *   con redondeo comercial hacia arriba o mantener los precios estáticos actuales en Bs.
+   */
+  useEffect(() => {
+    const uid = googleUser?.uid;
+    if (!uid || !isOnline || profileLoadedSeq === 0) return;
+
+    const todayStr = getLocalDateStr();
+    const checkKey = `${uid}_${todayStr}`;
+    if (dailyRateCheckRanKeyRef.current === checkKey) return;
+    dailyRateCheckRanKeyRef.current = checkKey;
+
+    let cancelled = false;
+
+    const runDailyRateCheck = async () => {
+      const savedUsd = bcvRate;
+      const savedEur = bcvEuroRate;
+      const savedLastDate = bcvLastUpdatedDate;
+      const savedPromptDate = lastRatePromptDate;
+      const savedPromptUsd = lastPromptedBcvRate;
+      const savedPromptEur = lastPromptedBcvEuroRate;
+      const savedHistory = rateHistory || [];
+
+      if (savedLastDate !== todayStr) {
+        const [usdResult, eurResult] = await Promise.allSettled([
+          fetchLiveBCVRate(),
+          fetchLiveBCVEuroRate()
+        ]);
+        if (cancelled) return;
+
+        const fetchedUsd =
+          usdResult.status === 'fulfilled' && Number.isFinite(usdResult.value.rate) && usdResult.value.rate > 0
+            ? round2(usdResult.value.rate)
+            : savedUsd;
+        const fetchedEur =
+          eurResult.status === 'fulfilled' && Number.isFinite(eurResult.value.rate) && eurResult.value.rate > 0
+            ? round2(eurResult.value.rate)
+            : savedEur;
+
+        const usdGotFresh = usdResult.status === 'fulfilled' && fetchedUsd > 0;
+        const eurGotFresh = eurResult.status === 'fulfilled' && fetchedEur > 0;
+
+        if (usdGotFresh || eurGotFresh) {
+          const nowIso = new Date().toISOString();
+          const updatedHistory = [
+            ...savedHistory.filter((h) => h.date !== todayStr),
+            { date: todayStr, rate: fetchedUsd }
+          ];
+          setBcvRateState(fetchedUsd);
+          setBcvEuroRateState(fetchedEur);
+          setRateHistory(updatedHistory);
+          setBcvLastUpdatedDate(todayStr);
+          setBcvLastUpdatedAt(nowIso);
+
+          saveBusinessProfileToFirestore(uid, {
+            bcvRate: fetchedUsd,
+            bcvEuroRate: fetchedEur,
+            rateHistory: updatedHistory,
+            bcvLastUpdatedDate: todayStr,
+            bcvLastUpdatedAt: nowIso
+          }).catch((e) => console.error('Firestore daily BCV auto-update error:', e));
+
+          const usdChanged = Math.abs(fetchedUsd - savedUsd) >= 0.01;
+          const eurChanged = Math.abs(fetchedEur - savedEur) >= 0.01;
+          const alreadyAnsweredForThisRate =
+            savedPromptDate === todayStr &&
+            typeof savedPromptUsd === 'number' &&
+            Math.abs(savedPromptUsd - fetchedUsd) < 0.01 &&
+            (typeof savedPromptEur !== 'number' || Math.abs(savedPromptEur - fetchedEur) < 0.01);
+
+          if ((usdChanged || eurChanged) && !alreadyAnsweredForThisRate) {
+            setRateChangeModalState({
+              isOpen: true,
+              source: 'daily_auto',
+              previousUsdRate: savedUsd,
+              newUsdRate: fetchedUsd,
+              previousEurRate: savedEur,
+              newEurRate: fetchedEur
+            });
+          }
+        }
+      } else if (savedPromptDate !== todayStr) {
+        // La tasa ya se actualizó hoy (por ejemplo en otro dispositivo), pero aún no se responde la alerta del día
+        const prevDayEntry = [...savedHistory]
+          .filter((h) => h.date < todayStr)
+          .sort((a, b) => b.date.localeCompare(a.date))[0];
+        const prevUsd =
+          typeof savedPromptUsd === 'number' && savedPromptUsd > 0
+            ? savedPromptUsd
+            : (prevDayEntry?.rate || savedUsd);
+        const prevEur =
+          typeof savedPromptEur === 'number' && savedPromptEur > 0
+            ? savedPromptEur
+            : savedEur;
+
+        const usdChanged = Math.abs(savedUsd - prevUsd) >= 0.01;
+        const eurChanged = Math.abs(savedEur - prevEur) >= 0.01;
+
+        if (usdChanged || eurChanged) {
+          setRateChangeModalState({
+            isOpen: true,
+            source: 'daily_auto',
+            previousUsdRate: prevUsd,
+            newUsdRate: savedUsd,
+            previousEurRate: prevEur,
+            newEurRate: savedEur
+          });
+        }
+      }
+    };
+
+    runDailyRateCheck().catch((e) => {
+      if (import.meta.env.DEV) console.warn('Daily BCV check skipped:', e);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    googleUser?.uid,
+    isOnline,
+    profileLoadedSeq,
+    bcvRate,
+    bcvEuroRate,
+    bcvLastUpdatedDate,
+    lastRatePromptDate,
+    lastPromptedBcvRate,
+    lastPromptedBcvEuroRate,
+    rateHistory
+  ]);
 
   /**
    * Firebase Auth initialization & real-time Firestore subscription (Strictly single-mount)
@@ -1922,7 +2220,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Cart operations
   const addToCart = (product: Product, quantity = 1, options?: { isExemptFromIVA?: boolean }) => {
-    const effectiveUnitUSD = getProductPriceUSD(product, bcvRate);
+    const effectiveUnitUSD = getProductPriceUSD(product, bcvRate, bcvEuroRate);
     const defaultExempt = typeof options?.isExemptFromIVA === 'boolean'
       ? options.isExemptFromIVA
       : isProductExempt(product);
@@ -1961,7 +2259,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeFromCart = (productId: string) => {
-    setCart(prev => prev.filter(item => item.product.id !== productId));
+    setCart(prev => {
+      const next = prev.filter(item => item.product.id !== productId);
+      if (next.length === 0) {
+        setCartDiscount(null);
+      }
+      return next;
+    });
   };
 
   const updateCartQuantity = (productId: string, quantity: number) => {
@@ -2005,7 +2309,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const clearCart = () => setCart([]);
+  const clearCart = () => {
+    setCart([]);
+    setCartDiscount(null);
+  };
 
   // Ref for double-submit protection in POS checkout
   const isCompletingSaleRef = useRef(false);
@@ -2067,16 +2374,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         applyIVA,
         applyIGTF,
         paymentMethod: paymentDetails.method,
-        combinedUsdCash: paymentDetails.combinedBreakdown?.usdCash || 0
+        combinedUsdCash: paymentDetails.combinedBreakdown?.usdCash || 0,
+        discount: cartDiscount
       });
 
       const {
+        grossSubtotalUSD,
+        discountUSD,
         subtotalUSD,
         exemptUSD,
         taxableUSD,
         ivaUSD,
         igtfUSD,
         totalUSD,
+        grossSubtotalBs,
+        discountBs,
+        discountCurrency,
         subtotalBs,
         exemptBs,
         taxableBs,
@@ -2084,6 +2397,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         igtfBs,
         totalBs
       } = fiscalTotals;
+
+      const hasGlobalDiscount = discountUSD > 0 || discountBs > 0;
 
       const snapshotItems: CartItem[] = cart.map(item => {
         const effectiveExempt = isCartItemExempt(item, applyIVA);
@@ -2108,6 +2423,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         clientAddress: clientData.address,
         items: snapshotItems,
         subtotalUSD,
+        ...(hasGlobalDiscount
+          ? {
+              grossSubtotalUSD,
+              discountUSD,
+              grossSubtotalBs,
+              discountBs,
+              discountCurrency,
+              ...(cartDiscount?.reason ? { discountReason: cartDiscount.reason } : {})
+            }
+          : {}),
         exemptUSD,
         taxableUSD,
         ivaUSD,
@@ -3237,6 +3562,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateBcvEuroRate,
         fetchLiveEuroRate,
         isFetchingLiveEuroRate,
+        commercialRoundingStep,
+        rateChangeModalState,
+        openRateRecalcModal,
+        closeRateRecalcModal,
+        applyCatalogPriceRecalculation,
         baseCurrency,
         setBaseCurrency,
         clients,
@@ -3258,6 +3588,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeFromCart,
         updateCartQuantity,
         setCartItemExempt,
+        cartDiscount,
+        setCartDiscount,
         clearCart,
         applyIVA,
         setApplyIVA,

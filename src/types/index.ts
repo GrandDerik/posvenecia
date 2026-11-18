@@ -12,6 +12,20 @@ export type ItemType = 'producto' | 'servicio';
 
 export type BaseCurrency = 'USD' | 'VED';
 
+export type ProductPriceCurrency = 'USD' | 'EUR' | 'Bs';
+export type ProductAnchorCurrency = 'USD' | 'EUR';
+export type RatePriceRecalcMode = 'update_bs_upward' | 'keep_static_bs';
+export type RatePriceCurrencyScope = 'auto_anchor' | 'USD' | 'EUR';
+
+export interface RateChangeModalState {
+  isOpen: boolean;
+  source: 'daily_auto' | 'manual';
+  previousUsdRate: number;
+  newUsdRate: number;
+  previousEurRate: number;
+  newEurRate: number;
+}
+
 export interface Product {
   id: string;
   code: string;
@@ -19,9 +33,11 @@ export interface Product {
   category: string;
   costUSD: number;
   priceUSD: number;
-  priceBsFixed?: number; // Precio asignado en Bolívares exactos
+  priceEUR?: number; // Ancla o equivalente exacto en Euros (€ BCV)
+  priceBsFixed?: number; // Precio estático asignado en Bolívares exactos
   costBsFixed?: number; // Costo unitario asignado en Bolívares exactos
-  priceCurrency?: 'USD' | 'Bs'; // Moneda original en que se fijó el precio de venta
+  priceCurrency?: ProductPriceCurrency; // Moneda principal en que se fijó el precio de venta
+  priceAnchorCurrency?: ProductAnchorCurrency; // Divisa ancla ($ USD o € EUR) para futuros cambios de tasa BCV
   costCurrency?: 'USD' | 'Bs'; // Moneda original en que se fijó el costo unitario
   stock: number;
   minStock: number;
@@ -65,6 +81,12 @@ export interface CartItem {
   unitPriceUSD: number;
   totalUSD: number;
   isExemptFromIVA?: boolean; // Tratamiento fiscal individual del ítem en el carrito (E = true, G = false)
+}
+
+export interface CartDiscount {
+  amount: number; // Monto exacto introducido en la moneda elegida (sin conversión inversa)
+  currency: 'USD' | 'Bs';
+  reason?: string;
 }
 
 export interface PaymentDetails {
@@ -119,6 +141,8 @@ export interface Sale {
   clientAddress?: string;
   items: CartItem[];
   subtotalUSD: number;
+  grossSubtotalUSD?: number;
+  discountUSD?: number;
   exemptUSD: number;
   taxableUSD: number;
   ivaUSD: number;
@@ -126,6 +150,10 @@ export interface Sale {
   totalUSD: number;
   bcvRate: number;
   subtotalBs: number;
+  grossSubtotalBs?: number;
+  discountBs?: number;
+  discountCurrency?: 'USD' | 'Bs';
+  discountReason?: string;
   exemptBs: number;
   taxableBs: number;
   ivaBs: number;
@@ -218,6 +246,8 @@ export interface ExpenseItem {
   previousCostUSD?: number;
   previousPriceUSD?: number;
   newPriceUSD?: number;
+  newPriceCurrency?: 'USD' | 'Bs';
+  newPriceBs?: number;
 }
 
 export interface Expense {

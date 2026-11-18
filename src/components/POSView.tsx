@@ -35,7 +35,8 @@ import {
   ChevronRight,
   ChevronDown,
   ChevronUp,
-  RotateCcw
+  RotateCcw,
+  Tag
 } from 'lucide-react';
 import { Product, PaymentMethod, PaymentDetails, Sale, Client } from '../types';
 import {
@@ -57,10 +58,12 @@ import { TransaccionExitosaModal } from './Modals/TransaccionExitosaModal';
 import { ComprobanteTicketModal } from './Modals/ComprobanteTicketModal';
 import { VenderServicioModal } from './Modals/VenderServicioModal';
 import { RecargoModal } from './Modals/RecargoModal';
+import { DescuentoModal } from './Modals/DescuentoModal';
 
 export const POSView: React.FC = () => {
   const { 
     bcvRate, 
+    bcvEuroRate,
     products, 
     categories: appCategories,
     cart, 
@@ -68,6 +71,8 @@ export const POSView: React.FC = () => {
     removeFromCart, 
     updateCartQuantity, 
     setCartItemExempt,
+    cartDiscount,
+    setCartDiscount,
     clearCart,
     applyIVA,
     setApplyIVA,
@@ -117,6 +122,7 @@ export const POSView: React.FC = () => {
   const [isCombinadoModalOpen, setIsCombinadoModalOpen] = useState(false);
   const [isServicioModalOpen, setIsServicioModalOpen] = useState(false);
   const [isRecargoModalOpen, setIsRecargoModalOpen] = useState(false);
+  const [isDescuentoModalOpen, setIsDescuentoModalOpen] = useState(false);
   const [isTransferenciaModalOpen, setIsTransferenciaModalOpen] = useState(false);
   
   // Client selection modals (no browser prompt)
@@ -285,12 +291,17 @@ export const POSView: React.FC = () => {
 
   // Cart fiscal calculations (Single Source of Truth shared with completeSale)
   const {
+    grossSubtotalUSD,
+    discountUSD,
     exemptUSD,
     taxableUSD,
     subtotalUSD,
     ivaUSD,
     igtfUSD,
     totalUSD,
+    grossSubtotalBs,
+    discountBs,
+    discountCurrency,
     exemptBs,
     taxableBs,
     subtotalBs,
@@ -304,8 +315,11 @@ export const POSView: React.FC = () => {
     applyIVA,
     applyIGTF,
     paymentMethod: selectedMethod,
-    combinedUsdCash: combinedData?.usdCash || 0
+    combinedUsdCash: combinedData?.usdCash || 0,
+    discount: cartDiscount
   });
+
+  const hasActiveDiscount = discountUSD > 0 || discountBs > 0;
 
   // Handle Payment Method Selection
   const handleSelectPaymentMethod = (method: PaymentMethod) => {
@@ -807,8 +821,8 @@ export const POSView: React.FC = () => {
               <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
               {filteredProducts.map((prod) => {
                 const inCartItem = cart.find(c => c.product.id === prod.id);
-                const priceBs = getProductPriceBs(prod, bcvRate);
-                const priceUSDVal = getProductPriceUSD(prod, bcvRate);
+                const priceBs = getProductPriceBs(prod, bcvRate, bcvEuroRate);
+                const priceUSDVal = getProductPriceUSD(prod, bcvRate, bcvEuroRate);
                 const isService = Boolean(prod.isService || prod.itemType === 'servicio');
                 const isOutOfStock = !isService && prod.stock <= 0;
                 const isMaxInCart = !isService && inCartItem && inCartItem.quantity >= prod.stock;
@@ -955,8 +969,8 @@ export const POSView: React.FC = () => {
             <div className="space-y-2">
               {filteredProducts.map((prod) => {
                 const inCartItem = cart.find(c => c.product.id === prod.id);
-                const priceBs = getProductPriceBs(prod, bcvRate);
-                const priceUSDVal = getProductPriceUSD(prod, bcvRate);
+                const priceBs = getProductPriceBs(prod, bcvRate, bcvEuroRate);
+                const priceUSDVal = getProductPriceUSD(prod, bcvRate, bcvEuroRate);
                 const isService = Boolean(prod.isService || prod.itemType === 'servicio');
                 const isOutOfStock = !isService && prod.stock <= 0;
                 const isMaxInCart = !isService && inCartItem && inCartItem.quantity >= prod.stock;
@@ -1164,23 +1178,62 @@ export const POSView: React.FC = () => {
         <div className="lg:col-span-4 bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] p-4 space-y-4 sticky top-20">
           
           {/* Cart Header */}
-          <div className="flex items-center justify-between pb-3 border-b border-[#DCE4F0]">
-            <div className="flex items-center gap-2">
-              <ShoppingCart className="w-4 h-4 text-blue-600" />
-              <h3 className="font-bold text-sm text-[#0B1528]">Carrito de Venta</h3>
-              <span className="text-[11px] font-bold bg-[#EBF3FE] border border-[#C5DCFC] text-[#1D4ED8] px-2 py-0.5 rounded-full font-mono-numbers">
-                {cart.reduce((a, b) => a + b.quantity, 0)} items
-              </span>
+          <div className="space-y-2.5 pb-3 border-b border-[#DCE4F0]">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <ShoppingCart className="w-4 h-4 text-blue-600 shrink-0" />
+                <h3 className="font-bold text-sm text-[#0B1528] truncate">Carrito de Venta</h3>
+                <span className="text-[11px] font-bold bg-[#EBF3FE] border border-[#C5DCFC] text-[#1D4ED8] px-2 py-0.5 rounded-full font-mono-numbers shrink-0">
+                  {cart.reduce((a, b) => a + b.quantity, 0)} items
+                </span>
+              </div>
+
+              {cart.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearCart();
+                    setPagoMovilData(null);
+                    setFiadoData(null);
+                    setCombinedData(null);
+                  }}
+                  className="text-xs text-[#BE123C] hover:text-rose-700 flex items-center gap-1 font-semibold cursor-pointer shrink-0"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Vaciar</span>
+                </button>
+              )}
             </div>
 
+            {/* Cart Quick Adjustment Actions: Recargo & Descuento Global */}
             {cart.length > 0 && (
-              <button
-                onClick={clearCart}
-                className="text-xs text-[#BE123C] hover:text-rose-700 flex items-center gap-1 font-semibold cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Vaciar</span>
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDescuentoModalOpen(true)}
+                  className={`px-2.5 py-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    hasActiveDiscount
+                      ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                      : 'bg-[#F8FAFC] hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border-[#DCE4F0] hover:border-emerald-300'
+                  }`}
+                  title="Aplicar descuento global en Bolívares o Dólares antes de IVA/IGTF"
+                >
+                  <Tag className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="truncate">
+                    {hasActiveDiscount ? 'Editar Descuento' : 'Aplicar Descuento'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsRecargoModalOpen(true)}
+                  className="px-2.5 py-2 rounded-xl bg-[#FFF3E8] hover:bg-[#FFE6CE] text-[#9A4B12] border border-[#F5D3B3] text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  title="Agregar recargo de delivery o cargo adicional"
+                >
+                  <Truck className="w-3.5 h-3.5 text-[#D96B27] shrink-0" />
+                  <span className="truncate">+ Recargo</span>
+                </button>
+              </div>
             )}
           </div>
 
@@ -1419,6 +1472,42 @@ export const POSView: React.FC = () => {
 
               {/* Subtotal & Breakdown (Strict SENIAT Separation) */}
               <div className="space-y-1 text-xs font-mono-numbers pt-1 text-slate-600">
+                {hasActiveDiscount && (
+                  <>
+                    <div className="flex justify-between text-slate-500">
+                      <span className="font-sans font-medium">Subtotal Bruto:</span>
+                      <span>${formatUSD(grossSubtotalUSD)} (Bs {formatBs(grossSubtotalBs)})</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-2.5 py-1.5 text-emerald-800 font-bold">
+                      <div className="flex items-center gap-1.5 min-w-0 font-sans">
+                        <Tag className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span className="truncate">
+                          Descuento{cartDiscount?.reason ? ` (${cartDiscount.reason})` : ''}:
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span>
+                          {discountCurrency === 'Bs'
+                            ? `-Bs ${formatBs(discountBs)} (-$${formatUSD(discountUSD)})`
+                            : `-$${formatUSD(discountUSD)} (-Bs ${formatBs(discountBs)})`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCartDiscount(null);
+                            setCombinedData(null);
+                            setFiadoData(null);
+                          }}
+                          className="w-5 h-5 rounded-md bg-white/80 hover:bg-rose-100 text-emerald-700 hover:text-rose-600 flex items-center justify-center transition-colors cursor-pointer"
+                          title="Quitar descuento global"
+                          aria-label="Quitar descuento global"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between">
                   <span className="text-emerald-800 font-semibold">Subtotal Exento (E):</span>
                   <span className="font-semibold text-emerald-800">${formatUSD(exemptUSD)} (Bs {formatBs(exemptBs)})</span>
@@ -2120,6 +2209,20 @@ export const POSView: React.FC = () => {
         isOpen={isRecargoModalOpen}
         onClose={() => setIsRecargoModalOpen(false)}
         subtotalUSD={subtotalUSD}
+      />
+
+      <DescuentoModal
+        isOpen={isDescuentoModalOpen}
+        onClose={() => setIsDescuentoModalOpen(false)}
+        bcvRate={bcvRate}
+        grossSubtotalUSD={grossSubtotalUSD}
+        grossSubtotalBs={grossSubtotalBs}
+        currentDiscount={cartDiscount}
+        onApply={(discount) => {
+          setCartDiscount(discount);
+          setCombinedData(null);
+          setFiadoData(null);
+        }}
       />
 
       {/* Modal / Popup de Producto Inexistente */}

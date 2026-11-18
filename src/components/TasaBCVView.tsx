@@ -32,7 +32,10 @@ export const TasaBCVView: React.FC = () => {
     fetchLiveEuroRate,
     isFetchingLiveEuroRate,
     baseCurrency,
-    setBaseCurrency
+    setBaseCurrency,
+    products,
+    commercialRoundingStep,
+    openRateRecalcModal
   } = useApp();
 
   // Rate inputs for manual/custom editing (kept in sync with Firestore)
@@ -65,12 +68,28 @@ export const TasaBCVView: React.FC = () => {
   // IGTF / IVA calculator
   const [calcAmount, setCalcAmount] = useState<string>('100');
 
+  const [lastChangedRates, setLastChangedRates] = useState<{
+    previousUsdRate: number;
+    newUsdRate: number;
+    previousEurRate: number;
+    newEurRate: number;
+  } | null>(null);
+
   const handleConsultDollarBCV = async () => {
+    const prevUsd = bcvRate;
     try {
       const rate = await fetchLiveRate();
       setDollarRateInput(rate.toFixed(2));
       setLiveSuccessMessage(`¡Tasa Dólar BCV consultada y guardada automáticamente en la nube: Bs. ${formatBs(rate)}!`);
-      setTimeout(() => setLiveSuccessMessage(null), 4000);
+      if (Math.abs(rate - prevUsd) >= 0.01) {
+        setLastChangedRates({
+          previousUsdRate: prevUsd,
+          newUsdRate: rate,
+          previousEurRate: bcvEuroRate,
+          newEurRate: bcvEuroRate
+        });
+      }
+      setTimeout(() => setLiveSuccessMessage(null), 6000);
     } catch {
       setLiveSuccessMessage('No se pudo conectar a la API del BCV para Dólar ($). Puede fijar una tasa personalizada abajo.');
       setTimeout(() => setLiveSuccessMessage(null), 4000);
@@ -78,11 +97,20 @@ export const TasaBCVView: React.FC = () => {
   };
 
   const handleConsultEuroBCV = async () => {
+    const prevEur = bcvEuroRate;
     try {
       const rate = await fetchLiveEuroRate();
       setEuroRateInput(rate.toFixed(2));
       setLiveSuccessMessage(`¡Tasa Euro BCV consultada y guardada automáticamente en la nube: Bs. ${formatBs(rate)}!`);
-      setTimeout(() => setLiveSuccessMessage(null), 4000);
+      if (Math.abs(rate - prevEur) >= 0.01) {
+        setLastChangedRates({
+          previousUsdRate: bcvRate,
+          newUsdRate: bcvRate,
+          previousEurRate: prevEur,
+          newEurRate: rate
+        });
+      }
+      setTimeout(() => setLiveSuccessMessage(null), 6000);
     } catch {
       setLiveSuccessMessage('No se pudo conectar a la API del BCV para Euro (€). Puede fijar una tasa personalizada abajo.');
       setTimeout(() => setLiveSuccessMessage(null), 4000);
@@ -91,21 +119,39 @@ export const TasaBCVView: React.FC = () => {
 
   const handleUpdateDollarRate = (e: React.FormEvent) => {
     e.preventDefault();
+    const prevUsd = bcvRate;
     const val = round2(parseFloat(dollarRateInput));
     if (!isNaN(val) && val > 0) {
       updateBcvRate(val);
       setRateUpdatedSuccess('¡Tasa Dólar personalizada guardada exitosamente en la nube!');
-      setTimeout(() => setRateUpdatedSuccess(null), 3000);
+      if (Math.abs(val - prevUsd) >= 0.01) {
+        setLastChangedRates({
+          previousUsdRate: prevUsd,
+          newUsdRate: val,
+          previousEurRate: bcvEuroRate,
+          newEurRate: bcvEuroRate
+        });
+      }
+      setTimeout(() => setRateUpdatedSuccess(null), 5000);
     }
   };
 
   const handleUpdateEuroRate = (e: React.FormEvent) => {
     e.preventDefault();
+    const prevEur = bcvEuroRate;
     const val = round2(parseFloat(euroRateInput));
     if (!isNaN(val) && val > 0) {
       updateBcvEuroRate(val);
       setRateUpdatedSuccess('¡Tasa Euro personalizada guardada exitosamente en la nube!');
-      setTimeout(() => setRateUpdatedSuccess(null), 3000);
+      if (Math.abs(val - prevEur) >= 0.01) {
+        setLastChangedRates({
+          previousUsdRate: bcvRate,
+          newUsdRate: bcvRate,
+          previousEurRate: prevEur,
+          newEurRate: val
+        });
+      }
+      setTimeout(() => setRateUpdatedSuccess(null), 5000);
     }
   };
 
@@ -238,6 +284,56 @@ export const TasaBCVView: React.FC = () => {
           </span>
         </div>
       </div>
+
+      {/* SECTION: RECÁLCULO INTELIGENTE DE PRECIOS DEL CATÁLOGO (Bs ESTÁTICO + ANCLA $ / € + REDONDEO COMERCIAL ARRIBA) */}
+      <div className="bg-white/95 p-5 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-[#E7F8EE] border border-[#A7E6C4] flex items-center justify-center text-[#065F46] shrink-0">
+            <Layers className="w-5 h-5" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="font-extrabold text-sm sm:text-base text-[#0B1528]">
+              Actualización de Precios del Catálogo con Redondeo Comercial Arriba
+            </h3>
+            <p className="text-xs text-slate-600 leading-relaxed max-w-2xl">
+              Revisa o fuerza en cualquier momento el recálculo de tus <strong>{products.length} productos</strong> multiplicando su ancla en <strong>Dólares ($) o Euros (€)</strong> por la tasa BCV vigente (sin decimales, redondeando siempre hacia arriba — paso actual: <strong>{commercialRoundingStep} Bs</strong>), o conserva los precios estáticos en Bs ajustando solo sus equivalentes en divisas.
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() =>
+            openRateRecalcModal(
+              lastChangedRates
+                ? { ...lastChangedRates, source: 'manual' }
+                : { source: 'manual' }
+            )
+          }
+          className="px-4 py-3 rounded-2xl bg-gradient-to-b from-emerald-600 to-emerald-700 hover:from-emerald-600 hover:to-emerald-800 text-white text-xs font-extrabold shadow-[0_6px_16px_-4px_rgba(5,150,105,0.45)] flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0"
+        >
+          <RotateCw className="w-4 h-4 shrink-0" />
+          <span>Recalcular Precios del Catálogo por Tasa BCV dolares o euro</span>
+        </button>
+      </div>
+
+      {lastChangedRates && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+          <div className="font-bold">
+            Se detectó un cambio reciente de tasa BCV. ¿Desea revisar y aplicar el ajuste en los precios de su catálogo ahora?
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              openRateRecalcModal({ ...lastChangedRates, source: 'daily_auto' });
+              setLastChangedRates(null);
+            }}
+            className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs transition-colors cursor-pointer whitespace-nowrap"
+          >
+            Revisar y Recalcular Precios
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         

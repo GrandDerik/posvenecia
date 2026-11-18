@@ -120,6 +120,14 @@ export const TransaccionExitosaModal: React.FC<TransaccionExitosaModalProps> = (
               <span>•</span>
               <span>Tasa: Bs. {formatBs(sale.bcvRate)}</span>
             </div>
+            {((sale.discountBs ?? 0) > 0 || (sale.discountUSD ?? 0) > 0) && (
+              <div className="mt-2.5 text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-1.5 font-mono-numbers">
+                Descuento aplicado{sale.discountReason ? ` (${sale.discountReason})` : ''}:{' '}
+                {sale.discountCurrency === 'Bs'
+                  ? `-Bs. ${formatBs(sale.discountBs || 0)} (-$${formatUSD(sale.discountUSD || 0)})`
+                  : `-$${formatUSD(sale.discountUSD || 0)} (-Bs. ${formatBs(sale.discountBs || 0)})`}
+              </div>
+            )}
             <div className="mt-3 pt-2.5 border-t border-slate-200 grid grid-cols-3 gap-2 text-[10px] font-mono-numbers">
               <div>
                 <span className="block text-slate-400 font-sans">Exento (E)</span>

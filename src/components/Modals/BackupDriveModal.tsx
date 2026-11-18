@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
 import { 
   Cloud, 
@@ -69,6 +70,25 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     const id = window.setTimeout(fn, ms);
     timersRef.current.push(id);
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -228,21 +248,30 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in">
-      <div className="bg-white rounded-3xl max-w-xl w-full p-5 sm:p-6 space-y-5 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto">
+  const modalContent = (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="backup-drive-modal-title"
+    >
+      <div
+        className="bg-white rounded-3xl max-w-xl w-full max-h-[85vh] flex flex-col shadow-2xl border border-slate-100 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         
-        {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            <span className="p-2.5 bg-blue-50 text-blue-600 rounded-2xl border border-blue-100">
+        {/* Fixed Header (always visible on mobile) */}
+        <div className="shrink-0 flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-100 bg-white">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="p-2.5 shrink-0 bg-blue-50 text-blue-600 rounded-2xl border border-blue-100">
               <Cloud className="w-6 h-6" />
             </span>
-            <div>
-              <h3 className="font-extrabold text-slate-900 text-base sm:text-lg">
+            <div className="min-w-0">
+              <h3 id="backup-drive-modal-title" className="font-extrabold text-slate-900 text-base sm:text-lg leading-tight">
                 Respaldo en Google Drive & Descargas Contables
               </h3>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 mt-0.5">
                 Histórico integral de productos, compras, ventas, cuentas por pagar y flujo de caja
               </p>
             </div>
@@ -250,11 +279,15 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
           <button 
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center cursor-pointer transition-colors"
+            aria-label="Cerrar modal"
+            className="w-9 h-9 shrink-0 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer transition-colors"
           >
-            ✕
+            <X className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Scrollable Content Body */}
+        <div className="flex-1 overflow-y-auto overscroll-contain p-5 space-y-5">
 
         {/* Feedback message banner */}
         {downloadFeedback && (
@@ -443,12 +476,14 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="pt-2 flex justify-end">
+        </div>
+
+        {/* Fixed Footer */}
+        <div className="shrink-0 px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+            className="px-5 py-2 bg-slate-200/80 hover:bg-slate-300/80 text-slate-800 rounded-xl text-xs font-bold transition-colors cursor-pointer"
           >
             Cerrar
           </button>
@@ -457,4 +492,6 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : null;
 };

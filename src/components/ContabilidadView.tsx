@@ -2725,7 +2725,11 @@ export const ContabilidadView: React.FC = () => {
                           <div className="text-right">
                             <span className="font-mono-numbers font-bold text-slate-900">${it.totalCostUSD.toFixed(2)}</span>
                             <span className={`block text-[9px] font-bold ${it.strategy === 'fifo' ? 'text-[#065F46]' : 'text-[#1D4ED8]'}`}>
-                              {it.strategy === 'fifo' ? 'Lote FIFO' : `Venta: $${it.newPriceUSD?.toFixed(2) || '0'}`}
+                              {it.strategy === 'fifo'
+                                ? 'Lote FIFO'
+                                : it.newPriceCurrency === 'Bs' && typeof it.newPriceBs === 'number' && it.newPriceBs > 0
+                                  ? `Venta: Bs. ${formatBs(it.newPriceBs)}`
+                                  : `Venta: $${it.newPriceUSD?.toFixed(2) || '0'}`}
                             </span>
                           </div>
                         </div>

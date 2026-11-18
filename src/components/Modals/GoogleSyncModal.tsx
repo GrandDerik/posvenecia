@@ -1,23 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { 
   Cloud, 
   Download, 
   Smartphone, 
-  Laptop, 
   Sparkles, 
   RefreshCw, 
-  HardDrive, 
-  ShieldCheck, 
   LogOut,
-  LogIn,
   CheckCircle2,
   AlertCircle,
   Share2,
   Copy,
   FolderLock,
-  Database
+  Database,
+  X
 } from 'lucide-react';
 
 interface GoogleSyncModalProps {
@@ -64,6 +62,25 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
     const id = window.setTimeout(fn, ms);
     timersRef.current.push(id);
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -160,14 +177,23 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
     scheduleTimer(() => setCopiedLink(false), 2500);
   };
 
-  return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in">
-      <div className="bg-white rounded-3xl max-w-lg w-full p-5 sm:p-6 space-y-4 shadow-2xl border border-slate-100 max-h-[92vh] overflow-y-auto">
+  const modalContent = (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="google-sync-modal-title"
+    >
+      <div
+        className="bg-white rounded-3xl w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl border border-slate-100 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         
-        {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-white border border-slate-200 shadow-xs flex items-center justify-center p-2">
+        {/* Fixed Header (always visible on mobile) */}
+        <div className="shrink-0 flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-100 bg-white">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 shrink-0 rounded-2xl bg-white border border-slate-200 shadow-xs flex items-center justify-center p-2">
               <svg className="w-full h-full" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z" />
                 <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24Z" />
@@ -175,23 +201,27 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
                 <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98Z" />
               </svg>
             </div>
-            <div>
-              <h3 className="font-extrabold text-slate-900 text-base sm:text-lg">
+            <div className="min-w-0">
+              <h3 id="google-sync-modal-title" className="font-extrabold text-slate-900 text-base leading-tight truncate">
                 Cuenta Google & Google Drive
               </h3>
-              <p className="text-xs text-slate-500">
-                Almacenamiento privado en tu Drive personal y acceso multi-dispositivo
+              <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
+                Respaldo privado en tu Drive y sincronización multi-dispositivo
               </p>
             </div>
           </div>
           <button 
             type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center cursor-pointer transition-colors"
+            aria-label="Cerrar modal"
+            className="w-9 h-9 shrink-0 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer transition-colors"
           >
-            ✕
+            <X className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Scrollable Content Body */}
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-4">
 
         {/* Feedback Banner */}
         {localFeedback && (
@@ -380,26 +410,26 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
               Al finalizar tu jornada comercial y presionar <strong className="text-slate-800">Cerrar Caja</strong>, el sistema empaqueta automáticamente toda la base de datos (<span className="font-mono text-slate-800 font-bold">posvenecia_database.json</span>) y la sube de forma segura y privada a tu Google Drive personal.
             </p>
 
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
               <button
                 type="button"
                 disabled={isDriveSyncing || !googleUser?.isConnected}
                 onClick={handleManualSync}
-                className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                className="flex-1 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isDriveSyncing ? 'animate-spin' : ''}`} />
-                <span>{isDriveSyncing ? 'Guardando...' : 'Respaldar en Google Drive Ahora'}</span>
+                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isDriveSyncing ? 'animate-spin' : ''}`} />
+                <span>{isDriveSyncing ? 'Guardando...' : 'Respaldar en Drive'}</span>
               </button>
 
               <button
                 type="button"
                 disabled={isDriveSyncing || !googleUser?.isConnected}
                 onClick={handleManualReload}
-                className="flex-1 py-2 px-3 bg-white hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold border border-slate-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                className="flex-1 py-2.5 px-3 bg-white hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold border border-slate-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                 title="Descargar y restaurar el respaldo de tu Google Drive"
               >
-                <Cloud className="w-3.5 h-3.5 text-blue-600" />
-                <span>Restaurar desde Drive</span>
+                <Cloud className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span>Restaurar Drive</span>
               </button>
             </div>
           </div>
@@ -472,12 +502,14 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="pt-1 flex justify-end">
+        </div>
+
+        {/* Fixed Footer */}
+        <div className="shrink-0 px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+            className="px-5 py-2 bg-slate-200/80 hover:bg-slate-300/80 text-slate-800 rounded-xl text-xs font-bold transition-colors cursor-pointer"
           >
             Cerrar
           </button>
@@ -486,4 +518,6 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : null;
 };

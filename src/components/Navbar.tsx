@@ -119,6 +119,7 @@ export const Navbar: React.FC = () => {
   ];
 
   return (
+    <>
     <header className="bg-[#EEF2F7]/90 backdrop-blur-md sticky top-0 z-30 pt-2.5 pb-1 px-3 sm:px-6">
       <div className="max-w-6xl mx-auto space-y-2.5">
         
@@ -387,13 +388,13 @@ export const Navbar: React.FC = () => {
         {/* Subtle Indicator bar below tabs matching screenshot */}
         <div className="w-28 sm:w-36 h-1 bg-blue-400/50 rounded-full mx-auto -mt-1"></div>
       </div>
+    </header>
 
-      {/* Google Account, PWA Install & Multi-Device Sync Modal */}
+      {/* Google Account, PWA Install & Multi-Device Sync Modal (rendered outside header) */}
       <GoogleSyncModal
         isOpen={isGoogleModalOpen}
         onClose={() => setIsGoogleModalOpen(false)}
       />
-
-    </header>
+    </>
   );
 };

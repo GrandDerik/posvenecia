@@ -21,11 +21,23 @@ import {
   History,
   TrendingUp,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Euro,
+  Lock
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { Product, KardexMovementType } from '../types';
-import { formatBs, formatUSD, getLocalDateStr, round2, round6, getProductPriceBs, getProductPriceUSD } from '../utils/exportUtils';
+import { Product, KardexMovementType, ProductPriceCurrency, ProductAnchorCurrency } from '../types';
+import {
+  formatBs,
+  formatUSD,
+  getLocalDateStr,
+  round2,
+  round6,
+  getProductPriceBs,
+  getProductPriceUSD,
+  getProductPriceEUR,
+  getProductAnchorCurrency
+} from '../utils/exportUtils';
 
 export const ProductsView: React.FC = () => {
   const { 
@@ -34,7 +46,8 @@ export const ProductsView: React.FC = () => {
     updateProduct, 
     deleteProduct, 
     adjustStock, 
-    bcvRate, 
+    bcvRate,
+    bcvEuroRate,
     categories: appCategories, 
     addCategory,
     baseCurrency,
@@ -61,16 +74,19 @@ export const ProductsView: React.FC = () => {
   const [isCreatingCategory, setIsCreatingCategory] = useState(false);
   const [newCategoryInput, setNewCategoryInput] = useState('');
   
-  // Pricing
+  // Pricing (Mixed Bs static + USD / EUR anchor)
   const [priceUSD, setPriceUSD] = useState('');
+  const [priceEUR, setPriceEUR] = useState('');
   const [priceBs, setPriceBs] = useState('');
   const [costUSD, setCostUSD] = useState('');
   const [costBs, setCostBs] = useState('');
-  const [activeCurrencyInput, setActiveCurrencyInput] = useState<'USD' | 'Bs'>(baseCurrency === 'VED' ? 'Bs' : 'USD');
-  const [priceSourceCurrency, setPriceSourceCurrency] = useState<'USD' | 'Bs'>(baseCurrency === 'VED' ? 'Bs' : 'USD');
+  const [activeCurrencyInput, setActiveCurrencyInput] = useState<ProductPriceCurrency>(baseCurrency === 'VED' ? 'Bs' : 'USD');
+  const [priceSourceCurrency, setPriceSourceCurrency] = useState<ProductPriceCurrency>(baseCurrency === 'VED' ? 'Bs' : 'USD');
+  const [priceAnchorCurrency, setPriceAnchorCurrency] = useState<ProductAnchorCurrency>('USD');
   const [costSourceCurrency, setCostSourceCurrency] = useState<'USD' | 'Bs'>(baseCurrency === 'VED' ? 'Bs' : 'USD');
 
   const safeBcvRate = typeof bcvRate === 'number' && Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 1;
+  const safeBcvEuroRate = typeof bcvEuroRate === 'number' && Number.isFinite(bcvEuroRate) && bcvEuroRate > 0 ? bcvEuroRate : safeBcvRate;
 
   // Stock & specs
   const [stock, setStock] = useState('');
@@ -100,7 +116,7 @@ export const ProductsView: React.FC = () => {
   });
 
   const handleOpenAdd = () => {
-    const defaultCurr: 'USD' | 'Bs' = baseCurrency === 'VED' ? 'Bs' : 'USD';
+    const defaultCurr: ProductPriceCurrency = baseCurrency === 'VED' ? 'Bs' : 'USD';
     setEditingProduct(null);
     setFormError(null);
     setIsSubmitting(false);
@@ -112,10 +128,12 @@ export const ProductsView: React.FC = () => {
     setCostUSD('');
     setCostBs('');
     setPriceUSD('');
+    setPriceEUR('');
     setPriceBs('');
     setActiveCurrencyInput(defaultCurr);
     setPriceSourceCurrency(defaultCurr);
-    setCostSourceCurrency(defaultCurr);
+    setPriceAnchorCurrency('USD');
+    setCostSourceCurrency(defaultCurr === 'Bs' ? 'Bs' : 'USD');
     setStock('20');
     setMinStock('5');
     setUnit('unidad');
@@ -129,10 +147,14 @@ export const ProductsView: React.FC = () => {
 
   const handleOpenEdit = (p: Product) => {
     const isPriceBs = p.priceCurrency === 'Bs' || (p.priceCurrency === undefined && typeof p.priceBsFixed === 'number' && p.priceBsFixed > 0);
+    const isPriceEUR = p.priceCurrency === 'EUR';
     const isCostBs = p.costCurrency === 'Bs' || (p.costCurrency === undefined && typeof p.costBsFixed === 'number' && p.costBsFixed > 0);
-    const defaultTab: 'USD' | 'Bs' = isPriceBs
+    const detectedAnchor: ProductAnchorCurrency = getProductAnchorCurrency(p);
+    const defaultTab: ProductPriceCurrency = isPriceBs
       ? 'Bs'
-      : (p.priceCurrency === 'USD' ? 'USD' : (baseCurrency === 'VED' ? 'Bs' : 'USD'));
+      : isPriceEUR
+        ? 'EUR'
+        : (p.priceCurrency === 'USD' ? 'USD' : (baseCurrency === 'VED' ? 'Bs' : 'USD'));
 
     setEditingProduct(p);
     setFormError(null);
@@ -159,13 +181,28 @@ export const ProductsView: React.FC = () => {
         ? round2(p.priceBsFixed)
         : round2((p.priceUSD || 0) * safeBcvRate);
       setPriceBs(exactPriceBs > 0 ? exactPriceBs.toString() : '');
-      setPriceUSD(exactPriceBs > 0 ? (exactPriceBs / safeBcvRate).toFixed(2) : '');
+      const savedUSD = p.priceUSD > 0 ? p.priceUSD : (exactPriceBs / safeBcvRate);
+      const savedEUR = (typeof p.priceEUR === 'number' && p.priceEUR > 0) ? p.priceEUR : (exactPriceBs / safeBcvEuroRate);
+      setPriceUSD(savedUSD > 0 ? round2(savedUSD).toFixed(2) : '');
+      setPriceEUR(savedEUR > 0 ? round2(savedEUR).toFixed(2) : '');
+    } else if (isPriceEUR) {
+      const exactPriceEUR = (typeof p.priceEUR === 'number' && p.priceEUR > 0)
+        ? p.priceEUR
+        : getProductPriceEUR(p, safeBcvRate, safeBcvEuroRate);
+      const eqBs = round2(exactPriceEUR * safeBcvEuroRate);
+      setPriceEUR(exactPriceEUR > 0 ? exactPriceEUR.toString() : '');
+      setPriceBs(eqBs > 0 ? eqBs.toFixed(2) : '');
+      setPriceUSD(eqBs > 0 ? (eqBs / safeBcvRate).toFixed(2) : '');
     } else {
-      setPriceUSD(p.priceUSD ? p.priceUSD.toString() : '');
-      setPriceBs(p.priceUSD ? round2(p.priceUSD * safeBcvRate).toFixed(2) : '');
+      const exactUSD = p.priceUSD || 0;
+      const eqBs = round2(exactUSD * safeBcvRate);
+      setPriceUSD(exactUSD > 0 ? exactUSD.toString() : '');
+      setPriceBs(eqBs > 0 ? eqBs.toFixed(2) : '');
+      setPriceEUR(eqBs > 0 ? (eqBs / safeBcvEuroRate).toFixed(2) : '');
     }
 
-    setPriceSourceCurrency(isPriceBs ? 'Bs' : 'USD');
+    setPriceSourceCurrency(isPriceBs ? 'Bs' : (isPriceEUR ? 'EUR' : 'USD'));
+    setPriceAnchorCurrency(detectedAnchor);
     setCostSourceCurrency(isCostBs ? 'Bs' : 'USD');
     setActiveCurrencyInput(defaultTab);
     setStock(p.stock.toString());
@@ -247,15 +284,34 @@ export const ProductsView: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  // Price changes sync (source-preserving: never overwrites entered Bs via round-trip)
+  // Price changes sync (source-preserving: never overwrites entered static Bs via round-trip)
   const handlePriceUSDChange = (val: string) => {
     setPriceSourceCurrency('USD');
+    setPriceAnchorCurrency('USD');
     setPriceUSD(val);
     const num = parseFloat(val);
     if (!isNaN(num)) {
-      setPriceBs(round2(num * safeBcvRate).toFixed(2));
+      const eqBs = round2(num * safeBcvRate);
+      setPriceBs(eqBs.toFixed(2));
+      setPriceEUR(safeBcvEuroRate > 0 ? (eqBs / safeBcvEuroRate).toFixed(2) : '');
     } else {
       setPriceBs('');
+      setPriceEUR('');
+    }
+  };
+
+  const handlePriceEURChange = (val: string) => {
+    setPriceSourceCurrency('EUR');
+    setPriceAnchorCurrency('EUR');
+    setPriceEUR(val);
+    const num = parseFloat(val);
+    if (!isNaN(num)) {
+      const eqBs = round2(num * safeBcvEuroRate);
+      setPriceBs(eqBs.toFixed(2));
+      setPriceUSD(safeBcvRate > 0 ? (eqBs / safeBcvRate).toFixed(2) : '');
+    } else {
+      setPriceBs('');
+      setPriceUSD('');
     }
   };
 
@@ -263,10 +319,12 @@ export const ProductsView: React.FC = () => {
     setPriceSourceCurrency('Bs');
     setPriceBs(val);
     const num = parseFloat(val);
-    if (!isNaN(num) && safeBcvRate > 0) {
-      setPriceUSD((num / safeBcvRate).toFixed(2));
+    if (!isNaN(num) && num > 0) {
+      setPriceUSD(safeBcvRate > 0 ? (num / safeBcvRate).toFixed(2) : '');
+      setPriceEUR(safeBcvEuroRate > 0 ? (num / safeBcvEuroRate).toFixed(2) : '');
     } else {
       setPriceUSD('');
+      setPriceEUR('');
     }
   };
 
@@ -311,12 +369,32 @@ export const ProductsView: React.FC = () => {
 
     const parsedPriceBs = parseFloat(priceBs);
     const parsedPriceUSD = parseFloat(priceUSD);
+    const parsedPriceEUR = parseFloat(priceEUR);
+
     const finalPriceBsFixed = priceSourceCurrency === 'Bs' && !isNaN(parsedPriceBs) && parsedPriceBs > 0
       ? round2(parsedPriceBs)
       : undefined;
-    const calculatedPriceUSD = priceSourceCurrency === 'Bs'
-      ? (finalPriceBsFixed && safeBcvRate > 0 ? round6(finalPriceBsFixed / safeBcvRate) : 0)
-      : (!isNaN(parsedPriceUSD) && parsedPriceUSD > 0 ? round6(parsedPriceUSD) : 0);
+
+    let calculatedPriceUSD = 0;
+    let calculatedPriceEUR = 0;
+    const effectiveAnchorCurrency: ProductAnchorCurrency =
+      priceSourceCurrency === 'EUR'
+        ? 'EUR'
+        : priceSourceCurrency === 'USD'
+          ? 'USD'
+          : priceAnchorCurrency;
+
+    if (priceSourceCurrency === 'Bs' && finalPriceBsFixed) {
+      // Precio estático en Bolívares guardado tal cual; el equivalente en $ o € sirve como ancla para el futuro
+      calculatedPriceUSD = safeBcvRate > 0 ? round6(finalPriceBsFixed / safeBcvRate) : 0;
+      calculatedPriceEUR = safeBcvEuroRate > 0 ? round6(finalPriceBsFixed / safeBcvEuroRate) : 0;
+    } else if (priceSourceCurrency === 'EUR' && !isNaN(parsedPriceEUR) && parsedPriceEUR > 0) {
+      calculatedPriceEUR = round6(parsedPriceEUR);
+      calculatedPriceUSD = safeBcvRate > 0 ? round6((calculatedPriceEUR * safeBcvEuroRate) / safeBcvRate) : 0;
+    } else if (!isNaN(parsedPriceUSD) && parsedPriceUSD > 0) {
+      calculatedPriceUSD = round6(parsedPriceUSD);
+      calculatedPriceEUR = safeBcvEuroRate > 0 ? round6((calculatedPriceUSD * safeBcvRate) / safeBcvEuroRate) : 0;
+    }
 
     const parsedCostBs = parseFloat(costBs);
     const parsedCostUSD = parseFloat(costUSD);
@@ -333,9 +411,11 @@ export const ProductsView: React.FC = () => {
       category: finalCategory,
       costUSD: calculatedCostUSD,
       priceUSD: calculatedPriceUSD,
+      priceEUR: calculatedPriceEUR > 0 ? calculatedPriceEUR : undefined,
       priceBsFixed: finalPriceBsFixed,
       costBsFixed: finalCostBsFixed,
       priceCurrency: priceSourceCurrency,
+      priceAnchorCurrency: effectiveAnchorCurrency,
       costCurrency: costSourceCurrency,
       stock: isService ? 999999 : (parseInt(stock) || 0),
       minStock: isService ? 0 : (parseInt(minStock) || 5),
@@ -377,8 +457,8 @@ export const ProductsView: React.FC = () => {
       'Nombre': p.name,
       'Categoría': p.category,
       'Costo USD': round2(p.costUSD),
-      'Precio USD': round2(getProductPriceUSD(p, bcvRate)),
-      'Precio Bs (Tasa BCV)': getProductPriceBs(p, bcvRate),
+      'Precio USD': round2(getProductPriceUSD(p, bcvRate, bcvEuroRate)),
+      'Precio Bs (Tasa BCV)': getProductPriceBs(p, bcvRate, bcvEuroRate),
       'Stock Actual': (p.isService || p.itemType === 'servicio') ? 'Ilimitado' : p.stock,
       'Stock Mínimo': (p.isService || p.itemType === 'servicio') ? '-' : p.minStock,
       'Unidad': p.unit,
@@ -623,8 +703,11 @@ export const ProductsView: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((prod) => {
-                const priceBsVal = getProductPriceBs(prod, bcvRate);
-                const priceUSDVal = getProductPriceUSD(prod, bcvRate);
+                const priceBsVal = getProductPriceBs(prod, bcvRate, bcvEuroRate);
+                const priceUSDVal = getProductPriceUSD(prod, bcvRate, bcvEuroRate);
+                const priceEURVal = getProductPriceEUR(prod, bcvRate, bcvEuroRate);
+                const anchorCurr = getProductAnchorCurrency(prod);
+                const isStaticBs = typeof prod.priceBsFixed === 'number' && prod.priceBsFixed > 0;
                 const isService = Boolean(prod.isService || prod.itemType === 'servicio');
                 const isLow = !isService && prod.stock <= prod.minStock;
 
@@ -689,17 +772,32 @@ export const ProductsView: React.FC = () => {
                     </td>
 
                     {/* Primary Price */}
-                    <td className="py-3 px-4 text-right font-mono-numbers font-black text-[#0B1528] text-sm">
-                      {baseCurrency === 'VED' 
-                        ? `Bs. ${formatBs(priceBsVal)}` 
-                        : `$${formatUSD(priceUSDVal)}`}
+                    <td className="py-3 px-4 text-right font-mono-numbers">
+                      <div className="font-black text-[#0B1528] text-sm">
+                        {baseCurrency === 'VED'
+                          ? `Bs. ${formatBs(priceBsVal)}`
+                          : (anchorCurr === 'EUR' && !isStaticBs ? `€${formatUSD(priceEURVal)}` : `$${formatUSD(priceUSDVal)}`)}
+                      </div>
+                      {isStaticBs && (
+                        <span className="inline-flex items-center gap-0.5 text-[9px] font-sans font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded mt-0.5">
+                          <Lock className="w-2.5 h-2.5" />
+                          Bs Estático • Ancla {anchorCurr === 'EUR' ? '€' : '$'}
+                        </span>
+                      )}
                     </td>
 
                     {/* Secondary Converted Price */}
-                    <td className="py-3 px-4 text-right font-mono-numbers font-bold text-blue-700 text-sm">
-                      {baseCurrency === 'VED' 
-                        ? `$${formatUSD(priceUSDVal)}` 
-                        : `Bs. ${formatBs(priceBsVal)}`}
+                    <td className="py-3 px-4 text-right font-mono-numbers">
+                      <div className="font-bold text-blue-700 text-sm">
+                        {baseCurrency === 'VED'
+                          ? (anchorCurr === 'EUR' ? `€${formatUSD(priceEURVal)}` : `$${formatUSD(priceUSDVal)}`)
+                          : `Bs. ${formatBs(priceBsVal)}`}
+                      </div>
+                      {anchorCurr === 'EUR' && (
+                        <span className="text-[10px] text-slate-500 font-semibold block">
+                          {baseCurrency === 'VED' ? `≈ $${formatUSD(priceUSDVal)}` : `Ancla €${formatUSD(priceEURVal)}`}
+                        </span>
+                      )}
                     </td>
 
                     {/* Stock */}
@@ -1237,42 +1335,87 @@ export const ProductsView: React.FC = () => {
                 />
               </div>
 
-              {/* Price Fields with Dual USD & VED */}
-              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800">
-                    Precios Bimonetarios (Tasa BCV: Bs. {formatBs(bcvRate)})
-                  </span>
+              {/* Price Fields with Mixed Bs Static + USD / EUR Anchor */}
+              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">
+                      Precios Mixtos (Bs / $ USD / € EUR)
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-mono-numbers">
+                      BCV $: Bs. {formatBs(safeBcvRate)} • BCV €: Bs. {formatBs(safeBcvEuroRate)}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-1 text-[10px] font-bold">
                     <button
                       type="button"
-                      onClick={() => setActiveCurrencyInput('USD')}
-                      className={`px-2 py-0.5 rounded cursor-pointer ${
-                        activeCurrencyInput === 'USD' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'
+                      onClick={() => setActiveCurrencyInput('Bs')}
+                      className={`px-2.5 py-1 rounded-lg cursor-pointer transition-colors ${
+                        activeCurrencyInput === 'Bs' ? 'bg-emerald-600 text-white shadow-2xs' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                       }`}
                     >
-                      En $ USD
+                      Bs (Estático)
                     </button>
                     <button
                       type="button"
-                      onClick={() => setActiveCurrencyInput('Bs')}
-                      className={`px-2 py-0.5 rounded cursor-pointer ${
-                        activeCurrencyInput === 'Bs' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-700'
+                      onClick={() => setActiveCurrencyInput('USD')}
+                      className={`px-2.5 py-1 rounded-lg cursor-pointer transition-colors ${
+                        activeCurrencyInput === 'USD' ? 'bg-blue-600 text-white shadow-2xs' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
                       }`}
                     >
-                      En Bs VED
+                      $ USD
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveCurrencyInput('EUR')}
+                      className={`px-2.5 py-1 rounded-lg cursor-pointer transition-colors ${
+                        activeCurrencyInput === 'EUR' ? 'bg-indigo-600 text-white shadow-2xs' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                      }`}
+                    >
+                      € EUR
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                      Precio de Venta {activeCurrencyInput === 'USD' ? '($ USD) *' : '(Bs VED) *'}
+                      Precio de Venta{' '}
+                      {activeCurrencyInput === 'Bs'
+                        ? '(Bs Estático) *'
+                        : activeCurrencyInput === 'EUR'
+                          ? '(€ EUR) *'
+                          : '($ USD) *'}
                     </label>
-                    {activeCurrencyInput === 'USD' ? (
+                    {activeCurrencyInput === 'Bs' ? (
                       <div className="relative">
-                        <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">$</span>
+                        <span className="absolute left-2.5 top-2 text-xs font-bold text-emerald-700">Bs.</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          required
+                          placeholder="500.00"
+                          value={priceBs}
+                          onChange={(e) => handlePriceBsChange(e.target.value)}
+                          className="w-full pl-8 pr-2 py-1.5 bg-white border border-emerald-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                    ) : activeCurrencyInput === 'EUR' ? (
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-2 text-xs font-bold text-indigo-600">€</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          required
+                          placeholder="1.50"
+                          value={priceEUR}
+                          onChange={(e) => handlePriceEURChange(e.target.value)}
+                          className="w-full pl-6 pr-2 py-1.5 bg-white border border-indigo-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-2 text-xs font-bold text-blue-600">$</span>
                         <input
                           type="number"
                           step="0.01"
@@ -1280,35 +1423,40 @@ export const ProductsView: React.FC = () => {
                           placeholder="1.35"
                           value={priceUSD}
                           onChange={(e) => handlePriceUSDChange(e.target.value)}
-                          className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900"
-                        />
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">Bs.</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          required
-                          placeholder="1200.00"
-                          value={priceBs}
-                          onChange={(e) => handlePriceBsChange(e.target.value)}
-                          className="w-full pl-8 pr-2 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900"
+                          className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:border-blue-500 focus:outline-none"
                         />
                       </div>
                     )}
-                    <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">
-                      {activeCurrencyInput === 'USD' 
-                        ? `≈ Bs. ${formatBs(priceSourceCurrency === 'Bs' && (parseFloat(priceBs) || 0) > 0 ? round2(parseFloat(priceBs) || 0) : round2((parseFloat(priceUSD) || 0) * safeBcvRate))} (informativo)`
-                        : `≈ $${formatUSD((parseFloat(priceBs) || 0) / safeBcvRate)} USD (informativo)`}
+                    <span className="text-[10px] text-slate-500 font-mono mt-1 block">
+                      {activeCurrencyInput === 'Bs' ? (
+                        priceAnchorCurrency === 'EUR'
+                          ? `Ancla €: €${formatUSD((parseFloat(priceBs) || 0) / safeBcvEuroRate)} • ≈ $${formatUSD((parseFloat(priceBs) || 0) / safeBcvRate)}`
+                          : `Ancla $: $${formatUSD((parseFloat(priceBs) || 0) / safeBcvRate)} • ≈ €${formatUSD((parseFloat(priceBs) || 0) / safeBcvEuroRate)}`
+                      ) : activeCurrencyInput === 'EUR' ? (
+                        `≈ Bs. ${formatBs(round2((parseFloat(priceEUR) || 0) * safeBcvEuroRate))} • ≈ $${formatUSD(((parseFloat(priceEUR) || 0) * safeBcvEuroRate) / safeBcvRate)}`
+                      ) : (
+                        `≈ Bs. ${formatBs(priceSourceCurrency === 'Bs' && (parseFloat(priceBs) || 0) > 0 ? round2(parseFloat(priceBs) || 0) : round2((parseFloat(priceUSD) || 0) * safeBcvRate))} (informativo)`
+                      )}
                     </span>
                   </div>
 
                   <div>
                     <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                      Costo Unitario ({activeCurrencyInput === 'USD' ? '$ USD' : 'Bs VED'})
+                      Costo Unitario ({activeCurrencyInput === 'Bs' ? 'Bs VED' : '$ USD'})
                     </label>
-                    {activeCurrencyInput === 'USD' ? (
+                    {activeCurrencyInput === 'Bs' ? (
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">Bs.</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="350.00"
+                          value={costBs}
+                          onChange={(e) => handleCostBsChange(e.target.value)}
+                          className="w-full pl-8 pr-2 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900"
+                        />
+                      </div>
+                    ) : (
                       <div className="relative">
                         <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">$</span>
                         <input
@@ -1320,32 +1468,62 @@ export const ProductsView: React.FC = () => {
                           className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900"
                         />
                       </div>
-                    ) : (
-                      <div className="relative">
-                        <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">Bs.</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          placeholder="900.00"
-                          value={costBs}
-                          onChange={(e) => handleCostBsChange(e.target.value)}
-                          className="w-full pl-8 pr-2 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900"
-                        />
-                      </div>
                     )}
-                    <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">
+                    <span className="text-[10px] text-slate-500 font-mono mt-1 block">
                       {(() => {
                         const pRef = activeCurrencyInput === 'Bs' ? (parseFloat(priceBs) || 0) : (parseFloat(priceUSD) || 0);
                         const cRef = activeCurrencyInput === 'Bs' ? (parseFloat(costBs) || 0) : (parseFloat(costUSD) || 0);
                         const marginStr = pRef > 0 && cRef > 0 ? `${Math.round(((pRef - cRef) / pRef) * 100)}%` : '-';
                         const equivStr = activeCurrencyInput === 'Bs' && cRef > 0
                           ? ` • ≈ $${formatUSD(cRef / safeBcvRate)}`
-                          : (activeCurrencyInput === 'USD' && cRef > 0 ? ` • ≈ Bs. ${formatBs(round2(cRef * safeBcvRate))}` : '');
+                          : (activeCurrencyInput !== 'Bs' && cRef > 0 ? ` • ≈ Bs. ${formatBs(round2(cRef * safeBcvRate))}` : '');
                         return `Margen: ${marginStr}${equivStr}`;
                       })()}
                     </span>
                   </div>
                 </div>
+
+                {/* Smart Anchor Selector when entering Static Base Price in Bolívares */}
+                {activeCurrencyInput === 'Bs' && (
+                  <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-2.5 space-y-1.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-950">
+                        <Lock className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                        <span>Ancla inteligente para futuros cambios de tasa BCV:</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setPriceAnchorCurrency('USD')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 border transition-colors cursor-pointer ${
+                            priceAnchorCurrency === 'USD'
+                              ? 'bg-[#D96B27] border-[#B45309] text-white shadow-2xs'
+                              : 'bg-white border-emerald-200 text-slate-700 hover:bg-emerald-100/50'
+                          }`}
+                        >
+                          <DollarSign className="w-3 h-3" />
+                          <span>Anclar a $ Dólar</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPriceAnchorCurrency('EUR')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 border transition-colors cursor-pointer ${
+                            priceAnchorCurrency === 'EUR'
+                              ? 'bg-blue-600 border-blue-700 text-white shadow-2xs'
+                              : 'bg-white border-emerald-200 text-slate-700 hover:bg-emerald-100/50'
+                          }`}
+                        >
+                          <Euro className="w-3 h-3" />
+                          <span>Anclar a € Euro</span>
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-emerald-800 leading-snug">
+                      El monto en <strong>Bolívares (Bs)</strong> se guardará como precio estático exacto y <strong>no cambiará por sí solo</strong>. El equivalente en{' '}
+                      <strong>{priceAnchorCurrency === 'EUR' ? 'Euros (€)' : 'Dólares ($)'}</strong> se guarda como ancla para cuando decidas recalcular por nueva tasa BCV.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Stock controls or Service indicator */}
@@ -1452,13 +1630,20 @@ export const ProductsView: React.FC = () => {
                     {(() => {
                       const enteredVal = activeCurrencyInput === 'Bs'
                         ? (parseFloat(priceBs) || 0)
-                        : (parseFloat(priceUSD) || 0);
+                        : activeCurrencyInput === 'EUR'
+                          ? (parseFloat(priceEUR) || 0)
+                          : (parseFloat(priceUSD) || 0);
                       if (enteredVal <= 0) return null;
 
                       const baseVal = priceIncludesIVA ? round2(enteredVal / 1.16) : round2(enteredVal);
                       const ivaVal = priceIncludesIVA ? round2(enteredVal - baseVal) : round2(baseVal * 0.16);
                       const pvpVal = priceIncludesIVA ? round2(enteredVal) : round2(baseVal + ivaVal);
-                      const fmt = (n: number) => activeCurrencyInput === 'Bs' ? `Bs. ${formatBs(n)}` : `$${formatUSD(n)}`;
+                      const fmt = (n: number) =>
+                        activeCurrencyInput === 'Bs'
+                          ? `Bs. ${formatBs(n)}`
+                          : activeCurrencyInput === 'EUR'
+                            ? `€${formatUSD(n)}`
+                            : `$${formatUSD(n)}`;
 
                       return (
                         <div className="grid grid-cols-3 gap-2 bg-white border border-[#DCE4F0] rounded-xl p-2.5 text-[11px] font-mono-numbers">

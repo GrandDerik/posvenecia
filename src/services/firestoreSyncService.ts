@@ -64,6 +64,10 @@ export interface UserBusinessProfileDoc {
   bcvEuroRate?: number;
   bcvLastUpdatedDate?: string;
   bcvLastUpdatedAt?: string;
+  lastRatePromptDate?: string;
+  lastPromptedBcvRate?: number;
+  lastPromptedBcvEuroRate?: number;
+  commercialRoundingStep?: number;
   baseCurrency?: BaseCurrency;
   rateHistory?: { date: string; rate: number }[];
   customCategories?: string[];
@@ -1744,20 +1748,39 @@ export const saveExpenseWithInventoryAtomic = async (
                 ? round6(((previousStock * previousCost) + (incomingQty * incomingCostUSD)) / (previousStock + incomingQty))
                 : incomingCostUSD;
 
+            const effectiveRate = expense.bcvRate > 0 ? expense.bcvRate : bcvRate;
             nextProd.costUSD = weightedAvgCost > 0 ? weightedAvgCost : incomingCostUSD;
-            if (item.newPriceUSD && item.newPriceUSD > 0) {
+
+            if (item.newPriceCurrency === 'Bs' && typeof item.newPriceBs === 'number' && item.newPriceBs > 0) {
+              const exactNewPriceBs = round2(item.newPriceBs);
+              nextProd.priceBsFixed = exactNewPriceBs;
+              nextProd.priceCurrency = 'Bs';
+              nextProd.priceUSD = effectiveRate > 0
+                ? round6(exactNewPriceBs / effectiveRate)
+                : round6(item.newPriceUSD || nextProd.priceUSD);
+            } else if (item.newPriceCurrency === 'USD' && typeof item.newPriceUSD === 'number' && item.newPriceUSD > 0) {
+              nextProd.priceUSD = round6(item.newPriceUSD);
+              nextProd.priceCurrency = 'USD';
+              nextProd.priceBsFixed = undefined;
+            } else if (item.newPriceUSD && item.newPriceUSD > 0) {
               nextProd.priceUSD = round2(item.newPriceUSD);
+              if (baseCurrency === 'VED') {
+                nextProd.priceBsFixed = round2(nextProd.priceUSD * effectiveRate);
+                nextProd.priceCurrency = 'Bs';
+              }
             } else {
               const margin = previousCost > 0 ? (previousPrice - previousCost) / previousCost : 0.30;
               nextProd.priceUSD = round2(incomingCostUSD * (1 + Math.max(0, margin)));
+              if (baseCurrency === 'VED') {
+                nextProd.priceBsFixed = round2(nextProd.priceUSD * effectiveRate);
+                nextProd.priceCurrency = 'Bs';
+              }
             }
 
-            if (baseCurrency === 'VED') {
-              nextProd.priceBsFixed = round2(nextProd.priceUSD * bcvRate);
-              nextProd.priceCurrency = 'Bs';
-            }
-
-            nextProd.purchaseNote = `Actualizado Factura ${expense.invoiceNumber} - Costo Prom. $${nextProd.costUSD.toFixed(2)} / Venta $${nextProd.priceUSD.toFixed(2)}`;
+            const salePriceLabel = nextProd.priceCurrency === 'Bs' && typeof nextProd.priceBsFixed === 'number' && nextProd.priceBsFixed > 0
+              ? `Bs. ${nextProd.priceBsFixed.toFixed(2)}`
+              : `$${nextProd.priceUSD.toFixed(2)}`;
+            nextProd.purchaseNote = `Actualizado Factura ${expense.invoiceNumber} - Costo Prom. $${nextProd.costUSD.toFixed(2)} / Venta ${salePriceLabel}`;
           }
 
           liveProdMap.set(nextProd.id, nextProd);
@@ -2818,6 +2841,47 @@ export const clearUserFirestoreCollections = async (uid: string): Promise<void> 
       updatedAt: new Date().toISOString(),
       updatedBy: 'Reinicio de Fábrica'
     });
+  })();
+
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Atomic chunked batch update for catalog product prices (used by Daily BCV Rate Change alert & manual recalculation).
+ * Updates priceBsFixed, priceUSD, priceEUR, priceCurrency, and priceAnchorCurrency cleanly in Cloud Firestore.
+ */
+export const batchUpdateProductPricesInFirestore = async (
+  uid: string,
+  updatedProducts: Product[]
+): Promise<void> => {
+  if (!updatedProducts || updatedProducts.length === 0) return;
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/products`;
+
+  const op = (async () => {
+    try {
+      const chunkSize = 400;
+      for (let i = 0; i < updatedProducts.length; i += chunkSize) {
+        const chunk = updatedProducts.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+        chunk.forEach((prod, idx) => {
+          const safeId = sanitizeFirestoreDocId(prod.id, 'prod', i + idx);
+          const prodRef = doc(db, 'users', userId, 'products', safeId);
+          const payload = cleanForFirestore({
+            id: safeId,
+            priceUSD: prod.priceUSD,
+            priceEUR: prod.priceEUR,
+            priceBsFixed: prod.priceBsFixed,
+            priceCurrency: prod.priceCurrency,
+            priceAnchorCurrency: prod.priceAnchorCurrency
+          });
+          batch.set(prodRef, payload, { merge: true });
+        });
+        await batch.commit();
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
   })();
 
   return trackFirestoreWrite(op);
