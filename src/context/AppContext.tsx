@@ -101,7 +101,8 @@ import {
   fetchFullStoreSnapshotForBackup,
   restoreStoreDataToFirestore,
   clearUserFirestoreCollections,
-  batchUpdateProductPricesInFirestore
+  batchUpdateProductPricesInFirestore,
+  resetDeniedOptionalCollections
 } from '../services/firestoreSyncService';
 import { BackupDataPayload } from '../utils/cloudBackupUtils';
 import {
@@ -572,6 +573,7 @@ interface AppContextType {
 
   // Collections awaiting updated firestore.rules deployment in external Firebase Console
   missingRuleCollections: string[];
+  retryFirestoreSubscriptions: () => void;
 
   // Factory Reset / Arrancar de 0
   factoryReset: (mode?: 'clean_zero' | 'restore_demo') => Promise<void>;
@@ -1691,6 +1693,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setFirestoreSyncStatus('synced');
   }, [notifyError]);
+
+  const retryFirestoreSubscriptions = useCallback(() => {
+    const uid = googleUser?.uid;
+    if (!uid) return;
+    resetDeniedOptionalCollections(uid);
+    setMissingRuleCollections([]);
+    activeFirestoreUidRef.current = null;
+    attachRealtimeSync(uid);
+  }, [googleUser?.uid, attachRealtimeSync]);
 
   // Re-subscribes ONLY `sales` and `expenses` when user switches date filter or logs in,
   // ensuring active cash shift boundaries are always covered without streaming unbounded months.
@@ -3700,6 +3711,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateManagerPin,
         isOnline,
         missingRuleCollections,
+        retryFirestoreSubscriptions,
         factoryReset
       }}
     >

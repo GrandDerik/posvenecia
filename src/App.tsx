@@ -2,8 +2,9 @@ import React, { useState, Suspense, lazy } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { LoginView } from './components/LoginView';
-import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X, Copy, Check } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X, Copy, Check, RefreshCw, ExternalLink } from 'lucide-react';
 import { formatBs } from './utils/exportUtils';
+import { firebaseConfig } from './config/firebaseConfig';
 import firestoreRulesSource from '../firestore.rules?raw';
 
 // Lazy-loaded tab views for fast initial startup and optimal code splitting
@@ -57,7 +58,8 @@ const AppContent: React.FC = () => {
     setLastCompletedCreditNote,
     notification,
     dismissNotification,
-    missingRuleCollections
+    missingRuleCollections,
+    retryFirestoreSubscriptions
   } = useApp();
 
   const [dismissedRulesBanner, setDismissedRulesBanner] = useState(false);
@@ -101,41 +103,70 @@ const AppContent: React.FC = () => {
       <Navbar />
 
       {/* Actionable Banner when external Firebase Console still runs older firestore.rules */}
-      {missingRuleCollections.length > 0 && !dismissedRulesBanner && (
-        <div className="max-w-6xl w-full mx-auto px-3 sm:px-6 pt-3">
-          <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-2xs">
-            <div className="flex items-start gap-2.5 min-w-0">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div className="space-y-0.5 min-w-0">
-                <div className="font-extrabold">
-                  Actualiza tus reglas de Firestore para habilitar: {missingRuleCollections.join(', ')}
+      {missingRuleCollections.length > 0 && !dismissedRulesBanner && (() => {
+        const targetProject = firebaseConfig.projectId || 'tu-proyecto';
+        const targetDb = firebaseConfig.firestoreDatabaseId || '(default)';
+        const rulesConsoleUrl = firebaseConfig.projectId
+          ? `https://console.firebase.google.com/project/${encodeURIComponent(targetProject)}/firestore/databases/${encodeURIComponent(targetDb)}/rules`
+          : '';
+        return (
+          <div className="max-w-6xl w-full mx-auto px-3 sm:px-6 pt-3">
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-2xs">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1 min-w-0">
+                  <div className="font-extrabold">
+                    Actualiza las reglas de Firestore para habilitar: {missingRuleCollections.join(', ')}
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-snug">
+                    En Firebase Console, asegúrate de seleccionar la base de datos{' '}
+                    <code className="font-mono font-bold bg-amber-100 px-1 py-0.5 rounded break-all">{targetDb}</code>{' '}
+                    (no <code className="font-mono">(default)</code> si es diferente) en el proyecto{' '}
+                    <code className="font-mono font-bold bg-amber-100 px-1 py-0.5 rounded">{targetProject}</code>, pega las reglas en <strong>Reglas → Publicar</strong> y luego pulsa <strong>Reintentar</strong>.
+                  </p>
                 </div>
-                <p className="text-[11px] text-amber-800 leading-snug">
-                  Copia el archivo <code className="font-mono font-bold">firestore.rules</code> actualizado y pégalo en <strong>Firebase Console → Firestore Database → Reglas → Publicar</strong>.
-                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCopyFirestoreRules}
+                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  {copiedRules ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedRules ? 'Reglas copiadas' : 'Copiar firestore.rules'}</span>
+                </button>
+                {rulesConsoleUrl && (
+                  <a
+                    href={rulesConsoleUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[11px] flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Abrir Reglas</span>
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={retryFirestoreSubscriptions}
+                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Reintentar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDismissedRulesBanner(true)}
+                  aria-label="Cerrar aviso"
+                  className="p-1.5 rounded-lg hover:bg-amber-200/60 text-amber-800 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={handleCopyFirestoreRules}
-                className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
-              >
-                {copiedRules ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedRules ? 'Reglas copiadas' : 'Copiar firestore.rules'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setDismissedRulesBanner(true)}
-                aria-label="Cerrar aviso"
-                className="p-1.5 rounded-lg hover:bg-amber-200/60 text-amber-800 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Global Dismissible Notification Banner / Toast */}
       {notification && (

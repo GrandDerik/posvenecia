@@ -360,6 +360,16 @@ const clearOptionalCollectionDenied = (userId: string, colName: string): void =>
   deniedOptionalCollections.delete(`${userId}:${colName}`);
 };
 
+export const resetDeniedOptionalCollections = (uid: string): void => {
+  const userId = getCanonicalUserId(uid);
+  const prefix = `${userId}:`;
+  for (const key of Array.from(deniedOptionalCollections)) {
+    if (key.startsWith(prefix)) {
+      deniedOptionalCollections.delete(key);
+    }
+  }
+};
+
 /**
  * Subscribe to all user-scoped collections in real-time via onSnapshot for instant multi-device sync.
  * All paths strictly live under `users/{uid}/...`.
