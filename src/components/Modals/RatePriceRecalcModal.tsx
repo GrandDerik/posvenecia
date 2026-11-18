@@ -5,7 +5,6 @@ import {
   X,
   TrendingUp,
   RefreshCw,
-  ShieldCheck,
   AlertTriangle,
   DollarSign,
   Euro,

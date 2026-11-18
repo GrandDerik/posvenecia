@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Printer, Download, Share2, Check } from 'lucide-react';
+import { X, Printer } from 'lucide-react';
 import { Sale, BusinessInfo } from '../../types';
 import { formatBs, formatUSD, round2, isCartItemExempt } from '../../utils/exportUtils';
 import { generateTicketVentaPDF } from '../../utils/pdfReceiptUtils';

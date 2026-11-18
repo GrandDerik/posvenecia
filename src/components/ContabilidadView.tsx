@@ -4,21 +4,14 @@ import { TransactionsDatePreset } from '../services/firestoreSyncService';
 import { 
   FileSpreadsheet, 
   FileText, 
-  Download, 
   Search, 
   Plus, 
-  Filter, 
   ShieldCheck, 
   TrendingUp, 
   TrendingDown, 
   DollarSign, 
-  CreditCard, 
-  Smartphone, 
-  Calculator,
-  ArrowUpRight,
   Printer,
   Calendar,
-  Building,
   Cloud,
   Archive,
   CheckCircle2,
@@ -26,8 +19,6 @@ import {
   Eye,
   RefreshCw,
   Clock,
-  ArrowDownRight,
-  Layers,
   Landmark,
   Check,
   X,
@@ -110,7 +101,6 @@ export const ContabilidadView: React.FC = () => {
     transactionsDateRange,
     isLoadingHistory,
     setTransactionsDateFilter,
-    isCashRegisterOpen,
     setIsCuadreModalOpen
   } = useApp();
 

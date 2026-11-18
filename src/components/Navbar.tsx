@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   LayoutGrid, 
@@ -12,16 +12,12 @@ import {
   RotateCw,
   Edit2,
   Check,
-  User,
   Sparkles,
-  Coins,
-  Wifi,
   WifiOff,
-  Lock,
   LogOut,
   Cloud
 } from 'lucide-react';
-import { formatBs, formatUSD } from '../utils/exportUtils';
+import { formatBs } from '../utils/exportUtils';
 import { GoogleSyncModal } from './Modals/GoogleSyncModal';
 
 export const Navbar: React.FC = () => {
@@ -34,8 +30,6 @@ export const Navbar: React.FC = () => {
     updateBcvEuroRate,
     fetchLiveEuroRate,
     isFetchingLiveEuroRate,
-    baseCurrency,
-    clients,
     cuentasPorPagar,
     gastosOperativos,
     loans,
@@ -43,7 +37,6 @@ export const Navbar: React.FC = () => {
     setActiveTab, 
     cart, 
     fiados, 
-    sales,
     businessInfo,
     setIsProfileModalOpen,
     googleUser,
@@ -62,12 +55,21 @@ export const Navbar: React.FC = () => {
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [displayedCurrencyRate, setDisplayedCurrencyRate] = useState<'USD' | 'EUR'>('USD');
 
-  const activeFiadosCount = fiados.filter(f => f.status !== 'saldado').length;
-  const activeCuentasPorPagarCount =
-    cuentasPorPagar.filter(c => c.status !== 'pagada').length +
-    gastosOperativos.filter(g => g.status !== 'pagado').length +
-    loans.filter(l => l.status !== 'pagado' && (l.remainingUSD > 0.009 || l.remainingBs > 0.01)).length;
-  const cartItemCount = cart.reduce((acc, item) => acc + item.quantity, 0);
+  const activeFiadosCount = useMemo(
+    () => fiados.filter(f => f.status !== 'saldado').length,
+    [fiados]
+  );
+  const activeCuentasPorPagarCount = useMemo(
+    () =>
+      cuentasPorPagar.filter(c => c.status !== 'pagada').length +
+      gastosOperativos.filter(g => g.status !== 'pagado').length +
+      loans.filter(l => l.status !== 'pagado' && (l.remainingUSD > 0.009 || l.remainingBs > 0.01)).length,
+    [cuentasPorPagar, gastosOperativos, loans]
+  );
+  const cartItemCount = useMemo(
+    () => cart.reduce((acc, item) => acc + item.quantity, 0),
+    [cart]
+  );
 
   const handleSaveRate = (e: React.FormEvent) => {
     e.preventDefault();

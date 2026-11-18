@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Users, X, DollarSign, Search, Check, AlertCircle, Calendar } from 'lucide-react';
+import { Users, X, Search, Check, AlertCircle } from 'lucide-react';
 import { formatBs, formatUSD, round2, safeDiv } from '../../utils/exportUtils';
 import { FiadoRecord } from '../../types';
 

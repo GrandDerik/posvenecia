@@ -5,11 +5,8 @@ import {
   Search, 
   CheckCircle2, 
   AlertTriangle, 
-  DollarSign, 
   FileText, 
-  ArrowRight,
-  Package,
-  Layers
+  ArrowRight
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Sale, PaymentMethod } from '../../types';

@@ -1,13 +1,10 @@
 import React, { useState } from 'react';
 import { 
-  CheckCircle2, 
   UserPlus, 
   FileText, 
   Printer, 
   Check, 
   X, 
-  DollarSign, 
-  Sparkles,
   ArrowRight,
   Store
 } from 'lucide-react';
@@ -34,7 +31,7 @@ export const TransaccionExitosaModal: React.FC<TransaccionExitosaModalProps> = (
   const [clientName, setClientName] = useState(sale?.clientName || '');
   const [clientRif, setClientRif] = useState(sale?.clientRIF || 'V-');
   const [clientPhone, setClientPhone] = useState(sale?.clientPhone || '');
-  const [clientAddress, setClientAddress] = useState(sale?.clientAddress || '');
+  const [clientAddress] = useState(sale?.clientAddress || '');
   const [clientSaved, setClientSaved] = useState(false);
 
   if (!sale) return null;

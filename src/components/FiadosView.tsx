@@ -1,21 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   Users, 
   Plus, 
   Search, 
   DollarSign, 
-  Phone, 
   MessageCircle, 
-  CheckCircle, 
-  Clock, 
   AlertCircle, 
-  ArrowRight, 
   X, 
   Check,
   ChevronDown,
-  ChevronUp,
-  Receipt
+  ChevronUp
 } from 'lucide-react';
 import { FiadoRecord, PaymentMethod } from '../types';
 import { formatBs, formatUSD, round2, safeDiv } from '../utils/exportUtils';
@@ -51,22 +46,35 @@ export const FiadosView: React.FC = () => {
   const [copiedReminderId, setCopiedReminderId] = useState<string | null>(null);
 
   // Filtered fiados
-  const filtered = fiados.filter(f => {
-    const matchesSearch = f.clientName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          f.clientCI.includes(searchTerm);
-    const matchesStatus = statusFilter === 'todos' || f.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const filtered = useMemo(() => {
+    const q = searchTerm.toLowerCase();
+    return fiados.filter(f => {
+      const matchesSearch = f.clientName.toLowerCase().includes(q) ||
+                            f.clientCI.includes(searchTerm);
+      const matchesStatus = statusFilter === 'todos' || f.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [fiados, searchTerm, statusFilter]);
 
   // Totals indexed to current BCV rate
-  const activeFiados = fiados.filter(f => f.status !== 'saldado');
-  const totalDebtUSD = activeFiados.reduce((a, f) => a + f.remainingDebtUSD, 0);
-  const totalDebtBs = totalDebtUSD * bcvRate;
-
-  // Total collected through abonos
-  const totalCollectedUSD = fiados.reduce((acc, f) => {
-    return acc + f.abonos.reduce((subAcc, a) => subAcc + a.amountUSD, 0);
-  }, 0);
+  const { activeFiadosCount, totalDebtUSD, totalDebtBs, totalCollectedUSD } = useMemo(() => {
+    let activeCount = 0;
+    let debtUSD = 0;
+    let collectedUSD = 0;
+    for (const f of fiados) {
+      if (f.status !== 'saldado') {
+        activeCount += 1;
+        debtUSD += f.remainingDebtUSD;
+      }
+      for (const a of f.abonos) collectedUSD += a.amountUSD;
+    }
+    return {
+      activeFiadosCount: activeCount,
+      totalDebtUSD: debtUSD,
+      totalDebtBs: debtUSD * bcvRate,
+      totalCollectedUSD: collectedUSD
+    };
+  }, [fiados, bcvRate]);
 
   const handleOpenAbono = (f: FiadoRecord) => {
     setSelectedFiadoForAbono(f);
@@ -215,7 +223,7 @@ Para cancelar mediante Pago Móvil:
             Clientes con Deuda Activa
           </span>
           <div className="text-2xl font-black text-[#0B1528] font-mono-numbers mt-1">
-            {activeFiados.length}
+            {activeFiadosCount}
           </div>
           <span className="text-xs text-slate-400">Deudores en cuenta</span>
         </div>

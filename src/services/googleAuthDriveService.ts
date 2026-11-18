@@ -327,7 +327,7 @@ export const findDriveDatabaseFile = async (accessToken: string): Promise<string
       }
     }
   } catch (e) {
-    console.warn('Error searching appDataFolder:', e);
+    if (import.meta.env.DEV) console.warn('Error searching appDataFolder:', e);
   }
 
   // 2. Search in user files created by this app
@@ -345,7 +345,7 @@ export const findDriveDatabaseFile = async (accessToken: string): Promise<string
       }
     }
   } catch (e) {
-    console.warn('Error searching drive files:', e);
+    if (import.meta.env.DEV) console.warn('Error searching drive files:', e);
   }
 
   if (candidates.length === 0) return null;
@@ -382,7 +382,7 @@ export const getRemoteDatabaseMetadata = async (
       }
     }
   } catch (e) {
-    console.warn('Error fetching appDataFolder metadata:', e);
+    if (import.meta.env.DEV) console.warn('Error fetching appDataFolder metadata:', e);
   }
 
   // Check general drive files
@@ -403,7 +403,7 @@ export const getRemoteDatabaseMetadata = async (
       }
     }
   } catch (e) {
-    console.warn('Error fetching drive metadata:', e);
+    if (import.meta.env.DEV) console.warn('Error fetching drive metadata:', e);
   }
 
   if (candidates.length === 0) return null;

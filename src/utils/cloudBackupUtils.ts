@@ -68,6 +68,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
   inventoryDischarges?: InventoryDischarge[];
   kardex?: KardexEntry[];
   bcvRate: number;
+  bcvEuroRate?: number;
   businessInfo: BusinessInfo;
 }) => {
   const wb = XLSX.utils.book_new();
@@ -129,9 +130,10 @@ export const downloadComprehensiveAccountingExcel = (data: {
     'Categoría': p.category,
     'Costo USD': p.costUSD,
     'Costo Bs Fijo': p.costBsFixed ?? '-',
-    'Precio USD': Number(getProductPriceUSD(p, data.bcvRate).toFixed(4)),
-    'Precio Bs (Tasa BCV)': getProductPriceBs(p, data.bcvRate),
+    'Precio USD': Number(getProductPriceUSD(p, data.bcvRate, data.bcvEuroRate).toFixed(4)),
+    'Precio Bs (Tasa BCV)': getProductPriceBs(p, data.bcvRate, data.bcvEuroRate),
     'Moneda Fija': p.priceCurrency || 'USD',
+    'Divisa Ancla': p.priceAnchorCurrency || (p.priceCurrency === 'EUR' ? 'EUR' : 'USD'),
     'Stock': (p.isService || p.itemType === 'servicio') ? 'Ilimitado' : p.stock,
     'Stock Mínimo': (p.isService || p.itemType === 'servicio') ? '-' : p.minStock,
     'Unidad': p.unit,
@@ -355,7 +357,7 @@ export const downloadSystemBackupJSON = (payload: BackupDataPayload) => {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   return filename;
 };
 

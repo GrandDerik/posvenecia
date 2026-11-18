@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Landmark,
-  Plus,
   Search,
   Calendar,
   AlertTriangle,

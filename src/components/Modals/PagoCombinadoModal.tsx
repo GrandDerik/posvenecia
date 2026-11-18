@@ -9,11 +9,9 @@ import {
   CreditCard, 
   Banknote, 
   Users,
-  Building,
   Landmark,
   AlertCircle,
-  HelpCircle,
-  PlusCircle
+  HelpCircle
 } from 'lucide-react';
 import { formatBs, formatUSD, round2, safeDiv } from '../../utils/exportUtils';
 
@@ -70,7 +68,7 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
 
   const [debito, setDebito] = useState<string>('0');
   const [debitoRef, setDebitoRef] = useState<string>('');
-  const [debitoBank, setDebitoBank] = useState<string>('Banesco');
+  const [debitoBank] = useState<string>('Banesco');
 
   const [fiaoRemaining, setFiaoRemaining] = useState<string>('0');
 
@@ -78,7 +76,7 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
   const [transferenciaRef, setTransferenciaRef] = useState<string>('');
   const [transferenciaBank, setTransferenciaBank] = useState<string>('Banesco');
 
-  const [notes, setNotes] = useState<string>('');
+  const [notes] = useState<string>('');
 
   if (!isOpen) return null;
 

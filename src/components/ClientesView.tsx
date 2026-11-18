@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   Users, 
@@ -6,18 +6,12 @@ import {
   Search, 
   Phone, 
   MapPin, 
-  Mail, 
-  CreditCard, 
   ShoppingCart, 
   Edit, 
   Trash2, 
   MessageCircle, 
-  Check, 
   X, 
-  AlertCircle,
-  FileText,
-  UserCheck,
-  ShieldCheck
+  UserCheck
 } from 'lucide-react';
 import { Client } from '../types';
 import { formatBs, formatUSD } from '../utils/exportUtils';
@@ -54,11 +48,14 @@ export const ClientesView: React.FC = () => {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Search filter
-  const filteredClients = clients.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.rif.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.phone.includes(searchTerm)
-  );
+  const filteredClients = useMemo(() => {
+    const q = searchTerm.toLowerCase();
+    return clients.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      c.rif.toLowerCase().includes(q) ||
+      c.phone.includes(searchTerm)
+    );
+  }, [clients, searchTerm]);
 
   // Open modal for add
   const handleOpenAdd = () => {

@@ -9,11 +9,8 @@ import {
   Check, 
   Sparkles, 
   ShieldCheck, 
-  Calendar,
   History,
-  RotateCcw,
   RotateCw,
-  Globe,
   Euro,
   Layers,
   Settings2

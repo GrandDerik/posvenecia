@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Smartphone, X, Check, Building2, Hash, Phone, User } from 'lucide-react';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs } from '../../utils/exportUtils';
 
 interface PagoMovilModalProps {
   isOpen: boolean;

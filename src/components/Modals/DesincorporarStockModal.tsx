@@ -4,16 +4,11 @@ import {
   X, 
   Trash2, 
   AlertTriangle, 
-  Package, 
-  DollarSign, 
-  FileText, 
   User, 
   CheckCircle,
-  HelpCircle,
-  TrendingDown,
-  Layers
+  TrendingDown
 } from 'lucide-react';
-import { InventoryDischargeReason, Product } from '../../types';
+import { InventoryDischargeReason } from '../../types';
 import { formatBs, formatUSD } from '../../utils/exportUtils';
 
 export const DesincorporarStockModal: React.FC = () => {

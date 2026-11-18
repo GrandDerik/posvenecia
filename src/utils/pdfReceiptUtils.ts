@@ -3,6 +3,64 @@ import autoTable from 'jspdf-autotable';
 import { Sale, Expense, BusinessInfo, CashShift, CreditNote, Abono, Loan } from '../types';
 import { formatBs, formatUSD, getLocalDateStr, round2, safeDiv, isCartItemExempt } from './exportUtils';
 
+type JsPDFWithAutoTable = jsPDF & {
+  lastAutoTable?: { finalY?: number };
+};
+
+const getLastAutoTableY = (doc: jsPDF, fallbackY: number): number => {
+  const finalY = (doc as JsPDFWithAutoTable).lastAutoTable?.finalY;
+  return typeof finalY === 'number' && Number.isFinite(finalY) ? finalY : fallbackY;
+};
+
+/**
+ * Prints a generated jsPDF document via a hidden iframe and reliably cleans up
+ * both the DOM node and the allocated Blob URL to prevent memory leaks.
+ */
+const printPdfDocument = (doc: jsPDF): void => {
+  doc.autoPrint();
+  const blobUrl = String(doc.output('bloburl'));
+  const printFrame = document.createElement('iframe');
+  printFrame.style.position = 'fixed';
+  printFrame.style.right = '0';
+  printFrame.style.bottom = '0';
+  printFrame.style.width = '0';
+  printFrame.style.height = '0';
+  printFrame.style.border = '0';
+  printFrame.src = blobUrl;
+  document.body.appendChild(printFrame);
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    window.setTimeout(() => {
+      if (document.body.contains(printFrame)) {
+        document.body.removeChild(printFrame);
+      }
+      if (blobUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(blobUrl);
+      }
+    }, 3000);
+  };
+
+  // Fallback cleanup if onload never fires in restricted browsers
+  const safetyTimer = window.setTimeout(cleanup, 15000);
+
+  printFrame.onload = () => {
+    window.clearTimeout(safetyTimer);
+    try {
+      printFrame.contentWindow?.focus();
+      printFrame.contentWindow?.print();
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn('[PDFPrint] Error invoking print dialog on iframe:', e);
+      }
+    } finally {
+      cleanup();
+    }
+  };
+};
+
 // 1. Reporte Z / Cierre Diario SENIAT
 export const generateReporteZPDF = (
   todaySales: Sale[],
@@ -464,8 +522,7 @@ export const generateComprobanteCierrePDF = (
     margin: { left: 14, right: 14 },
   });
 
-  // @ts-ignore
-  y = doc.lastAutoTable.finalY + 8;
+  y = getLastAutoTableY(doc, y) + 8;
 
   // Breakdown by payment methods for sales during the shift
   const cashUSDSales = sales.filter(s => s.paymentMethod === 'efectivo_usd').reduce((a, s) => a + s.totalUSD, 0);
@@ -502,9 +559,9 @@ export const generateComprobanteCierrePDF = (
     head: [['Medio de Pago', 'N° Transacciones', 'Monto en Divisa (USD)', 'Monto en Bolívares (Bs)']],
     body: [
       ['Efectivo Dólares (USD)', sales.filter(s => s.paymentMethod === 'efectivo_usd').length.toString(), `$ ${formatUSD(cashUSDSales)}`, `Bs. ${formatBs(cashUSDSales * bcvRate)}`],
-      ['Efectivo Bolívares (Bs)', sales.filter(s => s.paymentMethod === 'efectivo_bs').length.toString(), `$ ${formatUSD(cashBsSales / bcvRate)}`, `Bs. ${formatBs(cashBsSales)}`],
-      ['Pago Móvil Interbancario', sales.filter(s => s.paymentMethod === 'pago_movil').length.toString(), `$ ${formatUSD(pagoMovilSales / bcvRate)}`, `Bs. ${formatBs(pagoMovilSales)}`],
-      ['Punto de Venta Débito', sales.filter(s => s.paymentMethod === 'debito').length.toString(), `$ ${formatUSD(debitoSales / bcvRate)}`, `Bs. ${formatBs(debitoSales)}`],
+      ['Efectivo Bolívares (Bs)', sales.filter(s => s.paymentMethod === 'efectivo_bs').length.toString(), `$ ${formatUSD(safeDiv(cashBsSales, bcvRate))}`, `Bs. ${formatBs(cashBsSales)}`],
+      ['Pago Móvil Interbancario', sales.filter(s => s.paymentMethod === 'pago_movil').length.toString(), `$ ${formatUSD(safeDiv(pagoMovilSales, bcvRate))}`, `Bs. ${formatBs(pagoMovilSales)}`],
+      ['Punto de Venta Débito', sales.filter(s => s.paymentMethod === 'debito').length.toString(), `$ ${formatUSD(safeDiv(debitoSales, bcvRate))}`, `Bs. ${formatBs(debitoSales)}`],
       ['Ventas a Crédito / Fiao', sales.filter(s => s.paymentMethod === 'fiao').length.toString(), `$ ${formatUSD(fiaoSales)}`, `Bs. ${formatBs(fiaoSales * bcvRate)}`],
       ['Otros / Combinados', sales.filter(s => !['efectivo_usd', 'efectivo_bs', 'pago_movil', 'debito', 'fiao'].includes(s.paymentMethod)).length.toString(), `$ ${formatUSD(sales.filter(s => !['efectivo_usd', 'efectivo_bs', 'pago_movil', 'debito', 'fiao'].includes(s.paymentMethod)).reduce((a, s) => a + s.totalUSD, 0))}`, `Bs. ${formatBs(sales.filter(s => !['efectivo_usd', 'efectivo_bs', 'pago_movil', 'debito', 'fiao'].includes(s.paymentMethod)).reduce((a, s) => a + s.totalBs, 0))}`],
       ['TOTAL VENTAS BRUTAS', sales.length.toString(), `$ ${formatUSD(totalSalesUSD)}`, `Bs. ${formatBs(totalSalesBs)}`],
@@ -513,8 +570,7 @@ export const generateComprobanteCierrePDF = (
     margin: { left: 14, right: 14 },
   });
 
-  // @ts-ignore
-  y = doc.lastAutoTable.finalY + 8;
+  y = getLastAutoTableY(doc, y) + 8;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
@@ -540,8 +596,7 @@ export const generateComprobanteCierrePDF = (
     margin: { left: 14, right: 14 },
   });
 
-  // @ts-ignore
-  y = doc.lastAutoTable.finalY + 8;
+  y = getLastAutoTableY(doc, y) + 8;
 
   // Notes & observations
   if (shift.closedNotes || shift.notes) {
@@ -575,36 +630,7 @@ export const generateComprobanteCierrePDF = (
   const fileName = `Reporte_Cierre_Caja_${getLocalDateStr()}_Turno_${shift.id.slice(-6)}.pdf`;
 
   if (action === 'print') {
-    doc.autoPrint();
-    const blobUrl = doc.output('bloburl');
-    const printFrame = document.createElement('iframe');
-    printFrame.style.position = 'fixed';
-    printFrame.style.right = '0';
-    printFrame.style.bottom = '0';
-    printFrame.style.width = '0';
-    printFrame.style.height = '0';
-    printFrame.style.border = '0';
-    printFrame.src = blobUrl as any;
-    document.body.appendChild(printFrame);
-
-    const cleanup = () => {
-      setTimeout(() => {
-        if (document.body.contains(printFrame)) {
-          document.body.removeChild(printFrame);
-        }
-      }, 2000);
-    };
-
-    printFrame.onload = () => {
-      try {
-        printFrame.contentWindow?.focus();
-        printFrame.contentWindow?.print();
-      } catch (e) {
-        console.warn('Error invoking print dialog on iframe:', e);
-      } finally {
-        cleanup();
-      }
-    };
+    printPdfDocument(doc);
   } else {
     doc.save(fileName);
   }
@@ -749,36 +775,7 @@ export const generateTicketNotaCreditoPDF = (
   const fileName = `Nota_Credito_${creditNote.creditNoteNumber}.pdf`;
 
   if (action === 'print') {
-    doc.autoPrint();
-    const blobUrl = doc.output('bloburl');
-    const printFrame = document.createElement('iframe');
-    printFrame.style.position = 'fixed';
-    printFrame.style.right = '0';
-    printFrame.style.bottom = '0';
-    printFrame.style.width = '0';
-    printFrame.style.height = '0';
-    printFrame.style.border = '0';
-    printFrame.src = blobUrl as any;
-    document.body.appendChild(printFrame);
-
-    const cleanup = () => {
-      setTimeout(() => {
-        if (document.body.contains(printFrame)) {
-          document.body.removeChild(printFrame);
-        }
-      }, 2000);
-    };
-
-    printFrame.onload = () => {
-      try {
-        printFrame.contentWindow?.focus();
-        printFrame.contentWindow?.print();
-      } catch (e) {
-        console.warn('Error invoking print dialog on iframe:', e);
-      } finally {
-        cleanup();
-      }
-    };
+    printPdfDocument(doc);
   } else {
     doc.save(fileName);
   }
@@ -968,8 +965,7 @@ export const generateCorteParcialXPDF = (
     margin: { left: 14, right: 14 }
   });
 
-  // @ts-ignore
-  y = doc.lastAutoTable.finalY + 8;
+  y = getLastAutoTableY(doc, y) + 8;
 
   // Section 1: Drawer Cash Audit (USD & Bs)
   doc.setFont('helvetica', 'bold');
@@ -1003,8 +999,7 @@ export const generateCorteParcialXPDF = (
     margin: { left: 14, right: 14 }
   });
 
-  // @ts-ignore
-  y = doc.lastAutoTable.finalY + 8;
+  y = getLastAutoTableY(doc, y) + 8;
 
   // Section 2: Electronic & Credit Channels
   doc.setFont('helvetica', 'bold');
@@ -1035,8 +1030,7 @@ export const generateCorteParcialXPDF = (
     margin: { left: 14, right: 14 }
   });
 
-  // @ts-ignore
-  y = doc.lastAutoTable.finalY + 8;
+  y = getLastAutoTableY(doc, y) + 8;
 
   const totalLoansDrawerAndBankUSD = round2(loansCashUsd + safeDiv(loansCashBs + loansBankBs, bcvRate));
   const summaryRows: string[][] = [
@@ -1068,8 +1062,7 @@ export const generateCorteParcialXPDF = (
     margin: { left: 14, right: 14 }
   });
 
-  // @ts-ignore
-  y = doc.lastAutoTable.finalY + 8;
+  y = getLastAutoTableY(doc, y) + 8;
 
   // Payment Mobile references list if space & refs exist
   const pmRefSales = sales.filter(
@@ -1097,8 +1090,7 @@ export const generateCorteParcialXPDF = (
       ]),
       margin: { left: 14, right: 14 }
     });
-    // @ts-ignore
-    y = doc.lastAutoTable.finalY + 6;
+    y = getLastAutoTableY(doc, y) + 6;
   }
 
   // Disclaimer footer
@@ -1118,36 +1110,7 @@ export const generateCorteParcialXPDF = (
   const fileName = `Corte_Parcial_Cierre_X_${getLocalDateStr()}.pdf`;
 
   if (action === 'print') {
-    doc.autoPrint();
-    const blobUrl = doc.output('bloburl');
-    const printFrame = document.createElement('iframe');
-    printFrame.style.position = 'fixed';
-    printFrame.style.right = '0';
-    printFrame.style.bottom = '0';
-    printFrame.style.width = '0';
-    printFrame.style.height = '0';
-    printFrame.style.border = '0';
-    printFrame.src = blobUrl as any;
-    document.body.appendChild(printFrame);
-
-    const cleanup = () => {
-      setTimeout(() => {
-        if (document.body.contains(printFrame)) {
-          document.body.removeChild(printFrame);
-        }
-      }, 2000);
-    };
-
-    printFrame.onload = () => {
-      try {
-        printFrame.contentWindow?.focus();
-        printFrame.contentWindow?.print();
-      } catch (e) {
-        console.warn('Error invoking print dialog on iframe:', e);
-      } finally {
-        cleanup();
-      }
-    };
+    printPdfDocument(doc);
   } else {
     doc.save(fileName);
   }

@@ -5,18 +5,14 @@ import {
   Check, 
   FileSpreadsheet, 
   Building, 
-  DollarSign, 
-  Banknote, 
   ShieldAlert, 
   KeyRound, 
   Package, 
   Plus, 
   Trash2, 
   Layers, 
-  TrendingUp, 
   RefreshCw, 
-  Info,
-  ArrowRight
+  Info
 } from 'lucide-react';
 import { formatBs, formatUSD, round2, round6, safeDiv, getLocalDateStr } from '../utils/exportUtils';
 import { Expense, ExpenseItem, PurchaseCostStrategy } from '../types';

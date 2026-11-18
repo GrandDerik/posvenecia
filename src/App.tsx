@@ -1,34 +1,50 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense, lazy } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
-import { DashboardView } from './components/DashboardView';
-import { TasaBCVView } from './components/TasaBCVView';
-import { POSView } from './components/POSView';
-import { ProductsView } from './components/ProductsView';
-import { ClientesView } from './components/ClientesView';
-import { FiadosView } from './components/FiadosView';
-import { CuentasPorPagarView } from './components/CuentasPorPagarView';
-import { ContabilidadView } from './components/ContabilidadView';
-import { CuadreCajaModal } from './components/CuadreCajaModal';
-import { AperturaCajaModal } from './components/Modals/AperturaCajaModal';
-import { CierreCajaModal } from './components/Modals/CierreCajaModal';
-import { PerfilNegocioModal } from './components/Modals/PerfilNegocioModal';
-import { NotaCreditoModal } from './components/Modals/NotaCreditoModal';
-import { DesincorporarStockModal } from './components/Modals/DesincorporarStockModal';
-import { ComprobanteNotaCreditoModal } from './components/Modals/ComprobanteNotaCreditoModal';
-import { RatePriceRecalcModal } from './components/Modals/RatePriceRecalcModal';
 import { LoginView } from './components/LoginView';
 import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X, Copy, Check } from 'lucide-react';
 import { formatBs } from './utils/exportUtils';
 import firestoreRulesSource from '../firestore.rules?raw';
 
+// Lazy-loaded tab views for fast initial startup and optimal code splitting
+const DashboardView = lazy(() => import('./components/DashboardView').then(m => ({ default: m.DashboardView })));
+const TasaBCVView = lazy(() => import('./components/TasaBCVView').then(m => ({ default: m.TasaBCVView })));
+const POSView = lazy(() => import('./components/POSView').then(m => ({ default: m.POSView })));
+const ProductsView = lazy(() => import('./components/ProductsView').then(m => ({ default: m.ProductsView })));
+const ClientesView = lazy(() => import('./components/ClientesView').then(m => ({ default: m.ClientesView })));
+const FiadosView = lazy(() => import('./components/FiadosView').then(m => ({ default: m.FiadosView })));
+const CuentasPorPagarView = lazy(() => import('./components/CuentasPorPagarView').then(m => ({ default: m.CuentasPorPagarView })));
+const ContabilidadView = lazy(() => import('./components/ContabilidadView').then(m => ({ default: m.ContabilidadView })));
+
+// Lazy-loaded global modals (downloaded on demand only when opened)
+const CuadreCajaModal = lazy(() => import('./components/CuadreCajaModal').then(m => ({ default: m.CuadreCajaModal })));
+const AperturaCajaModal = lazy(() => import('./components/Modals/AperturaCajaModal').then(m => ({ default: m.AperturaCajaModal })));
+const CierreCajaModal = lazy(() => import('./components/Modals/CierreCajaModal').then(m => ({ default: m.CierreCajaModal })));
+const PerfilNegocioModal = lazy(() => import('./components/Modals/PerfilNegocioModal').then(m => ({ default: m.PerfilNegocioModal })));
+const NotaCreditoModal = lazy(() => import('./components/Modals/NotaCreditoModal').then(m => ({ default: m.NotaCreditoModal })));
+const DesincorporarStockModal = lazy(() => import('./components/Modals/DesincorporarStockModal').then(m => ({ default: m.DesincorporarStockModal })));
+const ComprobanteNotaCreditoModal = lazy(() => import('./components/Modals/ComprobanteNotaCreditoModal').then(m => ({ default: m.ComprobanteNotaCreditoModal })));
+const RatePriceRecalcModal = lazy(() => import('./components/Modals/RatePriceRecalcModal').then(m => ({ default: m.RatePriceRecalcModal })));
+
+const ViewLoaderFallback: React.FC = () => (
+  <div className="max-w-6xl mx-auto px-4 py-16 flex flex-col items-center justify-center gap-3 text-slate-500">
+    <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+    <span className="text-xs font-bold tracking-wide">Cargando módulo...</span>
+  </div>
+);
+
 const AppContent: React.FC = () => {
-  const { 
-    activeTab, 
-    bcvRate, 
-    businessInfo, 
-    isProfileModalOpen, 
+  const {
+    activeTab,
+    bcvRate,
+    businessInfo,
+    isProfileModalOpen,
     setIsProfileModalOpen,
+    isCuadreModalOpen,
+    isAperturaModalOpen,
+    isCierreModalOpen,
+    isDischargeModalOpen,
+    rateChangeModalState,
     googleUser,
     isAuthLoading,
     loginWithGoogle,
@@ -160,53 +176,56 @@ const AppContent: React.FC = () => {
         </div>
       )}
 
-      {/* Main Tab Content */}
+      {/* Main Tab Content (Code-split per view) */}
       <main className="flex-1 pb-12">
-        {activeTab === 'inicio' && <DashboardView />}
-        {activeTab === 'tasa' && <TasaBCVView />}
-        {activeTab === 'vender' && <POSView />}
-        {activeTab === 'productos' && <ProductsView />}
-        {activeTab === 'clientes' && <ClientesView />}
-        {activeTab === 'fiados' && <FiadosView />}
-        {activeTab === 'cuentas_por_pagar' && <CuentasPorPagarView />}
-        {activeTab === 'contabilidad' && <ContabilidadView />}
+        <Suspense fallback={<ViewLoaderFallback />}>
+          {activeTab === 'inicio' && <DashboardView />}
+          {activeTab === 'tasa' && <TasaBCVView />}
+          {activeTab === 'vender' && <POSView />}
+          {activeTab === 'productos' && <ProductsView />}
+          {activeTab === 'clientes' && <ClientesView />}
+          {activeTab === 'fiados' && <FiadosView />}
+          {activeTab === 'cuentas_por_pagar' && <CuentasPorPagarView />}
+          {activeTab === 'contabilidad' && <ContabilidadView />}
+        </Suspense>
       </main>
 
-      {/* Cuadre de Caja & Apertura / Cierre Modals */}
-      <CuadreCajaModal />
-      <AperturaCajaModal />
-      <CierreCajaModal />
+      {/* On-demand Global Modals (only loaded & mounted when open) */}
+      <Suspense fallback={null}>
+        {isCuadreModalOpen && <CuadreCajaModal />}
+        {isAperturaModalOpen && <AperturaCajaModal />}
+        {isCierreModalOpen && <CierreCajaModal />}
 
-      {/* Perfil del Negocio Modal */}
-      <PerfilNegocioModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-      />
+        {isProfileModalOpen && (
+          <PerfilNegocioModal
+            isOpen={isProfileModalOpen}
+            onClose={() => setIsProfileModalOpen(false)}
+          />
+        )}
 
-      {/* Nota de Crédito / Devolución Modal */}
-      <NotaCreditoModal
-        isOpen={isCreditNoteModalOpen}
-        onClose={() => {
-          setIsCreditNoteModalOpen(false);
-          setSelectedSaleForCreditNote(null);
-        }}
-        initialSale={selectedSaleForCreditNote}
-      />
+        {isCreditNoteModalOpen && (
+          <NotaCreditoModal
+            isOpen={isCreditNoteModalOpen}
+            onClose={() => {
+              setIsCreditNoteModalOpen(false);
+              setSelectedSaleForCreditNote(null);
+            }}
+            initialSale={selectedSaleForCreditNote}
+          />
+        )}
 
-      {/* Comprobante de Nota de Crédito Modal (después de emitir) */}
-      {lastCompletedCreditNote && (
-        <ComprobanteNotaCreditoModal
-          creditNote={lastCompletedCreditNote}
-          onClose={() => setLastCompletedCreditNote(null)}
-          businessInfo={businessInfo}
-        />
-      )}
+        {lastCompletedCreditNote && (
+          <ComprobanteNotaCreditoModal
+            creditNote={lastCompletedCreditNote}
+            onClose={() => setLastCompletedCreditNote(null)}
+            businessInfo={businessInfo}
+          />
+        )}
 
-      {/* Desincorporación de Inventario Modal */}
-      <DesincorporarStockModal />
+        {isDischargeModalOpen && <DesincorporarStockModal />}
 
-      {/* Alerta Diaria de Tasa BCV y Recálculo de Precios con Redondeo Comercial Arriba */}
-      <RatePriceRecalcModal />
+        {rateChangeModalState.isOpen && <RatePriceRecalcModal />}
+      </Suspense>
 
       {/* Footer */}
       <footer className="border-t py-4 px-4 sm:px-8 text-xs bg-white/85 backdrop-blur-xs border-[#DCE4F0] text-slate-500">

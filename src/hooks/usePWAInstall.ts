@@ -54,7 +54,7 @@ export function usePWAInstall() {
         return true;
       }
     } catch (e) {
-      console.warn('Install prompt error', e);
+      if (import.meta.env.DEV) console.warn('Install prompt error', e);
     }
     return false;
   };

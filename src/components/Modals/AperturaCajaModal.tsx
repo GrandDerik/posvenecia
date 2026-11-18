@@ -8,17 +8,15 @@ import {
   Clock, 
   TrendingUp, 
   CheckCircle2, 
-  Sparkles, 
   Store, 
   ShieldCheck, 
   AlertCircle,
-  X,
   FileText,
   Landmark,
   CreditCard,
   RefreshCw
 } from 'lucide-react';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs } from '../../utils/exportUtils';
 import { BankInitialBalance } from '../../types';
 
 export const AperturaCajaModal: React.FC = () => {

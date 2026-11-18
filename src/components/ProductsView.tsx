@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   Package, 
@@ -7,16 +7,12 @@ import {
   Edit, 
   Trash2, 
   FileSpreadsheet, 
-  Check, 
   X, 
   AlertTriangle,
-  ArrowUpDown,
-  Barcode,
   Image as ImageIcon,
   Upload,
   FileText,
   DollarSign,
-  Coins,
   Layers,
   History,
   TrendingUp,
@@ -107,13 +103,16 @@ export const ProductsView: React.FC = () => {
 
   const categories = ['Todos', ...appCategories];
 
-  const filtered = products.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          p.code.includes(searchTerm) ||
-                          (p.purchaseNote && p.purchaseNote.toLowerCase().includes(searchTerm.toLowerCase()));
-    const matchesCat = categoryFilter === 'Todos' || p.category === categoryFilter;
-    return matchesSearch && matchesCat;
-  });
+  const filtered = useMemo(() => {
+    const q = searchTerm.toLowerCase();
+    return products.filter(p => {
+      const matchesSearch = p.name.toLowerCase().includes(q) || 
+                            p.code.includes(searchTerm) ||
+                            (p.purchaseNote && p.purchaseNote.toLowerCase().includes(q));
+      const matchesCat = categoryFilter === 'Todos' || p.category === categoryFilter;
+      return matchesSearch && matchesCat;
+    });
+  }, [products, searchTerm, categoryFilter]);
 
   const handleOpenAdd = () => {
     const defaultCurr: ProductPriceCurrency = baseCurrency === 'VED' ? 'Bs' : 'USD';

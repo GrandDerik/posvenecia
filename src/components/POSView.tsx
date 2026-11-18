@@ -19,11 +19,9 @@ import {
   AlertCircle,
   X,
   Package,
-  Receipt,
   UserCheck,
   Edit,
   Landmark,
-  Image as ImageIcon,
   KeyRound,
   LayoutGrid,
   List,
@@ -38,7 +36,7 @@ import {
   RotateCcw,
   Tag
 } from 'lucide-react';
-import { Product, PaymentMethod, PaymentDetails, Sale, Client } from '../types';
+import { PaymentMethod, PaymentDetails, Sale } from '../types';
 import {
   formatBs,
   formatUSD,
@@ -68,7 +66,6 @@ export const POSView: React.FC = () => {
     categories: appCategories,
     cart, 
     addToCart, 
-    removeFromCart, 
     updateCartQuantity, 
     setCartItemExempt,
     cartDiscount,
@@ -304,20 +301,23 @@ export const POSView: React.FC = () => {
     discountCurrency,
     exemptBs,
     taxableBs,
-    subtotalBs,
     ivaBs,
     igtfBs,
     totalBs,
     inclusiveItemsCount
-  } = calculateCartFiscalTotals({
-    cart,
-    bcvRate,
-    applyIVA,
-    applyIGTF,
-    paymentMethod: selectedMethod,
-    combinedUsdCash: combinedData?.usdCash || 0,
-    discount: cartDiscount
-  });
+  } = useMemo(
+    () =>
+      calculateCartFiscalTotals({
+        cart,
+        bcvRate,
+        applyIVA,
+        applyIGTF,
+        paymentMethod: selectedMethod,
+        combinedUsdCash: combinedData?.usdCash || 0,
+        discount: cartDiscount
+      }),
+    [cart, bcvRate, applyIVA, applyIGTF, selectedMethod, combinedData?.usdCash, cartDiscount]
+  );
 
   const hasActiveDiscount = discountUSD > 0 || discountBs > 0;
 
@@ -338,7 +338,7 @@ export const POSView: React.FC = () => {
   // Finalize sale checkout with double-submit protection and atomic await
   const handleCheckout = async () => {
     if (isProcessingCheckoutRef.current) {
-      console.warn('[POSView] Prevenido doble envío de venta (double-submit protection)');
+      if (import.meta.env.DEV) console.warn('[POSView] Prevenido doble envío de venta (double-submit protection)');
       return;
     }
 

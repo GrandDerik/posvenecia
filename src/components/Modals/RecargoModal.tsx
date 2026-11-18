@@ -9,7 +9,6 @@ import {
   X, 
   DollarSign, 
   Percent, 
-  Check, 
   ShieldCheck,
   MapPin
 } from 'lucide-react';

@@ -7,20 +7,10 @@ import {
   Edit2,
   Check, 
   X, 
-  Store, 
-  FileText, 
-  Phone, 
-  MapPin, 
-  Mail, 
-  Instagram, 
   CreditCard, 
-  Receipt,
-  Sparkles,
   Image as ImageIcon,
   RotateCcw,
   AlertTriangle,
-  ShieldAlert,
-  ArrowRight,
   Plus,
   Cloud,
   Layers,
@@ -29,16 +19,13 @@ import {
   Star,
   LogOut,
   Sun,
-  Moon,
   Monitor,
   Palette,
   ShieldCheck,
   Lock,
-  Key,
   Server,
   HardDrive,
   CheckCircle2,
-  Shield,
   Copy
 } from 'lucide-react';
 import { PagoMovilAccount, POSTerminal, BankAccount } from '../../types';
@@ -129,8 +116,6 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
   // Modals
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [showSavedFeedback, setShowSavedFeedback] = useState(false);
-  const [logoInputUrl, setLogoInputUrl] = useState('');
-  const [showUrlInput, setShowUrlInput] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Factory reset states
@@ -253,14 +238,6 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
       img.src = rawDataUrl;
     };
     reader.readAsDataURL(file);
-  };
-
-  const handleApplyLogoUrl = () => {
-    if (logoInputUrl.trim()) {
-      setFormData(prev => ({ ...prev, logoUrl: logoInputUrl.trim() }));
-      setLogoInputUrl('');
-      setShowUrlInput(false);
-    }
   };
 
   const handleRemoveLogo = () => {

@@ -7,11 +7,8 @@ import {
   Upload, 
   FileSpreadsheet, 
   Check, 
-  AlertCircle, 
   X, 
   Sparkles, 
-  ExternalLink,
-  ShieldCheck,
   RefreshCw,
   HardDrive
 } from 'lucide-react';
@@ -33,10 +30,6 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     expenses, 
     fiados, 
     cuentasPorPagar, 
-    gastosOperativos,
-    clients, 
-    businessInfo, 
-    bcvRate,
     googleUser,
     loginWithGoogle,
     logoutGoogle,
@@ -46,8 +39,6 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     driveSyncStatus,
     isDriveSyncing,
     lastDriveSyncTime,
-    cashShift,
-    cashShiftHistory,
     restoreDatabase,
     getFullDatabasePayload
   } = useApp();

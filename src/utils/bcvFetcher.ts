@@ -4,93 +4,74 @@ export interface BCVRateResponse {
   source: string;
 }
 
-export async function fetchLiveBCVRate(): Promise<BCVRateResponse> {
-  const endpoints = [
-    'https://ve.dolarapi.com/v1/dolares/oficial',
-    'https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv'
-  ];
+const REQUEST_TIMEOUT_MS = 6000;
+
+async function fetchRateFromEndpoints(
+  endpoints: string[],
+  sourceLabel: string,
+  errorLabel: string
+): Promise<BCVRateResponse> {
+  let lastError: unknown = null;
 
   for (const url of endpoints) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-
       const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
       if (res.ok) {
         const data = await res.json();
-        // Check ve.dolarapi.com format
-        if (typeof data.promedio === 'number' && data.promedio > 0) {
+        // Format 1: ve.dolarapi.com
+        if (typeof data?.promedio === 'number' && Number.isFinite(data.promedio) && data.promedio > 0) {
           return {
             rate: Number(data.promedio.toFixed(2)),
             date: data.fechaActualizacion || new Date().toISOString(),
-            source: 'Banco Central de Venezuela (BCV)'
+            source: sourceLabel
           };
         }
-        // Check pydolarvenezuela format
-        if (data.monitors?.bcv?.price && typeof data.monitors.bcv.price === 'number') {
+        // Format 2: pydolarvenezuela
+        const pyPrice = data?.monitors?.bcv?.price;
+        if (typeof pyPrice === 'number' && Number.isFinite(pyPrice) && pyPrice > 0) {
           return {
-            rate: Number(data.monitors.bcv.price.toFixed(2)),
+            rate: Number(pyPrice.toFixed(2)),
             date: data.datetime?.date || new Date().toISOString(),
-            source: 'Banco Central de Venezuela (BCV)'
+            source: sourceLabel
           };
         }
       }
     } catch (e) {
-      console.warn('Error fetching live USD BCV from', url, e);
+      lastError = e;
+      if (import.meta.env.DEV) {
+        console.warn(`[BCVFetcher] Error fetching ${errorLabel} from ${url}:`, e);
+      }
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
-  // Fallback if network or CORS is blocked
-  return {
-    rate: 889.26,
-    date: new Date().toISOString(),
-    source: 'BCV Oficial (Sincronizado)'
-  };
+  throw new Error(
+    `No se pudo consultar la tasa oficial ${errorLabel} del BCV en este momento.` +
+      (lastError instanceof Error && lastError.name === 'AbortError' ? ' (Tiempo de espera agotado)' : '')
+  );
+}
+
+export async function fetchLiveBCVRate(): Promise<BCVRateResponse> {
+  return fetchRateFromEndpoints(
+    [
+      'https://ve.dolarapi.com/v1/dolares/oficial',
+      'https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv'
+    ],
+    'Banco Central de Venezuela (BCV)',
+    'Dólar ($)'
+  );
 }
 
 export async function fetchLiveBCVEuroRate(): Promise<BCVRateResponse> {
-  const endpoints = [
-    'https://ve.dolarapi.com/v1/euros/oficial',
-    'https://pydolarvenezuela-api.vercel.app/api/v1/euro?page=bcv'
-  ];
-
-  for (const url of endpoints) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const data = await res.json();
-        // Check ve.dolarapi.com format
-        if (typeof data.promedio === 'number' && data.promedio > 0) {
-          return {
-            rate: Number(data.promedio.toFixed(2)),
-            date: data.fechaActualizacion || new Date().toISOString(),
-            source: 'Banco Central de Venezuela - Euro Oficial (BCV)'
-          };
-        }
-        // Check pydolarvenezuela format
-        if (data.monitors?.bcv?.price && typeof data.monitors.bcv.price === 'number') {
-          return {
-            rate: Number(data.monitors.bcv.price.toFixed(2)),
-            date: data.datetime?.date || new Date().toISOString(),
-            source: 'Banco Central de Venezuela - Euro Oficial (BCV)'
-          };
-        }
-      }
-    } catch (e) {
-      console.warn('Error fetching live Euro BCV from', url, e);
-    }
-  }
-
-  return {
-    rate: 997.92,
-    date: new Date().toISOString(),
-    source: 'BCV Euro Oficial (Sincronizado)'
-  };
+  return fetchRateFromEndpoints(
+    [
+      'https://ve.dolarapi.com/v1/euros/oficial',
+      'https://pydolarvenezuela-api.vercel.app/api/v1/euro?page=bcv'
+    ],
+    'Banco Central de Venezuela - Euro Oficial (BCV)',
+    'Euro (€)'
+  );
 }

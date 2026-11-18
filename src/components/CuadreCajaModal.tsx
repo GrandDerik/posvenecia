@@ -2,10 +2,8 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   X, 
-  DollarSign, 
   CreditCard, 
   Smartphone, 
-  Banknote, 
   Users, 
   Printer, 
   CheckCircle, 
@@ -13,9 +11,7 @@ import {
   ShieldCheck,
   TrendingDown,
   TrendingUp,
-  Receipt,
   FileText,
-  AlertCircle,
   Landmark,
   Download,
   ClipboardCheck
@@ -42,7 +38,6 @@ export const CuadreCajaModal: React.FC = () => {
   } = useApp();
 
   const [showRefsModal, setShowRefsModal] = useState(false);
-  const [closedSuccess, setClosedSuccess] = useState(false);
 
   if (!isCuadreModalOpen) return null;
 
@@ -169,7 +164,6 @@ export const CuadreCajaModal: React.FC = () => {
   const transferenciaNetUSD = round2(safeDiv(transferenciaNetBs, bcvRate));
 
   // 6. Fiao (Cuentas por cobrar de hoy)
-  const fiaoSales = todaySales.filter(s => s.paymentMethod === 'fiao' || (s.paymentMethod === 'pago_combinado' && (s.paymentDetails?.combinedBreakdown?.fiaoRemaining ?? 0) > 0));
   const fiaoTotalBs = round2(fiaoTotalUSD * bcvRate);
 
   // 7. Cashea
@@ -209,14 +203,6 @@ export const CuadreCajaModal: React.FC = () => {
     );
   };
 
-  const handleCerrarCuadre = () => {
-    setClosedSuccess(true);
-    setTimeout(() => {
-      setClosedSuccess(false);
-      setIsCuadreModalOpen(false);
-    }, 1800);
-  };
-
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
       <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
@@ -253,13 +239,6 @@ export const CuadreCajaModal: React.FC = () => {
 
         {/* Modal Body */}
         <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-          {closedSuccess && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-emerald-800 text-sm font-semibold">
-              <CheckCircle className="w-5 h-5 text-emerald-600" />
-              <span>¡Cuadre de caja cerrado exitosamente! Registro archivado.</span>
-            </div>
-          )}
-
           {/* Cards for each payment method */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             

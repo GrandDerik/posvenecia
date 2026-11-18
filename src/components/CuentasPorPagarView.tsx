@@ -4,7 +4,6 @@ import {
   CreditCard, 
   Plus, 
   Search, 
-  Calendar, 
   AlertTriangle, 
   CheckCircle2, 
   Clock, 
@@ -27,7 +26,6 @@ import {
   Eye,
   X,
   UserCheck,
-  Hash,
   Briefcase,
   MapPin,
   Mail

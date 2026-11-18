@@ -6,7 +6,6 @@ import {
   Expense,
   CashShift,
   CuentaPorPagar,
-  GastoOperativo,
   Product,
   CartItem,
   CartDiscount,

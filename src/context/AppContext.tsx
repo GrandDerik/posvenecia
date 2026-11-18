@@ -19,7 +19,6 @@ import {
   AppTheme,
   BankInitialBalance,
   CreditNote,
-  CreditNoteItem,
   InventoryDischarge,
   InventoryDischargeReason,
   ProductBatch,
@@ -107,7 +106,6 @@ import {
 import { BackupDataPayload } from '../utils/cloudBackupUtils';
 import {
   round2,
-  round6,
   getLocalDateStr,
   getProductPriceUSD,
   isProductExempt,
@@ -663,6 +661,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [lastPromptedBcvRate, setLastPromptedBcvRate] = useState<number | null>(null);
   const [lastPromptedBcvEuroRate, setLastPromptedBcvEuroRate] = useState<number | null>(null);
   const [profileLoadedSeq, setProfileLoadedSeq] = useState<number>(0);
+  const [productsLoaded, setProductsLoaded] = useState<boolean>(false);
   const dailyRateCheckRanKeyRef = useRef<string | null>(null);
   const [rateChangeModalState, setRateChangeModalState] = useState<RateChangeModalState>({
     isOpen: false,
@@ -904,6 +903,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setLastPromptedBcvRate(null);
     setLastPromptedBcvEuroRate(null);
     setProfileLoadedSeq(0);
+    setProductsLoaded(false);
     dailyRateCheckRanKeyRef.current = null;
     setRateChangeModalState({
       isOpen: false,
@@ -1636,6 +1636,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     firestoreUnsubRef.current = subscribeToStoreRealtime(userId, {
       onProducts: (newProds) => {
         setProducts(newProds);
+        setProductsLoaded(true);
         setFirestoreSyncStatus('synced');
       },
       onFiados: (newFiados) => setFiados(newFiados),
@@ -1683,7 +1684,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setProfileLoadedSeq((seq) => seq + 1);
       },
       onError: (err) => {
-        console.warn('[PosVenecia Firestore Realtime] Error:', err);
+        if (import.meta.env.DEV) console.warn('[PosVenecia Firestore Realtime] Error:', err);
         setFirestoreSyncStatus('error');
         notifyError(err, 'Error de sincronización en tiempo real');
       }
@@ -1744,7 +1745,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markReady();
       },
       onError: (err) => {
-        console.warn('[PosVenecia Firestore Transactions] Error:', err);
+        if (import.meta.env.DEV) console.warn('[PosVenecia Firestore Transactions] Error:', err);
         setIsLoadingHistory(false);
         notifyError(err, 'Error al cargar historial de movimientos');
       }
@@ -1760,14 +1761,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   /**
    * Detección diaria automática de cambio de tasa BCV al iniciar sesión:
+   * - Espera a que carguen tanto el perfil como el catálogo desde Cloud Firestore (evita race conditions).
    * - Si aún no se ha actualizado la tasa oficial hoy, consulta el BCV ($ y €) en segundo plano.
-   * - Si la tasa cambió respecto al día anterior (o respecto a la última tasa revisada),
-   *   guarda la tasa nueva y abre el Modal de Alerta Informativa para decidir si actualizar precios
-   *   con redondeo comercial hacia arriba o mantener los precios estáticos actuales en Bs.
+   * - Si la tasa cambió respecto al día anterior y existen productos en el catálogo,
+   *   guarda la tasa nueva y abre el Modal de Alerta Informativa.
    */
   useEffect(() => {
     const uid = googleUser?.uid;
-    if (!uid || !isOnline || profileLoadedSeq === 0) return;
+    if (!uid || !isOnline || profileLoadedSeq === 0 || !productsLoaded) return;
 
     const todayStr = getLocalDateStr();
     const checkKey = `${uid}_${todayStr}`;
@@ -1832,7 +1833,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             Math.abs(savedPromptUsd - fetchedUsd) < 0.01 &&
             (typeof savedPromptEur !== 'number' || Math.abs(savedPromptEur - fetchedEur) < 0.01);
 
-          if ((usdChanged || eurChanged) && !alreadyAnsweredForThisRate) {
+          const hasCatalogProducts = (latestDataRef.current.products || []).length > 0;
+          if ((usdChanged || eurChanged) && !alreadyAnsweredForThisRate && hasCatalogProducts) {
             setRateChangeModalState({
               isOpen: true,
               source: 'daily_auto',
@@ -1859,8 +1861,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const usdChanged = Math.abs(savedUsd - prevUsd) >= 0.01;
         const eurChanged = Math.abs(savedEur - prevEur) >= 0.01;
+        const hasCatalogProducts = (latestDataRef.current.products || []).length > 0;
 
-        if (usdChanged || eurChanged) {
+        if ((usdChanged || eurChanged) && hasCatalogProducts) {
           setRateChangeModalState({
             isOpen: true,
             source: 'daily_auto',
@@ -1884,6 +1887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     googleUser?.uid,
     isOnline,
     profileLoadedSeq,
+    productsLoaded,
     bcvRate,
     bcvEuroRate,
     bcvLastUpdatedDate,
@@ -2002,7 +2006,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       activeFirestoreUidRef.current = null;
       await logOutGoogle();
     } catch (err) {
-      console.warn('Logout error from Firebase auth:', err);
+      if (import.meta.env.DEV) console.warn('Logout error from Firebase auth:', err);
     } finally {
       activeFirestoreUidRef.current = null;
       setGoogleUser(null);
@@ -2362,7 +2366,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (isCompletingSaleRef.current) {
-      console.warn('[PosVenecia] Intento de venta concurrente bloqueado (double-submit protection).');
+      if (import.meta.env.DEV) console.warn('[PosVenecia] Intento de venta concurrente bloqueado (double-submit protection).');
       throw new Error('Ya se está procesando una venta. Espere un momento.');
     }
     isCompletingSaleRef.current = true;

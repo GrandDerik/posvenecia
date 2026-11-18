@@ -34,21 +34,13 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
     driveSyncStatus,
     lastDriveSyncTime,
     syncToGoogleDrive,
-    reloadFromGoogleDrive,
-    checkRemoteChangesForMultiDevice,
-    products, 
-    sales, 
-    cuentasPorPagar, 
-    gastosOperativos,
-    cashShiftHistory,
-    clients
+    reloadFromGoogleDrive
   } = useApp();
 
   const { isInstallable, isInstalled, isIOS, isStandalone, install } = usePWAInstall();
 
   const [localFeedback, setLocalFeedback] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [installedSuccess, setInstalledSuccess] = useState(false);
 
   const timersRef = useRef<number[]>([]);
   useEffect(() => {
@@ -143,30 +135,12 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
     }
   };
 
-  const handleMultiDeviceSync = async () => {
-    if (!googleUser?.isConnected) {
-      setLocalFeedback('Inicia sesión con Google para sincronizar entre dispositivos.');
-      scheduleTimer(() => setLocalFeedback(null), 4000);
-      return;
-    }
-    try {
-      setLocalFeedback('Consultando y sincronizando cambios de otros dispositivos...');
-      await checkRemoteChangesForMultiDevice();
-      await syncToGoogleDrive();
-      setLocalFeedback('¡Sincronizado! Tu dispositivo tiene la información más reciente de todos los equipos.');
-      scheduleTimer(() => setLocalFeedback(null), 4500);
-    } catch (e: any) {
-      setLocalFeedback(`Error de sincronización: ${e?.message || 'Error en Google Drive'}`);
-      scheduleTimer(() => setLocalFeedback(null), 4500);
-    }
-  };
-
   const handleInstallClick = async () => {
     if (isInstallable) {
       const outcome = await install();
       if (outcome) {
-        setInstalledSuccess(true);
-        scheduleTimer(() => setInstalledSuccess(false), 4000);
+        setLocalFeedback('¡PosVenecia instalado exitosamente en tu dispositivo!');
+        scheduleTimer(() => setLocalFeedback(null), 4000);
       }
     }
   };
