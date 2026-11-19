@@ -40,14 +40,61 @@ import {
   Abono,
   Supplier,
   Loan,
-  LoanAbono
+  LoanAbono,
+  TreasuryAccount,
+  TreasuryCurrency,
+  TreasuryMovement,
+  TreasuryMovementType
 } from '../types';
 import { BackupDataPayload } from '../utils/cloudBackupUtils';
 import {
   getExpenseAccountingType,
+  isBankPaymentMethod,
+  isExpenseOwnerSalary,
+  isExpenseOwnerWithdrawal,
   isNonFiscalPersonalOrSalaryCategory,
   mapGastoCategoryToExpenseCategory
 } from '../utils/accountingUtils';
+
+export const CASH_USD_ACCOUNT_ID = 'cash_usd';
+export const CASH_BS_ACCOUNT_ID = 'cash_bs';
+
+export interface TreasuryPostingInput {
+  accountId: string;
+  fallbackAccountName?: string;
+  fallbackCurrency?: TreasuryCurrency;
+  direction: 'in' | 'out';
+  amountUSD?: number;
+  amountBs?: number;
+  exactNativeAmount?: number;
+  type: TreasuryMovementType;
+  concept: string;
+  reference?: string;
+  paymentMethod?: string;
+  linkedEntityType?: string;
+  linkedEntityId?: string;
+  transferPairId?: string;
+  counterpartyAccountId?: string;
+  counterpartyAccountName?: string;
+  exchangeRateUsed?: number;
+  notes?: string;
+  date?: string;
+  createdBy?: string;
+}
+
+export interface SaleTreasuryOptions {
+  defaultBsBankAccountId?: string;
+  defaultBsBankAccountName?: string;
+}
+
+export interface TreasuryPaymentOptions {
+  bankAccountId?: string;
+  bankAccountLabel?: string;
+  enteredCurrency?: 'USD' | 'Bs';
+  exactAmountBs?: number;
+  bankFeeAmount?: number;
+  createdBy?: string;
+}
 
 export type TransactionsDatePreset =
   | 'current_month'
@@ -103,6 +150,8 @@ export interface FirestoreStoreListeners {
   onKardex?: (entries: KardexEntry[]) => void;
   onSuppliers?: (suppliers: Supplier[]) => void;
   onLoans?: (loans: Loan[]) => void;
+  onTreasuryAccounts?: (accounts: TreasuryAccount[]) => void;
+  onTreasuryMovements?: (movements: TreasuryMovement[]) => void;
   onMissingCollectionPermissions?: (collectionName: string) => void;
   onCollectionPermissionOk?: (collectionName: string) => void;
   onError?: (error: Error) => void;
@@ -646,9 +695,928 @@ export const subscribeToStoreRealtime = (
     )
   );
 
+  // 16. Cuentas de Tesorería (Efectivo USD, Efectivo Bs y Cuentas Bancarias)
+  const bankAccountsPath = `users/${userId}/bankAccounts`;
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, 'users', userId, 'bankAccounts'),
+      (snapshot) => {
+        clearOptionalCollectionDenied(userId, 'bankAccounts');
+        callbacks.onCollectionPermissionOk?.('bankAccounts');
+        const accounts: TreasuryAccount[] = [];
+        snapshot.forEach((d) => {
+          accounts.push(d.data() as TreasuryAccount);
+        });
+        accounts.sort((a, b) => {
+          const orderOf = (acc: TreasuryAccount) =>
+            acc.id === CASH_USD_ACCOUNT_ID ? 0 : acc.id === CASH_BS_ACCOUNT_ID ? 1 : acc.isDefault ? 2 : 3;
+          const diff = orderOf(a) - orderOf(b);
+          return diff !== 0 ? diff : (a.name || '').localeCompare(b.name || '');
+        });
+        callbacks.onTreasuryAccounts?.(accounts);
+      },
+      (err) => {
+        if (isPermissionDeniedError(err)) {
+          markOptionalCollectionDenied(userId, 'bankAccounts');
+          callbacks.onTreasuryAccounts?.([]);
+          callbacks.onMissingCollectionPermissions?.('bankAccounts');
+          return;
+        }
+        handleErr(OperationType.LIST, bankAccountsPath, err);
+      }
+    )
+  );
+
+  // 17. Extracto de Movimientos de Tesorería (Ledger inmutable)
+  const treasuryMovementsPath = `users/${userId}/treasuryMovements`;
+  unsubscribers.push(
+    onSnapshot(
+      collection(db, 'users', userId, 'treasuryMovements'),
+      (snapshot) => {
+        clearOptionalCollectionDenied(userId, 'treasuryMovements');
+        callbacks.onCollectionPermissionOk?.('treasuryMovements');
+        const movements: TreasuryMovement[] = [];
+        snapshot.forEach((d) => {
+          movements.push(d.data() as TreasuryMovement);
+        });
+        movements.sort((a, b) => {
+          const tDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+          return tDiff !== 0 ? tDiff : (b.id || '').localeCompare(a.id || '');
+        });
+        callbacks.onTreasuryMovements?.(movements);
+      },
+      (err) => {
+        if (isPermissionDeniedError(err)) {
+          markOptionalCollectionDenied(userId, 'treasuryMovements');
+          callbacks.onTreasuryMovements?.([]);
+          callbacks.onMissingCollectionPermissions?.('treasuryMovements');
+          return;
+        }
+        handleErr(OperationType.LIST, treasuryMovementsPath, err);
+      }
+    )
+  );
+
   return () => {
     unsubscribers.forEach((unsub) => unsub());
   };
+};
+
+// ============================================================================
+// MOTOR TRANSACCIONAL DE TESORERÍA (bankAccounts + treasuryMovements)
+// ============================================================================
+
+const isTreasuryEnabled = (userId: string): boolean =>
+  !isOptionalCollectionDenied(userId, 'bankAccounts') &&
+  !isOptionalCollectionDenied(userId, 'treasuryMovements');
+
+const buildFallbackTreasuryAccount = (
+  accountId: string,
+  nowIso: string,
+  fallbackName?: string,
+  fallbackCurrency?: TreasuryCurrency
+): TreasuryAccount => {
+  if (accountId === CASH_USD_ACCOUNT_ID) {
+    return {
+      id: CASH_USD_ACCOUNT_ID,
+      name: 'Efectivo en Caja ($ USD)',
+      accountType: 'cash_usd',
+      currency: 'USD',
+      balance: 0,
+      initialBalance: 0,
+      isSystemCash: true,
+      isDefault: true,
+      isActive: true,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+  }
+  if (accountId === CASH_BS_ACCOUNT_ID) {
+    return {
+      id: CASH_BS_ACCOUNT_ID,
+      name: 'Efectivo en Caja (Bs)',
+      accountType: 'cash_bs',
+      currency: 'Bs',
+      balance: 0,
+      initialBalance: 0,
+      isSystemCash: true,
+      isDefault: true,
+      isActive: true,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+  }
+  return {
+    id: accountId,
+    name: fallbackName || 'Cuenta Bancaria',
+    bankName: fallbackName || 'Cuenta Bancaria',
+    accountType: 'bank',
+    currency: fallbackCurrency || 'Bs',
+    balance: 0,
+    initialBalance: 0,
+    isSystemCash: false,
+    isActive: true,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+};
+
+const resolveTreasuryAccountIdForMethod = (
+  method?: string,
+  bankAccountId?: string,
+  defaultBsBankAccountId?: string
+): string | null => {
+  if (method === 'efectivo_usd') return CASH_USD_ACCOUNT_ID;
+  if (method === 'efectivo_bs') return CASH_BS_ACCOUNT_ID;
+  if (isBankPaymentMethod(method) || method === 'banco_pago_movil') {
+    const cleanId = bankAccountId?.trim() || defaultBsBankAccountId?.trim();
+    return cleanId || null;
+  }
+  return null;
+};
+
+const buildBankCommissionExpenseDoc = (params: {
+  feeAmount: number;
+  feeCurrency: TreasuryCurrency;
+  bcvRate: number;
+  paymentMethod: Expense['paymentMethod'];
+  bankAccountId: string;
+  bankAccountLabel: string;
+  concept: string;
+  reference?: string;
+  dateIso: string;
+  linkedGastoId?: string;
+  linkedCuentaId?: string;
+  linkedLoanId?: string;
+}): Expense => {
+  const safeRate = params.bcvRate > 0 ? params.bcvRate : 1;
+  const amountBs = params.feeCurrency === 'Bs' ? round2(params.feeAmount) : round2(params.feeAmount * safeRate);
+  const amountUSD = params.feeCurrency === 'USD' ? round2(params.feeAmount) : round2(params.feeAmount / safeRate);
+  return {
+    id: 'exp-com-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+    date: params.dateIso,
+    invoiceNumber: params.reference || 'COM-BANCARIA',
+    controlNumber: '00-00000',
+    supplierName: params.bankAccountLabel || 'Banco',
+    supplierRIF: 'N/A',
+    description: `Comisión Bancaria: ${params.concept}`,
+    category: 'Comisión Bancaria',
+    amountUSD,
+    amountBs,
+    baseImponibleBs: 0,
+    ivaBs: 0,
+    retencionIVABs: 0,
+    retencionISLRBs: 0,
+    bcvRate: safeRate,
+    enteredCurrency: params.feeCurrency,
+    paymentMethod: params.paymentMethod,
+    bankAccountId: params.bankAccountId,
+    bankAccountLabel: params.bankAccountLabel,
+    treasuryAccountId: params.bankAccountId,
+    bankFeeAmount: round2(params.feeAmount),
+    bankFeeCurrency: params.feeCurrency,
+    excludeFromLibroCompras: true,
+    accountingType: 'operating_expense',
+    reference: params.reference,
+    linkedGastoId: params.linkedGastoId,
+    linkedCuentaId: params.linkedCuentaId,
+    linkedLoanId: params.linkedLoanId,
+    syncStatus: 'synced'
+  };
+};
+
+/**
+ * Helper STRICTLY honoring Firestore's read-before-write rule inside runTransaction.
+ * Call `prepareTreasuryPostingsInTx` during the READ phase, then call the returned `commitWrites()`
+ * during the WRITE phase. Supports multiple postings to the same account in sequence with exact running balances.
+ */
+const prepareTreasuryPostingsInTx = async (
+  tx: Parameters<Parameters<typeof runTransaction>[1]>[0],
+  userId: string,
+  postings: TreasuryPostingInput[],
+  bcvRate: number
+): Promise<{
+  getAccountCurrency: (accountId: string, fallback?: TreasuryCurrency) => TreasuryCurrency;
+  getAccountName: (accountId: string, fallback?: string) => string;
+  commitWrites: () => TreasuryMovement[];
+}> => {
+  const validPostings = postings.filter((p) => Boolean(p.accountId && p.accountId.trim()));
+  if (!isTreasuryEnabled(userId) || validPostings.length === 0) {
+    return {
+      getAccountCurrency: (_id, fallback) => fallback || 'Bs',
+      getAccountName: (_id, fallback) => fallback || 'Cuenta',
+      commitWrites: () => []
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const uniqueIds = Array.from(new Set(validPostings.map((p) => p.accountId.trim())));
+  const refs = uniqueIds.map((id) => doc(db, 'users', userId, 'bankAccounts', id));
+  const snaps = await Promise.all(refs.map((r) => tx.get(r)));
+
+  const stateMap = new Map<
+    string,
+    {
+      ref: ReturnType<typeof doc>;
+      account: TreasuryAccount;
+      currentBalance: number;
+      touched: boolean;
+    }
+  >();
+
+  uniqueIds.forEach((id, idx) => {
+    const snap = snaps[idx];
+    const samplePosting = validPostings.find((p) => p.accountId.trim() === id);
+    const liveAccount: TreasuryAccount = snap.exists()
+      ? (snap.data() as TreasuryAccount)
+      : buildFallbackTreasuryAccount(id, nowIso, samplePosting?.fallbackAccountName, samplePosting?.fallbackCurrency);
+    stateMap.set(id, {
+      ref: refs[idx],
+      account: liveAccount,
+      currentBalance: round2(Number(liveAccount.balance) || 0),
+      touched: false
+    });
+  });
+
+  const safeRate = bcvRate > 0 ? bcvRate : 1;
+
+  return {
+    getAccountCurrency: (accountId: string, fallback?: TreasuryCurrency) =>
+      stateMap.get(accountId.trim())?.account.currency || fallback || 'Bs',
+    getAccountName: (accountId: string, fallback?: string) =>
+      stateMap.get(accountId.trim())?.account.name || fallback || 'Cuenta',
+    commitWrites: () => {
+      const createdMovements: TreasuryMovement[] = [];
+      const baseTs = Date.now();
+
+      validPostings.forEach((p, seq) => {
+        const state = stateMap.get(p.accountId.trim());
+        if (!state) return;
+
+        let nativeAmount = 0;
+        if (typeof p.exactNativeAmount === 'number' && p.exactNativeAmount > 0) {
+          nativeAmount = round2(p.exactNativeAmount);
+        } else if (state.account.currency === 'USD') {
+          if (typeof p.amountUSD === 'number' && p.amountUSD > 0) {
+            nativeAmount = round2(p.amountUSD);
+          } else if (typeof p.amountBs === 'number' && p.amountBs > 0) {
+            nativeAmount = round2(p.amountBs / safeRate);
+          }
+        } else {
+          if (typeof p.amountBs === 'number' && p.amountBs > 0) {
+            nativeAmount = round2(p.amountBs);
+          } else if (typeof p.amountUSD === 'number' && p.amountUSD > 0) {
+            nativeAmount = round2(p.amountUSD * safeRate);
+          }
+        }
+
+        if (nativeAmount <= 0) return;
+
+        const balanceBefore = round2(state.currentBalance);
+        const balanceAfter = round2(
+          p.direction === 'in' ? balanceBefore + nativeAmount : balanceBefore - nativeAmount
+        );
+        state.currentBalance = balanceAfter;
+        state.touched = true;
+
+        const mov: TreasuryMovement = {
+          id: `tmov-${baseTs}-${seq}-${Math.random().toString(36).substring(2, 6)}`,
+          date: p.date || nowIso,
+          accountId: state.account.id,
+          accountName: state.account.name,
+          accountCurrency: state.account.currency,
+          direction: p.direction,
+          amount: nativeAmount,
+          balanceBefore,
+          balanceAfter,
+          bcvRate: safeRate,
+          type: p.type,
+          concept: p.concept.slice(0, 295),
+          reference: p.reference ? p.reference.slice(0, 145) : undefined,
+          paymentMethod: p.paymentMethod,
+          linkedEntityType: p.linkedEntityType,
+          linkedEntityId: p.linkedEntityId,
+          transferPairId: p.transferPairId,
+          counterpartyAccountId: p.counterpartyAccountId,
+          counterpartyAccountName: p.counterpartyAccountName,
+          exchangeRateUsed: p.exchangeRateUsed,
+          notes: p.notes ? p.notes.slice(0, 990) : undefined,
+          createdBy: p.createdBy
+        };
+
+        tx.set(doc(db, 'users', userId, 'treasuryMovements', mov.id), cleanForFirestore(mov));
+        createdMovements.push(mov);
+      });
+
+      stateMap.forEach((state) => {
+        if (!state.touched) return;
+        const nextAcc: TreasuryAccount = {
+          ...state.account,
+          balance: round2(state.currentBalance),
+          updatedAt: nowIso
+        };
+        tx.set(state.ref, cleanForFirestore(nextAcc), { merge: true });
+      });
+
+      return createdMovements;
+    }
+  };
+};
+
+const buildSaleTreasuryPostings = (
+  sale: Sale,
+  direction: 'in' | 'out',
+  type: TreasuryMovementType,
+  treasuryOptions?: SaleTreasuryOptions,
+  conceptPrefix?: string
+): TreasuryPostingInput[] => {
+  const postings: TreasuryPostingInput[] = [];
+  const label = conceptPrefix || (direction === 'in' ? `Venta POS ${sale.invoiceNumber}` : `Anulación ${sale.invoiceNumber}`);
+  const pd = sale.paymentDetails || ({} as Sale['paymentDetails']);
+  const defaultBankId = treasuryOptions?.defaultBsBankAccountId;
+  const defaultBankName = treasuryOptions?.defaultBsBankAccountName;
+
+  if (sale.paymentMethod === 'efectivo_usd') {
+    postings.push({
+      accountId: CASH_USD_ACCOUNT_ID,
+      direction,
+      exactNativeAmount: round2(sale.totalUSD),
+      amountUSD: sale.totalUSD,
+      amountBs: sale.totalBs,
+      type,
+      concept: `${label} (${sale.clientName})`,
+      reference: sale.invoiceNumber,
+      paymentMethod: sale.paymentMethod,
+      linkedEntityType: 'sale',
+      linkedEntityId: sale.id,
+      date: direction === 'in' ? sale.date : new Date().toISOString(),
+      createdBy: sale.cashierName
+    });
+  } else if (sale.paymentMethod === 'efectivo_bs') {
+    postings.push({
+      accountId: CASH_BS_ACCOUNT_ID,
+      direction,
+      exactNativeAmount: round2(sale.totalBs),
+      amountUSD: sale.totalUSD,
+      amountBs: sale.totalBs,
+      type,
+      concept: `${label} (${sale.clientName})`,
+      reference: sale.invoiceNumber,
+      paymentMethod: sale.paymentMethod,
+      linkedEntityType: 'sale',
+      linkedEntityId: sale.id,
+      date: direction === 'in' ? sale.date : new Date().toISOString(),
+      createdBy: sale.cashierName
+    });
+  } else if (isBankPaymentMethod(sale.paymentMethod)) {
+    const bankId = pd.treasuryBankAccountId || defaultBankId;
+    if (bankId) {
+      const bankLabel =
+        pd.pagoMovilBank || pd.debitoBank || pd.transferenciaBank || defaultBankName || 'Cuenta Bancaria';
+      const ref = pd.pagoMovilRef || pd.debitoRef || pd.transferenciaRef || sale.invoiceNumber;
+      postings.push({
+        accountId: bankId,
+        fallbackAccountName: bankLabel,
+        fallbackCurrency: 'Bs',
+        direction,
+        amountUSD: sale.totalUSD,
+        amountBs: sale.totalBs,
+        type,
+        concept: `${label} (${sale.clientName})`,
+        reference: ref,
+        paymentMethod: sale.paymentMethod,
+        linkedEntityType: 'sale',
+        linkedEntityId: sale.id,
+        date: direction === 'in' ? sale.date : new Date().toISOString(),
+        createdBy: sale.cashierName
+      });
+    }
+  } else if (sale.paymentMethod === 'fiao') {
+    const initUsd = round2(Number(pd.fiaoInitialAbonoUSD) || 0);
+    const initBs = round2(Number(pd.fiaoInitialAbonoBs) || 0);
+    if (initUsd > 0 || initBs > 0) {
+      const isBs = pd.fiaoInitialAbonoCurrency === 'Bs';
+      postings.push({
+        accountId: isBs ? CASH_BS_ACCOUNT_ID : CASH_USD_ACCOUNT_ID,
+        direction,
+        exactNativeAmount: isBs ? (initBs > 0 ? initBs : round2(initUsd * (sale.bcvRate || 1))) : initUsd,
+        amountUSD: initUsd,
+        amountBs: initBs > 0 ? initBs : round2(initUsd * (sale.bcvRate || 1)),
+        type,
+        concept: `${label} - Abono inicial crédito (${sale.clientName})`,
+        reference: sale.invoiceNumber,
+        paymentMethod: isBs ? 'efectivo_bs' : 'efectivo_usd',
+        linkedEntityType: 'sale',
+        linkedEntityId: sale.id,
+        date: direction === 'in' ? sale.date : new Date().toISOString(),
+        createdBy: sale.cashierName
+      });
+    }
+  } else if (sale.paymentMethod === 'pago_combinado' && pd.combinedBreakdown) {
+    const cb = pd.combinedBreakdown;
+    if ((cb.usdCash || 0) > 0) {
+      postings.push({
+        accountId: CASH_USD_ACCOUNT_ID,
+        direction,
+        exactNativeAmount: round2(cb.usdCash || 0),
+        amountUSD: round2(cb.usdCash || 0),
+        type,
+        concept: `${label} - Combinado Efectivo $ (${sale.clientName})`,
+        reference: sale.invoiceNumber,
+        paymentMethod: 'efectivo_usd',
+        linkedEntityType: 'sale',
+        linkedEntityId: sale.id,
+        date: direction === 'in' ? sale.date : new Date().toISOString(),
+        createdBy: sale.cashierName
+      });
+    }
+    if ((cb.bsCash || 0) > 0) {
+      postings.push({
+        accountId: CASH_BS_ACCOUNT_ID,
+        direction,
+        exactNativeAmount: round2(cb.bsCash || 0),
+        amountBs: round2(cb.bsCash || 0),
+        type,
+        concept: `${label} - Combinado Efectivo Bs (${sale.clientName})`,
+        reference: sale.invoiceNumber,
+        paymentMethod: 'efectivo_bs',
+        linkedEntityType: 'sale',
+        linkedEntityId: sale.id,
+        date: direction === 'in' ? sale.date : new Date().toISOString(),
+        createdBy: sale.cashierName
+      });
+    }
+    if ((cb.pagoMovil || 0) > 0) {
+      const bankId = cb.pagoMovilBankAccountId || pd.treasuryBankAccountId || defaultBankId;
+      if (bankId) {
+        postings.push({
+          accountId: bankId,
+          fallbackAccountName: cb.pagoMovilBank || defaultBankName,
+          fallbackCurrency: 'Bs',
+          direction,
+          amountBs: round2(cb.pagoMovil || 0),
+          type,
+          concept: `${label} - Combinado Pago Móvil (${sale.clientName})`,
+          reference: cb.pagoMovilRef || sale.invoiceNumber,
+          paymentMethod: 'pago_movil',
+          linkedEntityType: 'sale',
+          linkedEntityId: sale.id,
+          date: direction === 'in' ? sale.date : new Date().toISOString(),
+          createdBy: sale.cashierName
+        });
+      }
+    }
+    if ((cb.debito || 0) > 0) {
+      const bankId = cb.debitoBankAccountId || pd.treasuryBankAccountId || defaultBankId;
+      if (bankId) {
+        postings.push({
+          accountId: bankId,
+          fallbackAccountName: cb.debitoBank || defaultBankName,
+          fallbackCurrency: 'Bs',
+          direction,
+          amountBs: round2(cb.debito || 0),
+          type,
+          concept: `${label} - Combinado Punto Débito (${sale.clientName})`,
+          reference: cb.debitoRef || sale.invoiceNumber,
+          paymentMethod: 'debito',
+          linkedEntityType: 'sale',
+          linkedEntityId: sale.id,
+          date: direction === 'in' ? sale.date : new Date().toISOString(),
+          createdBy: sale.cashierName
+        });
+      }
+    }
+    if ((cb.transferencia || 0) > 0) {
+      const bankId = cb.transferenciaBankAccountId || pd.treasuryBankAccountId || defaultBankId;
+      if (bankId) {
+        postings.push({
+          accountId: bankId,
+          fallbackAccountName: cb.transferenciaBank || defaultBankName,
+          fallbackCurrency: 'Bs',
+          direction,
+          amountBs: round2(cb.transferencia || 0),
+          type,
+          concept: `${label} - Combinado Transferencia (${sale.clientName})`,
+          reference: cb.transferenciaRef || sale.invoiceNumber,
+          paymentMethod: 'transferencia',
+          linkedEntityType: 'sale',
+          linkedEntityId: sale.id,
+          date: direction === 'in' ? sale.date : new Date().toISOString(),
+          createdBy: sale.cashierName
+        });
+      }
+    }
+  }
+
+  return postings;
+};
+
+/**
+ * Ensures canonical cash accounts (cash_usd, cash_bs) and migrates any configured bank accounts
+ * from BusinessInfo into users/{uid}/bankAccounts idempotently.
+ */
+export const ensureDefaultTreasuryAccountsInFirestore = async (
+  uid: string,
+  existingAccounts: TreasuryAccount[],
+  businessInfo?: BusinessInfo
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  if (isOptionalCollectionDenied(userId, 'bankAccounts')) return;
+
+  const existingIds = new Set(existingAccounts.map((a) => a.id));
+  const nowIso = new Date().toISOString();
+  const toCreate: TreasuryAccount[] = [];
+
+  if (!existingIds.has(CASH_USD_ACCOUNT_ID)) {
+    toCreate.push(buildFallbackTreasuryAccount(CASH_USD_ACCOUNT_ID, nowIso));
+  }
+  if (!existingIds.has(CASH_BS_ACCOUNT_ID)) {
+    toCreate.push(buildFallbackTreasuryAccount(CASH_BS_ACCOUNT_ID, nowIso));
+  }
+
+  const hasAnyBank = existingAccounts.some((a) => a.accountType === 'bank');
+  if (!hasAnyBank && businessInfo) {
+    const profileBanks = businessInfo.bankAccounts || [];
+    if (profileBanks.length > 0) {
+      profileBanks.forEach((b, idx) => {
+        const safeId = sanitizeFirestoreDocId(b.id, 'bank', idx);
+        if (!existingIds.has(safeId)) {
+          toCreate.push({
+            id: safeId,
+            name: b.bank || `Banco ${idx + 1}`,
+            bankName: b.bank || `Banco ${idx + 1}`,
+            accountNumber: b.accountNumber || '',
+            alias: b.holderName || '',
+            accountType: 'bank',
+            currency: 'Bs',
+            balance: 0,
+            initialBalance: 0,
+            isSystemCash: false,
+            isDefault: Boolean(b.isDefault) || idx === 0,
+            isActive: true,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+        }
+      });
+    } else if (businessInfo.pagoMovilBank) {
+      const defaultBankId = 'bank_principal_bs';
+      if (!existingIds.has(defaultBankId)) {
+        toCreate.push({
+          id: defaultBankId,
+          name: businessInfo.pagoMovilBank,
+          bankName: businessInfo.pagoMovilBank,
+          accountNumber: businessInfo.pagoMovilPhone || '',
+          alias: 'Cuenta Principal Pago Móvil',
+          accountType: 'bank',
+          currency: 'Bs',
+          balance: 0,
+          initialBalance: 0,
+          isSystemCash: false,
+          isDefault: true,
+          isActive: true,
+          createdAt: nowIso,
+          updatedAt: nowIso
+        });
+      }
+    }
+  }
+
+  if (toCreate.length === 0) return;
+
+  const op = (async () => {
+    try {
+      const batch = writeBatch(db);
+      toCreate.forEach((acc) => {
+        batch.set(doc(db, 'users', userId, 'bankAccounts', acc.id), cleanForFirestore(acc), { merge: true });
+      });
+      await batch.commit();
+    } catch (err) {
+      if (isPermissionDeniedError(err)) {
+        markOptionalCollectionDenied(userId, 'bankAccounts');
+        return;
+      }
+      handleFirestoreError(err, OperationType.WRITE, `users/${userId}/bankAccounts`);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const saveTreasuryAccountToFirestore = async (
+  uid: string,
+  account: TreasuryAccount,
+  options?: { recordInitialMovement?: boolean; bcvRate?: number; createdBy?: string }
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const safeId = sanitizeFirestoreDocId(account.id, 'bank', 0);
+  const path = `users/${userId}/bankAccounts/${safeId}`;
+  const op = (async () => {
+    try {
+      await runTransaction(db, async (tx) => {
+        const accRef = doc(db, 'users', userId, 'bankAccounts', safeId);
+        const existingSnap = await tx.get(accRef);
+        const nowIso = new Date().toISOString();
+
+        const normalized: TreasuryAccount = {
+          ...account,
+          id: safeId,
+          balance: existingSnap.exists()
+            ? round2(Number((existingSnap.data() as TreasuryAccount).balance) || 0)
+            : round2(Number(account.balance) || 0),
+          initialBalance: existingSnap.exists()
+            ? round2(Number((existingSnap.data() as TreasuryAccount).initialBalance) || 0)
+            : round2(Number(account.initialBalance ?? account.balance) || 0),
+          createdAt: existingSnap.exists()
+            ? (existingSnap.data() as TreasuryAccount).createdAt || nowIso
+            : account.createdAt || nowIso,
+          updatedAt: nowIso
+        };
+
+        tx.set(accRef, cleanForFirestore(normalized), { merge: true });
+
+        if (!existingSnap.exists() && options?.recordInitialMovement && normalized.balance > 0 && isTreasuryEnabled(userId)) {
+          const mov: TreasuryMovement = {
+            id: `tmov-init-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            date: nowIso,
+            accountId: normalized.id,
+            accountName: normalized.name,
+            accountCurrency: normalized.currency,
+            direction: 'in',
+            amount: round2(normalized.balance),
+            balanceBefore: 0,
+            balanceAfter: round2(normalized.balance),
+            bcvRate: options.bcvRate && options.bcvRate > 0 ? options.bcvRate : 1,
+            type: 'ajuste_inicial',
+            concept: `Saldo inicial de apertura (${normalized.name})`,
+            notes: normalized.notes || 'Creación de cuenta con saldo inicial',
+            createdBy: options.createdBy
+          };
+          tx.set(doc(db, 'users', userId, 'treasuryMovements', mov.id), cleanForFirestore(mov));
+        }
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+export const deleteTreasuryAccountFromFirestore = async (
+  uid: string,
+  accountId: string
+): Promise<void> => {
+  if (accountId === CASH_USD_ACCOUNT_ID || accountId === CASH_BS_ACCOUNT_ID) {
+    throw new Error('Las cuentas de Efectivo en Caja del sistema no pueden eliminarse.');
+  }
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/bankAccounts/${accountId}`;
+  const op = (async () => {
+    try {
+      await deleteDoc(doc(db, 'users', userId, 'bankAccounts', accountId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Atomic Transfer / Currency Exchange between any two Treasury accounts,
+ * with optional Comisión Bancaria debited from the source bank account & logged as non-fiscal financial expense.
+ */
+export const transferBetweenTreasuryAccountsTransaction = async (
+  uid: string,
+  params: {
+    sourceAccountId: string;
+    destinationAccountId: string;
+    sourceAmount: number;
+    exchangeRate?: number;
+    bcvRate: number;
+    bankFeeAmount?: number;
+    reference?: string;
+    notes?: string;
+    createdBy?: string;
+  }
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  if (params.sourceAccountId === params.destinationAccountId) {
+    throw new Error('La cuenta de origen y destino deben ser diferentes.');
+  }
+  if (!(params.sourceAmount > 0)) {
+    throw new Error('El monto a transferir debe ser mayor a cero.');
+  }
+  const path = `users/${userId}/treasuryMovements`;
+  const op = (async () => {
+    try {
+      await runTransaction(db, async (tx) => {
+        const srcRef = doc(db, 'users', userId, 'bankAccounts', params.sourceAccountId);
+        const dstRef = doc(db, 'users', userId, 'bankAccounts', params.destinationAccountId);
+        const [srcSnap, dstSnap] = await Promise.all([tx.get(srcRef), tx.get(dstRef)]);
+        if (!srcSnap.exists()) throw new Error('Cuenta de origen no encontrada en Tesorería.');
+        if (!dstSnap.exists()) throw new Error('Cuenta de destino no encontrada en Tesorería.');
+
+        const srcAcc = srcSnap.data() as TreasuryAccount;
+        const dstAcc = dstSnap.data() as TreasuryAccount;
+        const nowIso = new Date().toISOString();
+        const safeBcv = params.bcvRate > 0 ? params.bcvRate : 1;
+        const rateUsed = params.exchangeRate && params.exchangeRate > 0 ? params.exchangeRate : safeBcv;
+
+        const outAmount = round2(params.sourceAmount);
+        let inAmount = outAmount;
+        if (srcAcc.currency !== dstAcc.currency) {
+          inAmount =
+            srcAcc.currency === 'USD' && dstAcc.currency === 'Bs'
+              ? round2(outAmount * rateUsed)
+              : round2(outAmount / rateUsed);
+        }
+
+        const feeAmount =
+          srcAcc.accountType === 'bank' && params.bankFeeAmount && params.bankFeeAmount > 0
+            ? round2(params.bankFeeAmount)
+            : 0;
+
+        const transferPairId = `trf-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const isFx = srcAcc.currency !== dstAcc.currency;
+        const conceptOut = isFx
+          ? `Cambio de Divisa (${srcAcc.currency} → ${dstAcc.currency}) hacia ${dstAcc.name}`
+          : `Transferencia interna hacia ${dstAcc.name}`;
+        const conceptIn = isFx
+          ? `Cambio de Divisa (${srcAcc.currency} → ${dstAcc.currency}) desde ${srcAcc.name}`
+          : `Transferencia interna desde ${srcAcc.name}`;
+
+        const srcBefore = round2(Number(srcAcc.balance) || 0);
+        const srcAfterTransfer = round2(srcBefore - outAmount);
+        const srcFinal = feeAmount > 0 ? round2(srcAfterTransfer - feeAmount) : srcAfterTransfer;
+
+        const dstBefore = round2(Number(dstAcc.balance) || 0);
+        const dstFinal = round2(dstBefore + inAmount);
+
+        const baseTs = Date.now();
+        const outMov: TreasuryMovement = {
+          id: `tmov-${baseTs}-0-${Math.random().toString(36).substring(2, 6)}`,
+          date: nowIso,
+          accountId: srcAcc.id,
+          accountName: srcAcc.name,
+          accountCurrency: srcAcc.currency,
+          direction: 'out',
+          amount: outAmount,
+          balanceBefore: srcBefore,
+          balanceAfter: srcAfterTransfer,
+          bcvRate: safeBcv,
+          type: 'transferencia',
+          concept: conceptOut,
+          reference: params.reference,
+          linkedEntityType: 'transfer',
+          linkedEntityId: transferPairId,
+          transferPairId,
+          counterpartyAccountId: dstAcc.id,
+          counterpartyAccountName: dstAcc.name,
+          exchangeRateUsed: isFx ? rateUsed : undefined,
+          notes: params.notes,
+          createdBy: params.createdBy
+        };
+
+        const inMov: TreasuryMovement = {
+          id: `tmov-${baseTs}-1-${Math.random().toString(36).substring(2, 6)}`,
+          date: nowIso,
+          accountId: dstAcc.id,
+          accountName: dstAcc.name,
+          accountCurrency: dstAcc.currency,
+          direction: 'in',
+          amount: inAmount,
+          balanceBefore: dstBefore,
+          balanceAfter: dstFinal,
+          bcvRate: safeBcv,
+          type: 'transferencia',
+          concept: conceptIn,
+          reference: params.reference,
+          linkedEntityType: 'transfer',
+          linkedEntityId: transferPairId,
+          transferPairId,
+          counterpartyAccountId: srcAcc.id,
+          counterpartyAccountName: srcAcc.name,
+          exchangeRateUsed: isFx ? rateUsed : undefined,
+          notes: params.notes,
+          createdBy: params.createdBy
+        };
+
+        tx.set(srcRef, cleanForFirestore({ ...srcAcc, balance: srcFinal, updatedAt: nowIso }), { merge: true });
+        tx.set(dstRef, cleanForFirestore({ ...dstAcc, balance: dstFinal, updatedAt: nowIso }), { merge: true });
+        tx.set(doc(db, 'users', userId, 'treasuryMovements', outMov.id), cleanForFirestore(outMov));
+        tx.set(doc(db, 'users', userId, 'treasuryMovements', inMov.id), cleanForFirestore(inMov));
+
+        if (feeAmount > 0) {
+          const feeMov: TreasuryMovement = {
+            id: `tmov-${baseTs}-2-${Math.random().toString(36).substring(2, 6)}`,
+            date: nowIso,
+            accountId: srcAcc.id,
+            accountName: srcAcc.name,
+            accountCurrency: srcAcc.currency,
+            direction: 'out',
+            amount: feeAmount,
+            balanceBefore: srcAfterTransfer,
+            balanceAfter: srcFinal,
+            bcvRate: safeBcv,
+            type: 'comision_bancaria',
+            concept: `Comisión Bancaria por transferencia hacia ${dstAcc.name}`,
+            reference: params.reference,
+            linkedEntityType: 'transfer',
+            linkedEntityId: transferPairId,
+            transferPairId,
+            notes: params.notes,
+            createdBy: params.createdBy
+          };
+          tx.set(doc(db, 'users', userId, 'treasuryMovements', feeMov.id), cleanForFirestore(feeMov));
+
+          const feeExpense = buildBankCommissionExpenseDoc({
+            feeAmount,
+            feeCurrency: srcAcc.currency,
+            bcvRate: safeBcv,
+            paymentMethod: 'transferencia',
+            bankAccountId: srcAcc.id,
+            bankAccountLabel: srcAcc.name,
+            concept: `Transferencia interna hacia ${dstAcc.name}`,
+            reference: params.reference,
+            dateIso: nowIso
+          });
+          tx.set(doc(db, 'users', userId, 'expenses', feeExpense.id), cleanForFirestore(feeExpense));
+        }
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Atomic Initial Balance / Audited Balance Adjustment (Manager PIN verified in UI).
+ */
+export const adjustTreasuryAccountBalanceTransaction = async (
+  uid: string,
+  params: {
+    accountId: string;
+    newBalance: number;
+    bcvRate: number;
+    reason?: string;
+    setAsInitialBalance?: boolean;
+    createdBy?: string;
+  }
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/bankAccounts/${params.accountId}`;
+  const op = (async () => {
+    try {
+      await runTransaction(db, async (tx) => {
+        const accRef = doc(db, 'users', userId, 'bankAccounts', params.accountId);
+        const snap = await tx.get(accRef);
+        const nowIso = new Date().toISOString();
+        const acc: TreasuryAccount = snap.exists()
+          ? (snap.data() as TreasuryAccount)
+          : buildFallbackTreasuryAccount(params.accountId, nowIso);
+
+        const prevBal = round2(Number(acc.balance) || 0);
+        const targetBal = round2(Number(params.newBalance) || 0);
+        const diff = round2(targetBal - prevBal);
+
+        const updatedAcc: TreasuryAccount = {
+          ...acc,
+          balance: targetBal,
+          initialBalance: params.setAsInitialBalance ? targetBal : round2(Number(acc.initialBalance) || 0),
+          updatedAt: nowIso
+        };
+
+        tx.set(accRef, cleanForFirestore(updatedAcc), { merge: true });
+
+        if (isTreasuryEnabled(userId)) {
+          const mov: TreasuryMovement = {
+            id: `tmov-adj-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            date: nowIso,
+            accountId: acc.id,
+            accountName: acc.name,
+            accountCurrency: acc.currency,
+            direction: diff >= 0 ? 'in' : 'out',
+            amount: Math.abs(diff),
+            balanceBefore: prevBal,
+            balanceAfter: targetBal,
+            bcvRate: params.bcvRate > 0 ? params.bcvRate : 1,
+            type: 'ajuste_inicial',
+            concept: params.reason?.trim() || 'Ajuste de Saldo Inicial / Conciliación de Gerencia',
+            notes: `Autorizado con Clave de Gerente. Saldo anterior: ${prevBal.toFixed(2)} ${acc.currency} → Nuevo saldo: ${targetBal.toFixed(2)} ${acc.currency}`,
+            createdBy: params.createdBy
+          };
+          tx.set(doc(db, 'users', userId, 'treasuryMovements', mov.id), cleanForFirestore(mov));
+        }
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
 };
 
 /**
@@ -856,7 +1824,8 @@ export const saveSaleAtomic = async (
   stockDeductions: Array<{ productId: string; quantity: number }>,
   bcvRate: number,
   baseCurrency: BaseCurrency,
-  newFiado?: FiadoRecord
+  newFiado?: FiadoRecord,
+  treasuryOptions?: SaleTreasuryOptions
 ): Promise<Sale> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/sales/${sale.id}`;
@@ -887,13 +1856,17 @@ export const saveSaleAtomic = async (
       }
 
       const syncedSale: Sale = { ...sale, syncStatus: 'synced' };
+      const saleTreasuryPostings = buildSaleTreasuryPostings(syncedSale, 'in', 'venta', treasuryOptions);
 
       await runTransaction(db, async (tx) => {
         const productIds = Array.from(consolidatedDeductions.keys());
         const prodRefs = productIds.map((pid) => doc(db, 'users', userId, 'products', pid));
 
         // ALL READS BEFORE ANY WRITES
-        const prodSnaps = await Promise.all(prodRefs.map((ref) => tx.get(ref)));
+        const [prodSnaps, treasuryPlan] = await Promise.all([
+          Promise.all(prodRefs.map((ref) => tx.get(ref))),
+          prepareTreasuryPostingsInTx(tx, userId, saleTreasuryPostings, syncedSale.bcvRate || bcvRate)
+        ]);
 
         const preparedUpdates: Array<{
           ref: ReturnType<typeof doc>;
@@ -978,6 +1951,8 @@ export const saveSaleAtomic = async (
           const fiadoRef = doc(db, 'users', userId, 'fiados', newFiado.id);
           tx.set(fiadoRef, cleanForFirestore(newFiado));
         }
+
+        treasuryPlan.commitWrites();
       });
 
       devLog(`[PosVenecia Firestore] Venta ${syncedSale.invoiceNumber} confirmada transaccionalmente.`);
@@ -1012,7 +1987,8 @@ export const cancelSaleAtomic = async (
   uid: string,
   saleId: string,
   associatedFiadoId?: string,
-  userName?: string
+  userName?: string,
+  treasuryOptions?: SaleTreasuryOptions
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/sales/${saleId}`;
@@ -1053,10 +2029,13 @@ export const cancelSaleAtomic = async (
         const prodRefs = prodIds.map((pid) => doc(db, 'users', userId, 'products', pid));
         const fiadoRefs = Array.from(fiadoIds).map((fid) => doc(db, 'users', userId, 'fiados', fid));
 
-        // Read all products & linked fiados BEFORE any writes
-        const [prodSnaps, fiadoSnaps] = await Promise.all([
+        const reversalPostings = buildSaleTreasuryPostings(liveSale, 'out', 'anulacion', treasuryOptions);
+
+        // Read all products, linked fiados & treasury accounts BEFORE any writes
+        const [prodSnaps, fiadoSnaps, treasuryPlan] = await Promise.all([
           Promise.all(prodRefs.map((ref) => tx.get(ref))),
-          Promise.all(fiadoRefs.map((ref) => tx.get(ref)))
+          Promise.all(fiadoRefs.map((ref) => tx.get(ref))),
+          prepareTreasuryPostingsInTx(tx, userId, reversalPostings, liveSale.bcvRate || 1)
         ]);
 
         const prodUpdates: Array<{
@@ -1127,6 +2106,8 @@ export const cancelSaleAtomic = async (
             });
           }
         }
+
+        treasuryPlan.commitWrites();
       });
 
       devLog(`[PosVenecia Firestore] Venta ${saleId} anulada transaccionalmente.`);
@@ -1157,6 +2138,8 @@ export const saveCreditNoteAtomic = async (
     originalControlNumber: string;
     fallbackBcvRate: number;
     cashierName: string;
+    treasuryBankAccountId?: string;
+    treasuryBankAccountName?: string;
   }
 ): Promise<CreditNote> => {
   const userId = getCanonicalUserId(uid);
@@ -1276,10 +2259,18 @@ export const saveCreditNoteAtomic = async (
         const prodRefs = prodIds.map((pid) => doc(db, 'users', userId, 'products', pid));
         const fiadoRefs = fiadoIds.map((fid) => doc(db, 'users', userId, 'fiados', fid));
 
+        const ncTreasuryAccountId = resolveTreasuryAccountIdForMethod(
+          params.refundMethod,
+          params.treasuryBankAccountId || liveSale.paymentDetails?.treasuryBankAccountId
+        );
+
         // Read all remaining docs BEFORE any writes
-        const [prodSnaps, fiadoSnaps] = await Promise.all([
+        const [prodSnaps, fiadoSnaps, ncTreasuryAccSnap] = await Promise.all([
           Promise.all(prodRefs.map((ref) => tx.get(ref))),
-          Promise.all(fiadoRefs.map((ref) => tx.get(ref)))
+          Promise.all(fiadoRefs.map((ref) => tx.get(ref))),
+          ncTreasuryAccountId && isTreasuryEnabled(userId)
+            ? tx.get(doc(db, 'users', userId, 'bankAccounts', ncTreasuryAccountId))
+            : Promise.resolve(null)
         ]);
 
         const incBaseUSD = refundedInclusiveGrossUSD > 0 ? round2(refundedInclusiveGrossUSD / 1.16) : 0;
@@ -1421,6 +2412,41 @@ export const saveCreditNoteAtomic = async (
             status: nextRemaining <= 0.009 ? 'saldado' : liveFiado.status,
             notes: `${liveFiado.notes ? `${liveFiado.notes} | ` : ''}[NC ${params.creditNoteNumber}] Devolución -$${refundedTotalUSD.toFixed(2)}`
           });
+        }
+
+        if (ncTreasuryAccountId && isTreasuryEnabled(userId)) {
+          const accRef = doc(db, 'users', userId, 'bankAccounts', ncTreasuryAccountId);
+          const acc: TreasuryAccount =
+            ncTreasuryAccSnap && ncTreasuryAccSnap.exists()
+              ? (ncTreasuryAccSnap.data() as TreasuryAccount)
+              : buildFallbackTreasuryAccount(ncTreasuryAccountId, nowIso, params.treasuryBankAccountName, 'Bs');
+          const debitAmt = acc.currency === 'USD' ? refundedTotalUSD : newCreditNote.totalBs;
+          if (debitAmt > 0) {
+            const balBefore = round2(Number(acc.balance) || 0);
+            const balAfter = round2(balBefore - debitAmt);
+            tx.set(accRef, cleanForFirestore({ ...acc, balance: balAfter, updatedAt: nowIso }), { merge: true });
+            const mov: TreasuryMovement = {
+              id: `tmov-nc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              date: nowIso,
+              accountId: acc.id,
+              accountName: acc.name,
+              accountCurrency: acc.currency,
+              direction: 'out',
+              amount: debitAmt,
+              balanceBefore: balBefore,
+              balanceAfter: balAfter,
+              bcvRate: bcv,
+              type: 'nota_credito',
+              concept: `Reembolso Nota de Crédito ${params.creditNoteNumber} (${liveSale.clientName})`,
+              reference: params.creditNoteNumber,
+              paymentMethod: params.refundMethod,
+              linkedEntityType: 'creditNote',
+              linkedEntityId: newCreditNote.id,
+              notes: params.reason,
+              createdBy: params.cashierName
+            };
+            tx.set(doc(db, 'users', userId, 'treasuryMovements', mov.id), cleanForFirestore(mov));
+          }
         }
       });
 
@@ -1649,23 +2675,119 @@ export const adjustProductStockInFirestore = async (
   return trackFirestoreWrite(op);
 };
 
-export const saveExpenseToFirestore = async (uid: string, expense: Expense): Promise<void> => {
+export const saveExpenseToFirestore = async (
+  uid: string,
+  expense: Expense,
+  options?: { defaultBsBankAccountId?: string; createdBy?: string }
+): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/expenses/${expense.id}`;
   const op = (async () => {
     try {
-      const cleaned = cleanForFirestore(expense);
-      await setDoc(doc(db, 'users', userId, 'expenses', expense.id), cleaned, { merge: true });
+      const treasuryAccId =
+        expense.paymentMethod === 'credito'
+          ? null
+          : resolveTreasuryAccountIdForMethod(
+              expense.paymentMethod,
+              expense.treasuryAccountId || expense.bankAccountId,
+              options?.defaultBsBankAccountId
+            );
+
+      const feeAmount =
+        expense.paymentMethod !== 'credito' &&
+        isBankPaymentMethod(expense.paymentMethod) &&
+        typeof expense.bankFeeAmount === 'number' &&
+        expense.bankFeeAmount > 0 &&
+        treasuryAccId
+          ? round2(expense.bankFeeAmount)
+          : 0;
+
+      if (!treasuryAccId || !isTreasuryEnabled(userId)) {
+        const cleaned = cleanForFirestore(expense);
+        await setDoc(doc(db, 'users', userId, 'expenses', expense.id), cleaned, { merge: true });
+        return;
+      }
+
+      const movType: TreasuryMovementType = isExpenseOwnerWithdrawal(expense)
+        ? 'retiro_personal'
+        : isExpenseOwnerSalary(expense)
+        ? 'sueldo'
+        : expense.category === 'Mercancía'
+        ? 'compra'
+        : 'gasto_operativo';
+
+      await runTransaction(db, async (tx) => {
+        const postings: TreasuryPostingInput[] = [
+          {
+            accountId: treasuryAccId,
+            fallbackAccountName: expense.bankAccountLabel,
+            fallbackCurrency: expense.enteredCurrency || (expense.paymentMethod === 'efectivo_usd' ? 'USD' : 'Bs'),
+            direction: 'out',
+            amountUSD: expense.amountUSD,
+            amountBs: expense.amountBs,
+            type: movType,
+            concept: `${expense.category}: ${expense.description || expense.supplierName}`,
+            reference: expense.reference || expense.invoiceNumber,
+            paymentMethod: expense.paymentMethod,
+            linkedEntityType: 'expense',
+            linkedEntityId: expense.id,
+            date: expense.date,
+            createdBy: options?.createdBy
+          }
+        ];
+
+        if (feeAmount > 0) {
+          postings.push({
+            accountId: treasuryAccId,
+            fallbackAccountName: expense.bankAccountLabel,
+            fallbackCurrency: expense.bankFeeCurrency || 'Bs',
+            direction: 'out',
+            exactNativeAmount: feeAmount,
+            type: 'comision_bancaria',
+            concept: `Comisión Bancaria (${expense.invoiceNumber || expense.supplierName})`,
+            reference: expense.reference || expense.invoiceNumber,
+            paymentMethod: expense.paymentMethod,
+            linkedEntityType: 'expense',
+            linkedEntityId: expense.id,
+            date: expense.date,
+            createdBy: options?.createdBy
+          });
+        }
+
+        const treasuryPlan = await prepareTreasuryPostingsInTx(tx, userId, postings, expense.bcvRate || 1);
+
+        tx.set(doc(db, 'users', userId, 'expenses', expense.id), cleanForFirestore(expense), { merge: true });
+        treasuryPlan.commitWrites();
+
+        if (feeAmount > 0) {
+          const feeCurrency = treasuryPlan.getAccountCurrency(treasuryAccId, expense.bankFeeCurrency || 'Bs');
+          const feeAccountName = treasuryPlan.getAccountName(treasuryAccId, expense.bankAccountLabel || 'Banco');
+          const feeExp = buildBankCommissionExpenseDoc({
+            feeAmount,
+            feeCurrency,
+            bcvRate: expense.bcvRate || 1,
+            paymentMethod: expense.paymentMethod === 'credito' ? 'transferencia' : expense.paymentMethod,
+            bankAccountId: treasuryAccId,
+            bankAccountLabel: feeAccountName,
+            concept: `${expense.supplierName} (${expense.invoiceNumber || expense.description})`,
+            reference: expense.reference || expense.invoiceNumber,
+            dateIso: expense.date
+          });
+          tx.set(doc(db, 'users', userId, 'expenses', feeExp.id), cleanForFirestore(feeExp));
+        }
+      });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
+      throw err;
     }
   })();
   return trackFirestoreWrite(op);
 };
 
 /**
- * Transactional atomic write for purchase invoice + inventory entry + supplier balance + Kardex (`runTransaction`):
+ * Transactional atomic write for purchase invoice + inventory entry + supplier balance + Kardex + Treasury (`runTransaction`):
  * Always adds purchased stock on top of LIVE server stock so concurrent POS sales on another device are never lost.
+ * If paymentMethod === 'credito', NO treasury account is debited (tracked in Cuentas por Pagar until paid).
  */
 export const saveExpenseWithInventoryAtomic = async (
   uid: string,
@@ -1673,12 +2795,76 @@ export const saveExpenseWithInventoryAtomic = async (
   bcvRate: number,
   baseCurrency: BaseCurrency,
   linkedCuenta?: CuentaPorPagar,
-  userName?: string
+  userName?: string,
+  defaultBsBankAccountId?: string
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/expenses/${expense.id}`;
   const op = (async () => {
     try {
+      const treasuryAccId =
+        expense.paymentMethod === 'credito'
+          ? null
+          : resolveTreasuryAccountIdForMethod(
+              expense.paymentMethod,
+              expense.treasuryAccountId || expense.bankAccountId,
+              defaultBsBankAccountId
+            );
+
+      const feeAmount =
+        expense.paymentMethod !== 'credito' &&
+        isBankPaymentMethod(expense.paymentMethod) &&
+        typeof expense.bankFeeAmount === 'number' &&
+        expense.bankFeeAmount > 0 &&
+        treasuryAccId
+          ? round2(expense.bankFeeAmount)
+          : 0;
+
+      const movType: TreasuryMovementType = isExpenseOwnerWithdrawal(expense)
+        ? 'retiro_personal'
+        : isExpenseOwnerSalary(expense)
+        ? 'sueldo'
+        : (expense.items && expense.items.length > 0) || expense.category === 'Mercancía'
+        ? 'compra'
+        : 'gasto_operativo';
+
+      const treasuryPostings: TreasuryPostingInput[] = [];
+      if (treasuryAccId) {
+        treasuryPostings.push({
+          accountId: treasuryAccId,
+          fallbackAccountName: expense.bankAccountLabel,
+          fallbackCurrency: expense.enteredCurrency || (expense.paymentMethod === 'efectivo_usd' ? 'USD' : 'Bs'),
+          direction: 'out',
+          amountUSD: expense.amountUSD,
+          amountBs: expense.amountBs,
+          type: movType,
+          concept: `Compra ${expense.invoiceNumber} - ${expense.supplierName}`,
+          reference: expense.reference || expense.invoiceNumber,
+          paymentMethod: expense.paymentMethod,
+          linkedEntityType: 'expense',
+          linkedEntityId: expense.id,
+          date: expense.date,
+          createdBy: userName
+        });
+        if (feeAmount > 0) {
+          treasuryPostings.push({
+            accountId: treasuryAccId,
+            fallbackAccountName: expense.bankAccountLabel,
+            fallbackCurrency: expense.bankFeeCurrency || 'Bs',
+            direction: 'out',
+            exactNativeAmount: feeAmount,
+            type: 'comision_bancaria',
+            concept: `Comisión Bancaria por compra ${expense.invoiceNumber} (${expense.supplierName})`,
+            reference: expense.reference || expense.invoiceNumber,
+            paymentMethod: expense.paymentMethod,
+            linkedEntityType: 'expense',
+            linkedEntityId: expense.id,
+            date: expense.date,
+            createdBy: userName
+          });
+        }
+      }
+
       await runTransaction(db, async (tx) => {
         const items = expense.items || [];
         const uniqueProdIds = Array.from(new Set(items.map((it) => it.productId).filter(Boolean)));
@@ -1689,9 +2875,10 @@ export const saveExpenseWithInventoryAtomic = async (
             : null;
 
         // ALL READS FIRST
-        const [prodSnaps, supSnap] = await Promise.all([
+        const [prodSnaps, supSnap, treasuryPlan] = await Promise.all([
           Promise.all(prodRefs.map((ref) => tx.get(ref))),
-          supplierRef ? tx.get(supplierRef) : Promise.resolve(null)
+          supplierRef ? tx.get(supplierRef) : Promise.resolve(null),
+          prepareTreasuryPostingsInTx(tx, userId, treasuryPostings, expense.bcvRate || bcvRate)
         ]);
 
         const liveProdMap = new Map<string, Product>();
@@ -1840,6 +3027,25 @@ export const saveExpenseWithInventoryAtomic = async (
             tx.set(doc(db, 'users', userId, 'kardex', kEntry.id), cleanForFirestore(kEntry));
           }
         }
+
+        treasuryPlan.commitWrites();
+
+        if (feeAmount > 0 && treasuryAccId) {
+          const feeCurrency = treasuryPlan.getAccountCurrency(treasuryAccId, expense.bankFeeCurrency || 'Bs');
+          const feeAccountName = treasuryPlan.getAccountName(treasuryAccId, expense.bankAccountLabel || 'Banco');
+          const feeExp = buildBankCommissionExpenseDoc({
+            feeAmount,
+            feeCurrency,
+            bcvRate: expense.bcvRate || bcvRate,
+            paymentMethod: expense.paymentMethod === 'credito' ? 'transferencia' : expense.paymentMethod,
+            bankAccountId: treasuryAccId,
+            bankAccountLabel: feeAccountName,
+            concept: `Factura de compra ${expense.invoiceNumber} (${expense.supplierName})`,
+            reference: expense.reference || expense.invoiceNumber,
+            dateIso: expense.date
+          });
+          tx.set(doc(db, 'users', userId, 'expenses', feeExp.id), cleanForFirestore(feeExp));
+        }
       });
 
       devLog(`[PosVenecia Firestore] Factura ${expense.invoiceNumber} guardada transaccionalmente.`);
@@ -1889,7 +3095,13 @@ export const addAbonoToFiadoTransaction = async (
   method: PaymentMethod,
   bcvRate: number,
   reference?: string,
-  notes?: string
+  notes?: string,
+  options?: {
+    bankAccountId?: string;
+    bankAccountLabel?: string;
+    defaultBsBankAccountId?: string;
+    createdBy?: string;
+  }
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/fiados/${fiadoId}`;
@@ -1897,7 +3109,20 @@ export const addAbonoToFiadoTransaction = async (
     try {
       await runTransaction(db, async (tx) => {
         const fiadoRef = doc(db, 'users', userId, 'fiados', fiadoId);
-        const snap = await tx.get(fiadoRef);
+        const treasuryAccId = resolveTreasuryAccountIdForMethod(
+          method,
+          options?.bankAccountId,
+          options?.defaultBsBankAccountId
+        );
+
+        // ALL READS FIRST
+        const [snap, treasuryAccSnap] = await Promise.all([
+          tx.get(fiadoRef),
+          treasuryAccId && isTreasuryEnabled(userId)
+            ? tx.get(doc(db, 'users', userId, 'bankAccounts', treasuryAccId))
+            : Promise.resolve(null)
+        ]);
+
         if (!snap.exists()) {
           throw new Error('Registro de deuda (fiado) no encontrado.');
         }
@@ -1908,14 +3133,19 @@ export const addAbonoToFiadoTransaction = async (
         }
 
         const payUSD = Math.min(liveRemaining, Math.max(0.01, round2(amountUSD)));
+        const payBs = round2(payUSD * bcvRate);
         const newRemaining = round2(Math.max(0, liveRemaining - payUSD));
+        const nowIso = new Date().toISOString();
         const newAbono: Abono = {
           id: 'abono-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
-          date: new Date().toISOString(),
+          date: nowIso,
           amountUSD: payUSD,
-          amountBs: round2(payUSD * bcvRate),
+          amountBs: payBs,
           bcvRate,
           paymentMethod: method,
+          bankAccountId: treasuryAccId && isBankPaymentMethod(method) ? treasuryAccId : undefined,
+          bankAccountLabel: options?.bankAccountLabel,
+          treasuryAccountId: treasuryAccId || undefined,
           reference,
           notes
         };
@@ -1925,6 +3155,45 @@ export const addAbonoToFiadoTransaction = async (
           status: newRemaining <= 0.009 ? 'saldado' : 'parcial',
           abonos: cleanForFirestore([newAbono, ...(live.abonos || [])])
         });
+
+        if (treasuryAccId && isTreasuryEnabled(userId)) {
+          const accRef = doc(db, 'users', userId, 'bankAccounts', treasuryAccId);
+          const acc: TreasuryAccount =
+            treasuryAccSnap && treasuryAccSnap.exists()
+              ? (treasuryAccSnap.data() as TreasuryAccount)
+              : buildFallbackTreasuryAccount(
+                  treasuryAccId,
+                  nowIso,
+                  options?.bankAccountLabel,
+                  method === 'efectivo_usd' ? 'USD' : 'Bs'
+                );
+          const creditAmt = acc.currency === 'USD' ? payUSD : payBs;
+          const balBefore = round2(Number(acc.balance) || 0);
+          const balAfter = round2(balBefore + creditAmt);
+          tx.set(accRef, cleanForFirestore({ ...acc, balance: balAfter, updatedAt: nowIso }), { merge: true });
+
+          const mov: TreasuryMovement = {
+            id: `tmov-fiado-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            date: nowIso,
+            accountId: acc.id,
+            accountName: acc.name,
+            accountCurrency: acc.currency,
+            direction: 'in',
+            amount: creditAmt,
+            balanceBefore: balBefore,
+            balanceAfter: balAfter,
+            bcvRate: bcvRate > 0 ? bcvRate : 1,
+            type: 'abono_fiado',
+            concept: `Abono Fiado ${live.invoiceNumber} (${live.clientName})`,
+            reference: reference || live.invoiceNumber,
+            paymentMethod: method,
+            linkedEntityType: 'fiado',
+            linkedEntityId: live.id,
+            notes,
+            createdBy: options?.createdBy
+          };
+          tx.set(doc(db, 'users', userId, 'treasuryMovements', mov.id), cleanForFirestore(mov));
+        }
       });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
@@ -2040,13 +3309,55 @@ export const deleteSupplierFromFirestore = async (uid: string, supplierId: strin
   return trackFirestoreWrite(op);
 };
 
-export const saveLoanToFirestore = async (uid: string, loan: Loan): Promise<void> => {
+export const saveLoanToFirestore = async (
+  uid: string,
+  loan: Loan,
+  options?: { defaultBsBankAccountId?: string; createdBy?: string }
+): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/loans/${loan.id}`;
   const op = (async () => {
     try {
-      const cleaned = cleanForFirestore(loan);
-      await setDoc(doc(db, 'users', userId, 'loans', loan.id), cleaned, { merge: true });
+      const treasuryAccId =
+        loan.cashDestination === 'externo_dueno'
+          ? null
+          : resolveTreasuryAccountIdForMethod(
+              loan.cashDestination,
+              loan.bankAccountId,
+              options?.defaultBsBankAccountId
+            );
+
+      if (!treasuryAccId || !isTreasuryEnabled(userId)) {
+        const cleaned = cleanForFirestore(loan);
+        await setDoc(doc(db, 'users', userId, 'loans', loan.id), cleaned, { merge: true });
+        return;
+      }
+
+      await runTransaction(db, async (tx) => {
+        const postings: TreasuryPostingInput[] = [
+          {
+            accountId: treasuryAccId,
+            fallbackAccountName: loan.bankAccountLabel,
+            fallbackCurrency: loan.enteredCurrency || (loan.cashDestination === 'efectivo_usd' ? 'USD' : 'Bs'),
+            direction: 'in',
+            amountUSD: loan.originalAmountUSD,
+            amountBs: loan.originalAmountBs,
+            type: 'prestamo',
+            concept: `Ingreso Préstamo / Crédito (${loan.lenderName})`,
+            reference: loan.reference,
+            paymentMethod: loan.cashDestination,
+            linkedEntityType: 'loan',
+            linkedEntityId: loan.id,
+            date: loan.grantDate || loan.createdAt,
+            notes: loan.description || loan.notes,
+            createdBy: options?.createdBy
+          }
+        ];
+
+        const treasuryPlan = await prepareTreasuryPostingsInTx(tx, userId, postings, loan.bcvRate || 1);
+        tx.set(doc(db, 'users', userId, 'loans', loan.id), cleanForFirestore(loan), { merge: true });
+        treasuryPlan.commitWrites();
+      });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
       throw err;
@@ -2115,6 +3426,11 @@ export const addAbonoToLoanTransaction = async (
     bcvRate: number;
     reference?: string;
     notes?: string;
+    bankAccountId?: string;
+    bankAccountLabel?: string;
+    defaultBsBankAccountId?: string;
+    bankFeeAmount?: number;
+    createdBy?: string;
   }
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
@@ -2123,7 +3439,23 @@ export const addAbonoToLoanTransaction = async (
     try {
       await runTransaction(db, async (tx) => {
         const loanRef = doc(db, 'users', userId, 'loans', loanId);
-        const loanSnap = await tx.get(loanRef);
+        const treasuryAccId =
+          params.method === 'externo_dueno'
+            ? null
+            : resolveTreasuryAccountIdForMethod(
+                params.method,
+                params.bankAccountId,
+                params.defaultBsBankAccountId
+              );
+
+        // ALL READS FIRST
+        const [loanSnap, treasuryAccSnap] = await Promise.all([
+          tx.get(loanRef),
+          treasuryAccId && isTreasuryEnabled(userId)
+            ? tx.get(doc(db, 'users', userId, 'bankAccounts', treasuryAccId))
+            : Promise.resolve(null)
+        ]);
+
         if (!loanSnap.exists()) {
           throw new Error('Préstamo o crédito no encontrado en Cloud Firestore.');
         }
@@ -2173,6 +3505,28 @@ export const addAbonoToLoanTransaction = async (
         const finalizedSettled = isSettled || (newRemainingUSD <= 0.009 && newRemainingBs <= 0.01);
         const nowIso = new Date().toISOString();
 
+        const acc: TreasuryAccount | null =
+          treasuryAccId && isTreasuryEnabled(userId)
+            ? treasuryAccSnap && treasuryAccSnap.exists()
+              ? (treasuryAccSnap.data() as TreasuryAccount)
+              : buildFallbackTreasuryAccount(
+                  treasuryAccId,
+                  nowIso,
+                  params.bankAccountLabel,
+                  params.method === 'efectivo_usd' ? 'USD' : 'Bs'
+                )
+            : null;
+
+        const feeAmount =
+          params.method !== 'externo_dueno' &&
+          isBankPaymentMethod(params.method) &&
+          typeof params.bankFeeAmount === 'number' &&
+          params.bankFeeAmount > 0 &&
+          treasuryAccId
+            ? round2(params.bankFeeAmount)
+            : 0;
+        const feeCurrency: TreasuryCurrency = acc?.currency || 'Bs';
+
         const newAbono: LoanAbono = {
           id: 'abono-loan-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
           date: nowIso,
@@ -2181,6 +3535,10 @@ export const addAbonoToLoanTransaction = async (
           bcvRate: safeRate,
           enteredCurrency: params.enteredCurrency,
           paymentMethod: params.method,
+          bankAccountId: treasuryAccId && isBankPaymentMethod(params.method) ? treasuryAccId : undefined,
+          bankAccountLabel: params.bankAccountLabel || acc?.name,
+          bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
+          bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
           reference: params.reference,
           notes: params.notes || 'Abono a préstamo / crédito'
         };
@@ -2214,10 +3572,86 @@ export const addAbonoToLoanTransaction = async (
             bcvRate: safeRate,
             enteredCurrency: params.enteredCurrency,
             paymentMethod: mapMethodToExpenseMethod(params.method),
+            bankAccountId: treasuryAccId && isBankPaymentMethod(params.method) ? treasuryAccId : undefined,
+            bankAccountLabel: params.bankAccountLabel || acc?.name,
+            treasuryAccountId: treasuryAccId || undefined,
+            bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
+            bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
             reference: params.reference,
             linkedLoanId: liveLoan.id
           };
           tx.set(doc(db, 'users', userId, 'expenses', cashOutflowExpense.id), cleanForFirestore(cashOutflowExpense));
+
+          if (acc && treasuryAccId) {
+            const accRef = doc(db, 'users', userId, 'bankAccounts', treasuryAccId);
+            const debitAmt = acc.currency === 'USD' ? round2(payUSD) : round2(payBs);
+            const balBefore = round2(Number(acc.balance) || 0);
+            const balAfterPay = round2(balBefore - debitAmt);
+            const balFinal = feeAmount > 0 ? round2(balAfterPay - feeAmount) : balAfterPay;
+            const baseTs = Date.now();
+
+            tx.set(accRef, cleanForFirestore({ ...acc, balance: balFinal, updatedAt: nowIso }), { merge: true });
+            const payMov: TreasuryMovement = {
+              id: `tmov-loan-${baseTs}-0-${Math.random().toString(36).substring(2, 6)}`,
+              date: nowIso,
+              accountId: acc.id,
+              accountName: acc.name,
+              accountCurrency: acc.currency,
+              direction: 'out',
+              amount: debitAmt,
+              balanceBefore: balBefore,
+              balanceAfter: balAfterPay,
+              bcvRate: safeRate,
+              type: 'prestamo',
+              concept: `Abono Préstamo (${liveLoan.lenderName})`,
+              reference: params.reference || liveLoan.reference,
+              paymentMethod: params.method,
+              linkedEntityType: 'loan',
+              linkedEntityId: liveLoan.id,
+              notes: params.notes,
+              createdBy: params.createdBy
+            };
+            tx.set(doc(db, 'users', userId, 'treasuryMovements', payMov.id), cleanForFirestore(payMov));
+
+            if (feeAmount > 0) {
+              const feeMov: TreasuryMovement = {
+                id: `tmov-loan-${baseTs}-1-${Math.random().toString(36).substring(2, 6)}`,
+                date: nowIso,
+                accountId: acc.id,
+                accountName: acc.name,
+                accountCurrency: acc.currency,
+                direction: 'out',
+                amount: feeAmount,
+                balanceBefore: balAfterPay,
+                balanceAfter: balFinal,
+                bcvRate: safeRate,
+                type: 'comision_bancaria',
+                concept: `Comisión Bancaria por abono préstamo (${liveLoan.lenderName})`,
+                reference: params.reference || liveLoan.reference,
+                paymentMethod: params.method,
+                linkedEntityType: 'loan',
+                linkedEntityId: liveLoan.id,
+                createdBy: params.createdBy
+              };
+              tx.set(doc(db, 'users', userId, 'treasuryMovements', feeMov.id), cleanForFirestore(feeMov));
+            }
+          }
+
+          if (feeAmount > 0 && treasuryAccId) {
+            const feeExp = buildBankCommissionExpenseDoc({
+              feeAmount,
+              feeCurrency,
+              bcvRate: safeRate,
+              paymentMethod: mapMethodToExpenseMethod(params.method),
+              bankAccountId: treasuryAccId,
+              bankAccountLabel: params.bankAccountLabel || acc?.name || 'Banco',
+              concept: `Abono Préstamo (${liveLoan.lenderName})`,
+              reference: params.reference || liveLoan.reference,
+              dateIso: nowIso,
+              linkedLoanId: liveLoan.id
+            });
+            tx.set(doc(db, 'users', userId, 'expenses', feeExp.id), cleanForFirestore(feeExp));
+          }
         }
       });
     } catch (err) {
@@ -2293,7 +3727,8 @@ export const addAbonoToCuentaPorPagarTransaction = async (
   method: PaymentMethod,
   bcvRate: number,
   reference?: string,
-  notes?: string
+  notes?: string,
+  options?: TreasuryPaymentOptions & { defaultBsBankAccountId?: string }
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/cuentasPorPagar/${cuentaId}`;
@@ -2301,7 +3736,18 @@ export const addAbonoToCuentaPorPagarTransaction = async (
     try {
       await runTransaction(db, async (tx) => {
         const cuentaRef = doc(db, 'users', userId, 'cuentasPorPagar', cuentaId);
-        const cuentaSnap = await tx.get(cuentaRef);
+        const treasuryAccId = resolveTreasuryAccountIdForMethod(
+          method,
+          options?.bankAccountId,
+          options?.defaultBsBankAccountId
+        );
+
+        const [cuentaSnap, treasuryAccSnap] = await Promise.all([
+          tx.get(cuentaRef),
+          treasuryAccId && isTreasuryEnabled(userId)
+            ? tx.get(doc(db, 'users', userId, 'bankAccounts', treasuryAccId))
+            : Promise.resolve(null)
+        ]);
         if (!cuentaSnap.exists()) {
           throw new Error('Cuenta por pagar no encontrada en Firestore.');
         }
@@ -2317,19 +3763,55 @@ export const addAbonoToCuentaPorPagarTransaction = async (
           : null;
         const supSnap = supRef ? await tx.get(supRef) : null;
 
-        const payAmount = Math.min(liveRemaining, Math.max(0.01, round2(amountUSD)));
+        const safeRate = bcvRate > 0 ? bcvRate : 1;
+        let payAmount: number;
+        let payBs: number;
+        if (options?.enteredCurrency === 'Bs' && typeof options.exactAmountBs === 'number' && options.exactAmountBs > 0) {
+          payBs = round2(options.exactAmountBs);
+          payAmount = Math.min(liveRemaining, Math.max(0.01, round2(payBs / safeRate)));
+        } else {
+          payAmount = Math.min(liveRemaining, Math.max(0.01, round2(amountUSD)));
+          payBs = round2(payAmount * safeRate);
+        }
+
         const newPaid = round2((Number(liveCuenta.paidAmountUSD) || 0) + payAmount);
         const newRemaining = round2(Math.max(0, liveCuenta.totalAmountUSD - newPaid));
         const nowIso = new Date().toISOString();
-        const payBs = round2(payAmount * bcvRate);
+
+        const acc: TreasuryAccount | null =
+          treasuryAccId && isTreasuryEnabled(userId)
+            ? treasuryAccSnap && treasuryAccSnap.exists()
+              ? (treasuryAccSnap.data() as TreasuryAccount)
+              : buildFallbackTreasuryAccount(
+                  treasuryAccId,
+                  nowIso,
+                  options?.bankAccountLabel,
+                  method === 'efectivo_usd' ? 'USD' : 'Bs'
+                )
+            : null;
+
+        const feeAmount =
+          isBankPaymentMethod(method) &&
+          typeof options?.bankFeeAmount === 'number' &&
+          options.bankFeeAmount > 0 &&
+          treasuryAccId
+            ? round2(options.bankFeeAmount)
+            : 0;
+        const feeCurrency: TreasuryCurrency = acc?.currency || 'Bs';
 
         const newAbono: Abono = {
           id: 'abono-cpp-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
           date: nowIso,
           amountUSD: payAmount,
           amountBs: payBs,
-          bcvRate,
+          bcvRate: safeRate,
+          enteredCurrency: options?.enteredCurrency,
           paymentMethod: method,
+          bankAccountId: treasuryAccId && isBankPaymentMethod(method) ? treasuryAccId : undefined,
+          bankAccountLabel: options?.bankAccountLabel || acc?.name,
+          treasuryAccountId: treasuryAccId || undefined,
+          bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
+          bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
           reference,
           notes: notes || 'Abono realizado a proveedor'
         };
@@ -2356,8 +3838,14 @@ export const addAbonoToCuentaPorPagarTransaction = async (
           ivaBs: 0,
           retencionIVABs: 0,
           retencionISLRBs: 0,
-          bcvRate,
+          bcvRate: safeRate,
+          enteredCurrency: options?.enteredCurrency,
           paymentMethod: mapMethodToExpenseMethod(method),
+          bankAccountId: treasuryAccId && isBankPaymentMethod(method) ? treasuryAccId : undefined,
+          bankAccountLabel: options?.bankAccountLabel || acc?.name,
+          treasuryAccountId: treasuryAccId || undefined,
+          bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
+          bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
           reference,
           linkedCuentaId: liveCuenta.id
         };
@@ -2375,6 +3863,77 @@ export const addAbonoToCuentaPorPagarTransaction = async (
           const liveSup = supSnap.data() as Supplier;
           const nextBal = Math.max(0, round2((Number(liveSup.accumulatedBalanceUSD) || 0) - payAmount));
           tx.update(supRef, { accumulatedBalanceUSD: nextBal });
+        }
+
+        if (acc && treasuryAccId) {
+          const accRef = doc(db, 'users', userId, 'bankAccounts', treasuryAccId);
+          const debitAmt = acc.currency === 'USD' ? payAmount : payBs;
+          const balBefore = round2(Number(acc.balance) || 0);
+          const balAfterPay = round2(balBefore - debitAmt);
+          const balFinal = feeAmount > 0 ? round2(balAfterPay - feeAmount) : balAfterPay;
+          const baseTs = Date.now();
+
+          tx.set(accRef, cleanForFirestore({ ...acc, balance: balFinal, updatedAt: nowIso }), { merge: true });
+          const payMov: TreasuryMovement = {
+            id: `tmov-cpp-${baseTs}-0-${Math.random().toString(36).substring(2, 6)}`,
+            date: nowIso,
+            accountId: acc.id,
+            accountName: acc.name,
+            accountCurrency: acc.currency,
+            direction: 'out',
+            amount: debitAmt,
+            balanceBefore: balBefore,
+            balanceAfter: balAfterPay,
+            bcvRate: safeRate,
+            type: 'pago_proveedor',
+            concept: `Pago a Proveedor ${liveCuenta.supplierName} (${liveCuenta.invoiceNumber})`,
+            reference: reference || liveCuenta.invoiceNumber,
+            paymentMethod: method,
+            linkedEntityType: 'cuentaPorPagar',
+            linkedEntityId: liveCuenta.id,
+            notes,
+            createdBy: options?.createdBy
+          };
+          tx.set(doc(db, 'users', userId, 'treasuryMovements', payMov.id), cleanForFirestore(payMov));
+
+          if (feeAmount > 0) {
+            const feeMov: TreasuryMovement = {
+              id: `tmov-cpp-${baseTs}-1-${Math.random().toString(36).substring(2, 6)}`,
+              date: nowIso,
+              accountId: acc.id,
+              accountName: acc.name,
+              accountCurrency: acc.currency,
+              direction: 'out',
+              amount: feeAmount,
+              balanceBefore: balAfterPay,
+              balanceAfter: balFinal,
+              bcvRate: safeRate,
+              type: 'comision_bancaria',
+              concept: `Comisión Bancaria por pago a ${liveCuenta.supplierName} (${liveCuenta.invoiceNumber})`,
+              reference: reference || liveCuenta.invoiceNumber,
+              paymentMethod: method,
+              linkedEntityType: 'cuentaPorPagar',
+              linkedEntityId: liveCuenta.id,
+              createdBy: options?.createdBy
+            };
+            tx.set(doc(db, 'users', userId, 'treasuryMovements', feeMov.id), cleanForFirestore(feeMov));
+          }
+        }
+
+        if (feeAmount > 0 && treasuryAccId) {
+          const feeExp = buildBankCommissionExpenseDoc({
+            feeAmount,
+            feeCurrency,
+            bcvRate: safeRate,
+            paymentMethod: mapMethodToExpenseMethod(method),
+            bankAccountId: treasuryAccId,
+            bankAccountLabel: options?.bankAccountLabel || acc?.name || 'Banco',
+            concept: `Pago proveedor ${liveCuenta.supplierName} (${liveCuenta.invoiceNumber})`,
+            reference: reference || liveCuenta.invoiceNumber,
+            dateIso: nowIso,
+            linkedCuentaId: liveCuenta.id
+          });
+          tx.set(doc(db, 'users', userId, 'expenses', feeExp.id), cleanForFirestore(feeExp));
         }
       });
     } catch (err) {
@@ -2424,33 +3983,119 @@ export const saveGastoOperativoToFirestore = async (uid: string, gasto: GastoOpe
 export const saveGastoWithCashOutflowAtomic = async (
   uid: string,
   gasto: GastoOperativo,
-  cashExpense?: Expense
+  cashExpense?: Expense,
+  options?: { defaultBsBankAccountId?: string; createdBy?: string }
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/gastosOperativos/${gasto.id}`;
   const op = (async () => {
     try {
-      const batch = writeBatch(db);
-      const cleanedGasto = cleanForFirestore(gasto);
-      const gastoRef = doc(db, 'users', userId, 'gastosOperativos', gasto.id);
-      batch.set(gastoRef, cleanedGasto, { merge: true });
+      const treasuryAccId = cashExpense
+        ? resolveTreasuryAccountIdForMethod(
+            cashExpense.paymentMethod,
+            cashExpense.treasuryAccountId || cashExpense.bankAccountId || gasto.treasuryAccountId || gasto.bankAccountId,
+            options?.defaultBsBankAccountId
+          )
+        : null;
 
-      if (cashExpense) {
-        const cleanedExp = cleanForFirestore(cashExpense);
-        const expRef = doc(db, 'users', userId, 'expenses', cashExpense.id);
-        batch.set(expRef, cleanedExp, { merge: true });
+      const feeAmount =
+        cashExpense &&
+        isBankPaymentMethod(cashExpense.paymentMethod) &&
+        typeof (cashExpense.bankFeeAmount ?? gasto.bankFeeAmount) === 'number' &&
+        (cashExpense.bankFeeAmount ?? gasto.bankFeeAmount ?? 0) > 0 &&
+        treasuryAccId
+          ? round2(cashExpense.bankFeeAmount ?? gasto.bankFeeAmount ?? 0)
+          : 0;
+
+      if (!cashExpense || !treasuryAccId || !isTreasuryEnabled(userId)) {
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'users', userId, 'gastosOperativos', gasto.id), cleanForFirestore(gasto), { merge: true });
+        if (cashExpense) {
+          batch.set(doc(db, 'users', userId, 'expenses', cashExpense.id), cleanForFirestore(cashExpense), { merge: true });
+        }
+        await batch.commit();
+        return;
       }
 
-      await batch.commit();
+      const movType: TreasuryMovementType = isExpenseOwnerWithdrawal(cashExpense)
+        ? 'retiro_personal'
+        : isExpenseOwnerSalary(cashExpense)
+        ? 'sueldo'
+        : 'gasto_operativo';
+
+      await runTransaction(db, async (tx) => {
+        const postings: TreasuryPostingInput[] = [
+          {
+            accountId: treasuryAccId,
+            fallbackAccountName: cashExpense.bankAccountLabel || gasto.bankAccountLabel,
+            fallbackCurrency: cashExpense.enteredCurrency || (cashExpense.paymentMethod === 'efectivo_usd' ? 'USD' : 'Bs'),
+            direction: 'out',
+            amountUSD: cashExpense.amountUSD,
+            amountBs: cashExpense.amountBs,
+            type: movType,
+            concept: `${gasto.category}: ${gasto.concept}`,
+            reference: cashExpense.reference || gasto.reference,
+            paymentMethod: cashExpense.paymentMethod,
+            linkedEntityType: 'gastoOperativo',
+            linkedEntityId: gasto.id,
+            date: cashExpense.date,
+            notes: gasto.notes,
+            createdBy: options?.createdBy
+          }
+        ];
+
+        if (feeAmount > 0) {
+          postings.push({
+            accountId: treasuryAccId,
+            fallbackAccountName: cashExpense.bankAccountLabel || gasto.bankAccountLabel,
+            fallbackCurrency: cashExpense.bankFeeCurrency || gasto.bankFeeCurrency || 'Bs',
+            direction: 'out',
+            exactNativeAmount: feeAmount,
+            type: 'comision_bancaria',
+            concept: `Comisión Bancaria (${gasto.category}: ${gasto.concept})`,
+            reference: cashExpense.reference || gasto.reference,
+            paymentMethod: cashExpense.paymentMethod,
+            linkedEntityType: 'gastoOperativo',
+            linkedEntityId: gasto.id,
+            date: cashExpense.date,
+            createdBy: options?.createdBy
+          });
+        }
+
+        const treasuryPlan = await prepareTreasuryPostingsInTx(tx, userId, postings, cashExpense.bcvRate || 1);
+
+        tx.set(doc(db, 'users', userId, 'gastosOperativos', gasto.id), cleanForFirestore(gasto), { merge: true });
+        tx.set(doc(db, 'users', userId, 'expenses', cashExpense.id), cleanForFirestore(cashExpense), { merge: true });
+        treasuryPlan.commitWrites();
+
+        if (feeAmount > 0) {
+          const feeCurrency = treasuryPlan.getAccountCurrency(treasuryAccId, cashExpense.bankFeeCurrency || 'Bs');
+          const feeAccountName = treasuryPlan.getAccountName(treasuryAccId, cashExpense.bankAccountLabel || 'Banco');
+          const feeExp = buildBankCommissionExpenseDoc({
+            feeAmount,
+            feeCurrency,
+            bcvRate: cashExpense.bcvRate || 1,
+            paymentMethod: cashExpense.paymentMethod === 'credito' ? 'transferencia' : cashExpense.paymentMethod,
+            bankAccountId: treasuryAccId,
+            bankAccountLabel: feeAccountName,
+            concept: `${gasto.category} (${gasto.concept})`,
+            reference: cashExpense.reference || gasto.reference,
+            dateIso: cashExpense.date,
+            linkedGastoId: gasto.id
+          });
+          tx.set(doc(db, 'users', userId, 'expenses', feeExp.id), cleanForFirestore(feeExp));
+        }
+      });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
+      throw err;
     }
   })();
   return trackFirestoreWrite(op);
 };
 
 /**
- * Transactional atomic payment for GastoOperativo (`runTransaction`)
+ * Transactional atomic payment for GastoOperativo (`runTransaction`) with Treasury debit & optional Comisión Bancaria
  */
 export const markGastoOperativoPagadoTransaction = async (
   uid: string,
@@ -2460,12 +4105,7 @@ export const markGastoOperativoPagadoTransaction = async (
   reference?: string,
   amountUSD?: number,
   notes?: string,
-  options?: {
-    bankAccountId?: string;
-    bankAccountLabel?: string;
-    enteredCurrency?: 'USD' | 'Bs';
-    exactAmountBs?: number;
-  }
+  options?: TreasuryPaymentOptions & { defaultBsBankAccountId?: string }
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/gastosOperativos/${gastoId}`;
@@ -2473,7 +4113,19 @@ export const markGastoOperativoPagadoTransaction = async (
     try {
       await runTransaction(db, async (tx) => {
         const gastoRef = doc(db, 'users', userId, 'gastosOperativos', gastoId);
-        const snap = await tx.get(gastoRef);
+        const preTreasuryAccId = resolveTreasuryAccountIdForMethod(
+          paymentMethod,
+          options?.bankAccountId,
+          options?.defaultBsBankAccountId
+        );
+
+        // ALL READS FIRST
+        const [snap, preAccSnap] = await Promise.all([
+          tx.get(gastoRef),
+          preTreasuryAccId && isTreasuryEnabled(userId)
+            ? tx.get(doc(db, 'users', userId, 'bankAccounts', preTreasuryAccId))
+            : Promise.resolve(null)
+        ]);
         if (!snap.exists()) {
           throw new Error('Gasto operativo no encontrado en Firestore.');
         }
@@ -2483,6 +4135,17 @@ export const markGastoOperativoPagadoTransaction = async (
         if (currentRemaining <= 0.009) {
           throw new Error('Este gasto operativo ya se encuentra pagado en su totalidad.');
         }
+
+        const resolvedTreasuryAccId =
+          preTreasuryAccId ||
+          resolveTreasuryAccountIdForMethod(paymentMethod, liveTarget.bankAccountId, options?.defaultBsBankAccountId);
+
+        const treasuryAccSnap =
+          resolvedTreasuryAccId && resolvedTreasuryAccId === preTreasuryAccId
+            ? preAccSnap
+            : resolvedTreasuryAccId && isTreasuryEnabled(userId)
+            ? await tx.get(doc(db, 'users', userId, 'bankAccounts', resolvedTreasuryAccId))
+            : null;
 
         const enteredCurrency: 'USD' | 'Bs' =
           options?.enteredCurrency ||
@@ -2518,10 +4181,31 @@ export const markGastoOperativoPagadoTransaction = async (
         const newRemaining = round2(Math.max(0, liveTarget.amountUSD - newPaid));
         const newStatus: GastoOperativo['status'] = newRemaining <= 0.009 ? 'pagado' : 'parcial';
         const nowIso = new Date().toISOString();
-        const bankAccountId = options?.bankAccountId || liveTarget.bankAccountId || undefined;
-        const bankAccountLabel = options?.bankAccountLabel || liveTarget.bankAccountLabel || undefined;
+        const bankAccountId = options?.bankAccountId || liveTarget.bankAccountId || (isBankPaymentMethod(paymentMethod) ? resolvedTreasuryAccId || undefined : undefined);
+
+        const acc: TreasuryAccount | null =
+          resolvedTreasuryAccId && isTreasuryEnabled(userId)
+            ? treasuryAccSnap && treasuryAccSnap.exists()
+              ? (treasuryAccSnap.data() as TreasuryAccount)
+              : buildFallbackTreasuryAccount(
+                  resolvedTreasuryAccId,
+                  nowIso,
+                  options?.bankAccountLabel || liveTarget.bankAccountLabel,
+                  paymentMethod === 'efectivo_usd' ? 'USD' : 'Bs'
+                )
+            : null;
+
+        const bankAccountLabel = options?.bankAccountLabel || liveTarget.bankAccountLabel || acc?.name || undefined;
         const isNonFiscal = isNonFiscalPersonalOrSalaryCategory(liveTarget.category);
         const accountingType = getExpenseAccountingType(liveTarget.category);
+        const feeAmount =
+          isBankPaymentMethod(paymentMethod) &&
+          typeof options?.bankFeeAmount === 'number' &&
+          options.bankFeeAmount > 0 &&
+          resolvedTreasuryAccId
+            ? round2(options.bankFeeAmount)
+            : 0;
+        const feeCurrency: TreasuryCurrency = acc?.currency || 'Bs';
 
         const newAbono: Abono = {
           id: 'abono-gasto-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
@@ -2533,6 +4217,9 @@ export const markGastoOperativoPagadoTransaction = async (
           paymentMethod,
           bankAccountId,
           bankAccountLabel,
+          treasuryAccountId: resolvedTreasuryAccId || undefined,
+          bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
+          bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
           reference,
           notes:
             notes ||
@@ -2564,6 +4251,9 @@ export const markGastoOperativoPagadoTransaction = async (
           paymentMethod: mapMethodToExpenseMethod(paymentMethod),
           bankAccountId,
           bankAccountLabel,
+          treasuryAccountId: resolvedTreasuryAccId || undefined,
+          bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
+          bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
           excludeFromLibroCompras: isNonFiscal,
           accountingType,
           reference,
@@ -2578,10 +4268,91 @@ export const markGastoOperativoPagadoTransaction = async (
           paymentMethod,
           bankAccountId: bankAccountId || null,
           bankAccountLabel: bankAccountLabel || null,
+          treasuryAccountId: resolvedTreasuryAccId || null,
+          bankFeeAmount: feeAmount > 0 ? feeAmount : (liveTarget.bankFeeAmount ?? null),
+          bankFeeCurrency: feeAmount > 0 ? feeCurrency : (liveTarget.bankFeeCurrency ?? null),
           reference: reference || liveTarget.reference || null,
           abonos: cleanForFirestore([newAbono, ...(liveTarget.abonos || [])])
         });
         tx.set(doc(db, 'users', userId, 'expenses', cashOutflowExpense.id), cleanForFirestore(cashOutflowExpense));
+
+        if (acc && resolvedTreasuryAccId) {
+          const accRef = doc(db, 'users', userId, 'bankAccounts', resolvedTreasuryAccId);
+          const debitAmt = acc.currency === 'USD' ? payAmount : payAmountBs;
+          const balBefore = round2(Number(acc.balance) || 0);
+          const balAfterPay = round2(balBefore - debitAmt);
+          const balFinal = feeAmount > 0 ? round2(balAfterPay - feeAmount) : balAfterPay;
+          const baseTs = Date.now();
+
+          const movType: TreasuryMovementType =
+            accountingType === 'owner_withdrawal'
+              ? 'retiro_personal'
+              : accountingType === 'owner_salary'
+              ? 'sueldo'
+              : 'gasto_operativo';
+
+          tx.set(accRef, cleanForFirestore({ ...acc, balance: balFinal, updatedAt: nowIso }), { merge: true });
+          const payMov: TreasuryMovement = {
+            id: `tmov-gasto-${baseTs}-0-${Math.random().toString(36).substring(2, 6)}`,
+            date: nowIso,
+            accountId: acc.id,
+            accountName: acc.name,
+            accountCurrency: acc.currency,
+            direction: 'out',
+            amount: debitAmt,
+            balanceBefore: balBefore,
+            balanceAfter: balAfterPay,
+            bcvRate: bcvRate > 0 ? bcvRate : 1,
+            type: movType,
+            concept: `${liveTarget.category}: ${liveTarget.concept}`,
+            reference: reference || liveTarget.invoiceNumber,
+            paymentMethod,
+            linkedEntityType: 'gastoOperativo',
+            linkedEntityId: liveTarget.id,
+            notes,
+            createdBy: options?.createdBy
+          };
+          tx.set(doc(db, 'users', userId, 'treasuryMovements', payMov.id), cleanForFirestore(payMov));
+
+          if (feeAmount > 0) {
+            const feeMov: TreasuryMovement = {
+              id: `tmov-gasto-${baseTs}-1-${Math.random().toString(36).substring(2, 6)}`,
+              date: nowIso,
+              accountId: acc.id,
+              accountName: acc.name,
+              accountCurrency: acc.currency,
+              direction: 'out',
+              amount: feeAmount,
+              balanceBefore: balAfterPay,
+              balanceAfter: balFinal,
+              bcvRate: bcvRate > 0 ? bcvRate : 1,
+              type: 'comision_bancaria',
+              concept: `Comisión Bancaria (${liveTarget.category}: ${liveTarget.concept})`,
+              reference: reference || liveTarget.invoiceNumber,
+              paymentMethod,
+              linkedEntityType: 'gastoOperativo',
+              linkedEntityId: liveTarget.id,
+              createdBy: options?.createdBy
+            };
+            tx.set(doc(db, 'users', userId, 'treasuryMovements', feeMov.id), cleanForFirestore(feeMov));
+          }
+        }
+
+        if (feeAmount > 0 && resolvedTreasuryAccId) {
+          const feeExp = buildBankCommissionExpenseDoc({
+            feeAmount,
+            feeCurrency,
+            bcvRate: bcvRate > 0 ? bcvRate : 1,
+            paymentMethod: mapMethodToExpenseMethod(paymentMethod),
+            bankAccountId: resolvedTreasuryAccId,
+            bankAccountLabel: bankAccountLabel || acc?.name || 'Banco',
+            concept: `${liveTarget.category} (${liveTarget.concept})`,
+            reference: reference || liveTarget.invoiceNumber,
+            dateIso: nowIso,
+            linkedGastoId: liveTarget.id
+          });
+          tx.set(doc(db, 'users', userId, 'expenses', feeExp.id), cleanForFirestore(feeExp));
+        }
       });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
@@ -2666,6 +4437,8 @@ export const fetchFullStoreSnapshotForBackup = async (
     gastosSnap,
     suppliersSnap,
     loansSnap,
+    bankAccountsSnap,
+    treasuryMovementsSnap,
     shiftHistSnap,
     creditNotesSnap,
     dischargesSnap,
@@ -2682,6 +4455,8 @@ export const fetchFullStoreSnapshotForBackup = async (
     getDocs(collection(db, 'users', userId, 'gastosOperativos')),
     safeGetOptionalDocs('suppliers'),
     safeGetOptionalDocs('loans'),
+    safeGetOptionalDocs('bankAccounts'),
+    safeGetOptionalDocs('treasuryMovements'),
     getDocs(collection(db, 'users', userId, 'cashShiftHistory')),
     getDocs(collection(db, 'users', userId, 'creditNotes')),
     getDocs(collection(db, 'users', userId, 'inventoryDischarges')),
@@ -2702,9 +4477,13 @@ export const fetchFullStoreSnapshotForBackup = async (
   const inventoryDischarges = dischargesSnap.docs.map((d) => d.data() as InventoryDischarge).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const kardex = kardexSnap.docs.map((d) => d.data() as KardexEntry).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const loans = loansSnap.docs.map((d) => d.data() as Loan).sort((a, b) => new Date(b.grantDate || b.createdAt).getTime() - new Date(a.grantDate || a.createdAt).getTime());
+  const bankAccounts = bankAccountsSnap.docs.map((d) => d.data() as TreasuryAccount);
+  const treasuryMovements = treasuryMovementsSnap.docs
+    .map((d) => d.data() as TreasuryMovement)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   return {
-    version: '2.2',
+    version: '2.3',
     timestamp: new Date().toISOString(),
     userUid: userId,
     userEmail,
@@ -2734,6 +4513,8 @@ export const fetchFullStoreSnapshotForBackup = async (
     clients: clientsSnap.docs.map((d) => d.data() as Client),
     suppliers: suppliersSnap.docs.map((d) => d.data() as Supplier).sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     loans,
+    bankAccounts,
+    treasuryMovements,
     creditNotes,
     inventoryDischarges,
     kardex,
@@ -2744,7 +4525,7 @@ export const fetchFullStoreSnapshotForBackup = async (
 
 /**
  * Uploads an entire JSON/Drive backup/restore payload atomically (chunked batches) directly to Cloud Firestore under users/{uid}/...
- * Respects firestore.rules immutability on `kardex` (only inserts missing kardex doc IDs).
+ * Respects firestore.rules immutability on `kardex` and `treasuryMovements` (only inserts missing doc IDs).
  */
 export const restoreStoreDataToFirestore = async (
   uid: string,
@@ -2758,6 +4539,8 @@ export const restoreStoreDataToFirestore = async (
     gastosOperativos: GastoOperativo[];
     suppliers?: Supplier[];
     loans?: Loan[];
+    bankAccounts?: TreasuryAccount[];
+    treasuryMovements?: TreasuryMovement[];
     creditNotes?: CreditNote[];
     inventoryDischarges?: InventoryDischarge[];
     kardex?: KardexEntry[];
@@ -2800,13 +4583,15 @@ export const restoreStoreDataToFirestore = async (
   await writeCollection('gastosOperativos', 'gasto', data.gastosOperativos || []);
   await writeCollection('suppliers', 'sup', data.suppliers || []);
   await writeCollection('loans', 'loan', data.loans || []);
+  if (Array.isArray(data.bankAccounts) && data.bankAccounts.length > 0 && !isOptionalCollectionDenied(userId, 'bankAccounts')) {
+    await writeCollection('bankAccounts', 'bank', data.bankAccounts);
+  }
   await writeCollection('creditNotes', 'nc', data.creditNotes || []);
   await writeCollection('inventoryDischarges', 'disc', data.inventoryDischarges || []);
   await writeCollection('cashShiftHistory', 'shift', data.cashShiftHistory || []);
 
   // Kardex is create-only in firestore.rules (allow update, delete: if false).
-  // Query existing IDs and insert ONLY non-existent Kardex entries.
-  if (Array.isArray(data.kardex) && data.kardex.length > 0) {
+  if (Array.isArray(data.kardex) && data.kardex.length > 0 && !isOptionalCollectionDenied(userId, 'kardex')) {
     const existingKardexSnap = await getDocs(collection(db, 'users', userId, 'kardex'));
     const existingIds = new Set(existingKardexSnap.docs.map((d) => d.id));
     const missingKardex: Array<KardexEntry & { id: string }> = [];
@@ -2820,6 +4605,28 @@ export const restoreStoreDataToFirestore = async (
     });
     if (missingKardex.length > 0) {
       await writeCollection('kardex', 'kdx', missingKardex);
+    }
+  }
+
+  // Treasury movements are create-only in firestore.rules
+  if (
+    Array.isArray(data.treasuryMovements) &&
+    data.treasuryMovements.length > 0 &&
+    !isOptionalCollectionDenied(userId, 'treasuryMovements')
+  ) {
+    const existingMovSnap = await getDocs(collection(db, 'users', userId, 'treasuryMovements'));
+    const existingIds = new Set(existingMovSnap.docs.map((d) => d.id));
+    const missingMovs: Array<TreasuryMovement & { id: string }> = [];
+    data.treasuryMovements.forEach((entry, idx) => {
+      if (!entry || typeof entry !== 'object') return;
+      const safeId = sanitizeFirestoreDocId(entry.id, 'tmov', idx);
+      if (!existingIds.has(safeId)) {
+        existingIds.add(safeId);
+        missingMovs.push({ ...entry, id: safeId });
+      }
+    });
+    if (missingMovs.length > 0) {
+      await writeCollection('treasuryMovements', 'tmov', missingMovs);
     }
   }
 
@@ -2845,7 +4652,7 @@ export const restoreStoreDataToFirestore = async (
 
 /**
  * Deletes all mutable transactional collections under users/{uid}/... for Factory Reset (Arrancar de 0).
- * Preserves businessProfile unless overwritten. Note: 'kardex' is immutable by Firestore security rules.
+ * Preserves businessProfile unless overwritten. Note: 'kardex' & 'treasuryMovements' are immutable by Firestore security rules.
  */
 export const clearUserFirestoreCollections = async (uid: string): Promise<void> => {
   const userId = getCanonicalUserId(uid);
@@ -2859,6 +4666,7 @@ export const clearUserFirestoreCollections = async (uid: string): Promise<void> 
     'gastosOperativos',
     'suppliers',
     'loans',
+    'bankAccounts',
     'cashShiftHistory',
     'creditNotes',
     'inventoryDischarges'
@@ -2870,7 +4678,10 @@ export const clearUserFirestoreCollections = async (uid: string): Promise<void> 
       try {
         snap = await getDocs(collection(db, 'users', userId, colName));
       } catch (err) {
-        if (isPermissionDeniedError(err) && (colName === 'suppliers' || colName === 'loans')) {
+        if (
+          isPermissionDeniedError(err) &&
+          (colName === 'suppliers' || colName === 'loans' || colName === 'bankAccounts')
+        ) {
           continue;
         }
         throw err;

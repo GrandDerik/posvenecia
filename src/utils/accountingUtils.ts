@@ -11,6 +11,17 @@ import { round2 } from './exportUtils';
 
 export const OWNER_SALARY_CATEGORY: GastoOperativoCategory = 'Sueldo Propietario / Nómina';
 export const OWNER_WITHDRAWAL_CATEGORY: GastoOperativoCategory = 'Retiro Personal / Adelanto Dueño';
+export const BANK_COMMISSION_CATEGORY: GastoOperativoCategory = 'Comisión Bancaria';
+
+export const isBankCommissionCategory = (category?: string): boolean => {
+  if (!category) return false;
+  const norm = category.trim().toLowerCase();
+  return (
+    norm === 'comisión bancaria' ||
+    norm === 'comision bancaria' ||
+    norm === 'comisiones bancarias'
+  );
+};
 
 export const isOwnerWithdrawalCategory = (category?: string): boolean => {
   if (!category) return false;
@@ -61,14 +72,15 @@ export const isExpenseOwnerSalary = (
 
 /**
  * Aislamiento Fiscal SENIAT:
- * Garantiza que Sueldo Propietario / Nómina y Retiro Personal / Adelanto Dueño
- * jamás entren en el Libro de Compras ni generen IVA o retenciones.
+ * Garantiza que Sueldo Propietario / Nómina, Retiro Personal / Adelanto Dueño
+ * y Comisión Bancaria jamás entren en el Libro de Compras ni generen IVA o retenciones.
  */
 export const isExpenseExcludedFromLibroCompras = (
   exp: Pick<Expense, 'category' | 'excludeFromLibroCompras' | 'accountingType'>
 ): boolean => {
   if (exp.excludeFromLibroCompras === true) return true;
   if (exp.accountingType === 'owner_withdrawal' || exp.accountingType === 'owner_salary') return true;
+  if (isBankCommissionCategory(exp.category)) return true;
   return isNonFiscalPersonalOrSalaryCategory(exp.category);
 };
 
@@ -77,6 +89,7 @@ export const mapGastoCategoryToExpenseCategory = (
 ): Expense['category'] => {
   if (cat === 'Sueldo Propietario / Nómina') return 'Sueldo Propietario / Nómina';
   if (cat === 'Retiro Personal / Adelanto Dueño') return 'Retiro Personal / Adelanto Dueño';
+  if (cat === 'Comisión Bancaria') return 'Comisión Bancaria';
   if (cat === 'Alquiler' || cat === 'Servicios' || cat === 'Nómina' || cat === 'Mantenimiento') {
     return cat;
   }

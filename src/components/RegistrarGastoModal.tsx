@@ -15,8 +15,13 @@ import {
   Info
 } from 'lucide-react';
 import { formatBs, formatUSD, round2, round6, safeDiv, getLocalDateStr } from '../utils/exportUtils';
-import { Expense, ExpenseItem, PurchaseCostStrategy } from '../types';
-import { getExpenseAccountingType, isNonFiscalPersonalOrSalaryCategory } from '../utils/accountingUtils';
+import { Expense, ExpenseItem, PurchaseCostStrategy, TreasuryCurrency } from '../types';
+import { getExpenseAccountingType, isBankPaymentMethod, isNonFiscalPersonalOrSalaryCategory } from '../utils/accountingUtils';
+import {
+  TreasuryAccountSelector,
+  getDefaultBankAccount,
+  formatTreasuryAccountLabel
+} from './TreasuryAccountSelector';
 
 interface RegistrarGastoModalProps {
   isOpen: boolean;
@@ -25,7 +30,7 @@ interface RegistrarGastoModalProps {
 }
 
 export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen, onClose, editingExpense }) => {
-  const { addExpense, updateExpense, products, suppliers, addSupplier, bcvRate, isCashRegisterOpen, setIsAperturaModalOpen } = useApp();
+  const { addExpense, updateExpense, products, suppliers, addSupplier, bcvRate, isCashRegisterOpen, setIsAperturaModalOpen, treasuryAccounts } = useApp();
 
   // Invoice & Supplier details
   const [selectedSupplierId, setSelectedSupplierId] = useState('');
@@ -48,6 +53,10 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
     return getLocalDateStr(d);
   });
   const [reference, setReference] = useState('');
+  const [treasuryBankAccountId, setTreasuryBankAccountId] = useState('');
+  const [treasuryBankAccountLabel, setTreasuryBankAccountLabel] = useState('');
+  const [treasuryBankAccountCurrency, setTreasuryBankAccountCurrency] = useState<TreasuryCurrency>('Bs');
+  const [bankFeeInput, setBankFeeInput] = useState('');
 
   // Inventory Integration Items state
   const [purchasedItems, setPurchasedItems] = useState<ExpenseItem[]>([]);
@@ -319,6 +328,11 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       setPaymentMethod(editingExpense.paymentMethod || 'pago_movil');
       setDueDate(editingExpense.dueDate ? editingExpense.dueDate.split('T')[0] : getLocalDateStr());
       setReference(editingExpense.reference || '');
+      const editBank = treasuryAccounts.find((a) => a.id === (editingExpense.treasuryAccountId || editingExpense.bankAccountId));
+      setTreasuryBankAccountId(editBank?.id || editingExpense.treasuryAccountId || editingExpense.bankAccountId || '');
+      setTreasuryBankAccountLabel(editBank ? formatTreasuryAccountLabel(editBank) : (editingExpense.bankAccountLabel || ''));
+      setTreasuryBankAccountCurrency(editBank?.currency || editingExpense.bankFeeCurrency || 'Bs');
+      setBankFeeInput(editingExpense.bankFeeAmount && editingExpense.bankFeeAmount > 0 ? editingExpense.bankFeeAmount.toFixed(2) : '');
       setPurchasedItems(Array.isArray(editingExpense.items) ? editingExpense.items : []);
       setSelectedProductId('');
       setProductSearch('');
@@ -349,6 +363,11 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
       d.setDate(d.getDate() + 15);
       setDueDate(getLocalDateStr(d));
       setReference('');
+      const defBank = getDefaultBankAccount(treasuryAccounts);
+      setTreasuryBankAccountId(defBank?.id || '');
+      setTreasuryBankAccountLabel(defBank ? formatTreasuryAccountLabel(defBank) : '');
+      setTreasuryBankAccountCurrency(defBank?.currency || 'Bs');
+      setBankFeeInput('');
       setPurchasedItems([]);
       setSelectedProductId('');
       setProductSearch('');
@@ -451,6 +470,20 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
           accountingType: getExpenseAccountingType(category)
         });
       } else {
+        const isBankMethod = paymentMethod !== 'credito' && isBankPaymentMethod(paymentMethod);
+        const chosenBank = isBankMethod
+          ? (treasuryAccounts.find((a) => a.id === treasuryBankAccountId) || getDefaultBankAccount(treasuryAccounts))
+          : undefined;
+        const resolvedTreasuryAccountId =
+          paymentMethod === 'credito'
+            ? undefined
+            : paymentMethod === 'efectivo_usd'
+              ? 'cash_usd'
+              : paymentMethod === 'efectivo_bs'
+                ? 'cash_bs'
+                : chosenBank?.id;
+        const parsedBankFee = isBankMethod ? round2(Math.max(0, parseFloat(bankFeeInput) || 0)) : 0;
+
         await addExpense({
           date: new Date().toISOString(),
           invoiceNumber: invoiceNumber.trim() || `FAC-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -470,6 +503,11 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
           bcvRate: effectiveBcvRate,
           enteredCurrency: currency,
           paymentMethod,
+          bankAccountId: chosenBank?.id,
+          bankAccountLabel: chosenBank ? formatTreasuryAccountLabel(chosenBank) : (treasuryBankAccountLabel || undefined),
+          treasuryAccountId: resolvedTreasuryAccountId,
+          bankFeeAmount: parsedBankFee > 0 ? parsedBankFee : undefined,
+          bankFeeCurrency: parsedBankFee > 0 ? (chosenBank?.currency || treasuryBankAccountCurrency) : undefined,
           dueDate: normalizedDueDate,
           reference: paymentMethod === 'credito' ? (reference.trim() || 'CRÉDITO') : reference,
           items: purchasedItems.length > 0 ? purchasedItems : undefined,
@@ -1162,14 +1200,33 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
               )}
             </div>
 
-            {paymentMethod === 'credito' && (
+            {paymentMethod === 'credito' ? (
               <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-900 flex items-start gap-2">
                 <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <span>
-                  <strong>Compra a Crédito:</strong> Incrementará el stock en inventario, registrará el crédito fiscal en el Libro de Compras y creará el pasivo en <strong>Cuentas por Pagar</strong> sin descontar dinero de caja hasta que registres el pago o abono.
+                  <strong>Compra a Crédito:</strong> Incrementará el stock en inventario, registrará el crédito fiscal en el Libro de Compras y creará el pasivo en <strong>Cuentas por Pagar</strong> sin descontar dinero de Tesorería ni caja hasta que registres el pago o abono.
                 </span>
               </div>
-            )}
+            ) : !editingExpense ? (
+              <TreasuryAccountSelector
+                paymentMethod={paymentMethod}
+                treasuryAccounts={treasuryAccounts}
+                selectedBankAccountId={treasuryBankAccountId}
+                onSelectBankAccount={(id, label, curr) => {
+                  setTreasuryBankAccountId(id);
+                  if (label) setTreasuryBankAccountLabel(label);
+                  if (curr) setTreasuryBankAccountCurrency(curr);
+                }}
+                amountUSD={amountUSD}
+                amountBs={amountBs}
+                mode="outflow"
+                showBankFee={true}
+                bankFeeInput={bankFeeInput}
+                onChangeBankFeeInput={setBankFeeInput}
+                isPurchaseInvoice={true}
+                compact
+              />
+            ) : null}
           </div>
 
           {formError && (

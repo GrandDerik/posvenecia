@@ -31,7 +31,9 @@ import {
   Loan,
   RateChangeModalState,
   RatePriceRecalcMode,
-  RatePriceCurrencyScope
+  RatePriceCurrencyScope,
+  TreasuryAccount,
+  TreasuryMovement
 } from '../types';
 import { fetchLiveBCVRate, fetchLiveBCVEuroRate } from '../utils/bcvFetcher';
 import {
@@ -111,7 +113,12 @@ import {
   restoreStoreDataToFirestore,
   clearUserFirestoreCollections,
   batchUpdateProductPricesInFirestore,
-  resetDeniedOptionalCollections
+  resetDeniedOptionalCollections,
+  ensureDefaultTreasuryAccountsInFirestore,
+  saveTreasuryAccountToFirestore,
+  deleteTreasuryAccountFromFirestore,
+  transferBetweenTreasuryAccountsTransaction,
+  adjustTreasuryAccountBalanceTransaction
 } from '../services/firestoreSyncService';
 import { BackupDataPayload } from '../utils/cloudBackupUtils';
 import {
@@ -499,7 +506,14 @@ interface AppContextType {
 
   // Fiados
   fiados: FiadoRecord[];
-  addAbonoToFiado: (fiadoId: string, amountUSD: number, method: PaymentMethod, reference?: string, notes?: string) => Promise<void>;
+  addAbonoToFiado: (
+    fiadoId: string,
+    amountUSD: number,
+    method: PaymentMethod,
+    reference?: string,
+    notes?: string,
+    options?: { bankAccountId?: string; bankAccountLabel?: string }
+  ) => Promise<void>;
   createManualFiado: (data: { clientName: string; clientCI: string; clientPhone: string; debtUSD: number; notes?: string }) => void;
 
   // Cuentas por Pagar (Deudas a Proveedores)
@@ -507,7 +521,20 @@ interface AppContextType {
   addCuentaPorPagar: (data: Omit<CuentaPorPagar, 'id' | 'paidAmountUSD' | 'remainingUSD' | 'status' | 'abonos'>) => void;
   updateCuentaPorPagar: (updated: CuentaPorPagar) => void;
   deleteCuentaPorPagar: (id: string) => void;
-  addAbonoToCuentaPorPagar: (cuentaId: string, amountUSD: number, method: PaymentMethod, reference?: string, notes?: string) => Promise<void>;
+  addAbonoToCuentaPorPagar: (
+    cuentaId: string,
+    amountUSD: number,
+    method: PaymentMethod,
+    reference?: string,
+    notes?: string,
+    options?: {
+      bankAccountId?: string;
+      bankAccountLabel?: string;
+      enteredCurrency?: 'USD' | 'Bs';
+      exactAmountBs?: number;
+      bankFeeAmount?: number;
+    }
+  ) => Promise<void>;
 
   // Gastos Operativos del Mes (Alquiler, Servicios, Eventuales)
   gastosOperativos: GastoOperativo[];
@@ -525,6 +552,7 @@ interface AppContextType {
       bankAccountLabel?: string;
       enteredCurrency?: 'USD' | 'Bs';
       exactAmountBs?: number;
+      bankFeeAmount?: number;
     }
   ) => Promise<void>;
 
@@ -540,6 +568,33 @@ interface AppContextType {
     method: PaymentMethod | 'externo_dueno';
     reference?: string;
     notes?: string;
+    bankAccountId?: string;
+    bankAccountLabel?: string;
+    bankFeeAmount?: number;
+  }) => Promise<void>;
+
+  // Tesorería / Estado de Cuenta en Vivo
+  treasuryAccounts: TreasuryAccount[];
+  treasuryMovements: TreasuryMovement[];
+  saveTreasuryAccount: (
+    account: Omit<TreasuryAccount, 'createdAt' | 'updatedAt'> & { createdAt?: string; updatedAt?: string },
+    options?: { recordInitialMovement?: boolean }
+  ) => Promise<void>;
+  deleteTreasuryAccount: (accountId: string) => Promise<void>;
+  transferBetweenTreasuryAccounts: (params: {
+    sourceAccountId: string;
+    destinationAccountId: string;
+    sourceAmount: number;
+    exchangeRate?: number;
+    bankFeeAmount?: number;
+    reference?: string;
+    notes?: string;
+  }) => Promise<void>;
+  adjustTreasuryAccountBalance: (params: {
+    accountId: string;
+    newBalance: number;
+    reason?: string;
+    setAsInitialBalance?: boolean;
   }) => Promise<void>;
 
   // Google Account, OAuth & Google Drive Export
@@ -580,8 +635,8 @@ interface AppContextType {
   setIsCuadreModalOpen: (open: boolean) => void;
   isProfileModalOpen: boolean;
   setIsProfileModalOpen: (open: boolean) => void;
-  activeTab: 'inicio' | 'tasa' | 'vender' | 'productos' | 'clientes' | 'fiados' | 'cuentas_por_pagar' | 'contabilidad';
-  setActiveTab: (tab: 'inicio' | 'tasa' | 'vender' | 'productos' | 'clientes' | 'fiados' | 'cuentas_por_pagar' | 'contabilidad') => void;
+  activeTab: 'inicio' | 'tasa' | 'vender' | 'productos' | 'clientes' | 'fiados' | 'cuentas_por_pagar' | 'tesoreria' | 'contabilidad';
+  setActiveTab: (tab: 'inicio' | 'tasa' | 'vender' | 'productos' | 'clientes' | 'fiados' | 'cuentas_por_pagar' | 'tesoreria' | 'contabilidad') => void;
 
   // Theme Management
   appTheme: AppTheme;
@@ -720,6 +775,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [kardex, setKardex] = useState<KardexEntry[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [treasuryAccounts, setTreasuryAccounts] = useState<TreasuryAccount[]>([]);
+  const [treasuryMovements, setTreasuryMovements] = useState<TreasuryMovement[]>([]);
+  const [treasuryAccountsLoaded, setTreasuryAccountsLoaded] = useState(false);
+  const treasurySeededUidRef = useRef<string | null>(null);
   const [missingRuleCollections, setMissingRuleCollections] = useState<string[]>([]);
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(DEFAULT_BUSINESS_INFO);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
@@ -749,7 +808,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isAperturaModalOpen, setIsAperturaModalOpenState] = useState(false);
   const [isCierreModalOpen, setIsCierreModalOpenState] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'inicio' | 'tasa' | 'vender' | 'productos' | 'clientes' | 'fiados' | 'cuentas_por_pagar' | 'contabilidad'>('inicio');
+  const [activeTab, setActiveTab] = useState<'inicio' | 'tasa' | 'vender' | 'productos' | 'clientes' | 'fiados' | 'cuentas_por_pagar' | 'tesoreria' | 'contabilidad'>('inicio');
 
   const setIsCuadreModalOpen = useCallback((open: boolean) => {
     setIsCuadreModalOpenState(open);
@@ -1737,6 +1796,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       onKardex: (entries) => setKardex(entries),
       onSuppliers: (list) => setSuppliers(list),
       onLoans: (list) => setLoans(list),
+      onTreasuryAccounts: (list) => {
+        setTreasuryAccounts(list);
+        setTreasuryAccountsLoaded(true);
+      },
+      onTreasuryMovements: (list) => setTreasuryMovements(list),
       onMissingCollectionPermissions: (colName) => {
         setMissingRuleCollections((prev) => (prev.includes(colName) ? prev : [...prev, colName]));
       },
@@ -1785,10 +1849,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const uid = googleUser?.uid;
     if (!uid) return;
     resetDeniedOptionalCollections(uid);
+    treasurySeededUidRef.current = null;
     setMissingRuleCollections([]);
     activeFirestoreUidRef.current = null;
     attachRealtimeSync(uid);
   }, [googleUser?.uid, attachRealtimeSync]);
+
+  // Idempotently ensure canonical cash accounts (cash_usd, cash_bs) and migrate configured banks into Tesorería
+  useEffect(() => {
+    const uid = googleUser?.uid;
+    if (!uid || !treasuryAccountsLoaded || profileLoadedSeq === 0) return;
+    if (missingRuleCollections.includes('bankAccounts')) return;
+    const hasCashUsd = treasuryAccounts.some((a) => a.id === 'cash_usd');
+    const hasCashBs = treasuryAccounts.some((a) => a.id === 'cash_bs');
+    if (hasCashUsd && hasCashBs && treasurySeededUidRef.current === uid) return;
+    treasurySeededUidRef.current = uid;
+    ensureDefaultTreasuryAccountsInFirestore(uid, treasuryAccounts, businessInfo).catch((e) => {
+      if (import.meta.env.DEV) console.warn('Treasury seed warning:', e);
+    });
+  }, [googleUser?.uid, treasuryAccountsLoaded, profileLoadedSeq, treasuryAccounts, businessInfo, missingRuleCollections]);
+
+  const getDefaultTreasuryBank = useCallback(() => {
+    const banks = treasuryAccounts.filter((a) => a.accountType === 'bank' && a.isActive !== false);
+    const preferredBs =
+      banks.find((a) => a.currency === 'Bs' && a.isDefault) ||
+      banks.find((a) => a.currency === 'Bs') ||
+      banks[0];
+    return preferredBs
+      ? { id: preferredBs.id, name: preferredBs.name }
+      : { id: undefined, name: undefined };
+  }, [treasuryAccounts]);
 
   // Re-subscribes ONLY `sales` and `expenses` when user switches date filter or logs in,
   // ensuring active cash shift boundaries are always covered without streaming unbounded months.
@@ -2609,13 +2699,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // Atomic Cloud Firestore transaction under users/{uid}/... BEFORE clearing cart
+      const defaultBank = getDefaultTreasuryBank();
       const confirmedSale = await saveSaleAtomic(
         uid,
         newSale,
         stockDeductions,
         bcvRate,
         baseCurrency,
-        createdFiado
+        createdFiado,
+        {
+          defaultBsBankAccountId: defaultBank.id,
+          defaultBsBankAccountName: defaultBank.name
+        }
       );
 
       setSales(prev => [confirmedSale, ...prev.filter(s => s.id !== confirmedSale.id)]);
@@ -2645,9 +2740,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!targetSale || targetSale.status === 'anulada') return;
 
     const associatedFiado = fiados.find(f => f.saleId === saleId);
+    const defaultBank = getDefaultTreasuryBank();
 
     try {
-      await cancelSaleAtomic(uid, saleId, associatedFiado?.id, googleUser?.name);
+      await cancelSaleAtomic(uid, saleId, associatedFiado?.id, googleUser?.name, {
+        defaultBsBankAccountId: defaultBank.id,
+        defaultBsBankAccountName: defaultBank.name
+      });
       tombstonesRef.current.canceledSaleIds = [
         ...(tombstonesRef.current.canceledSaleIds || []),
         saleId
@@ -2797,6 +2896,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         throw new Error('Debe ingresar el Número de Control fiscal de la factura afectada.');
       }
 
+      const defaultBank = getDefaultTreasuryBank();
       const createdNC = await saveCreditNoteAtomic(uid, {
         creditNoteId: 'nc-' + Date.now(),
         saleId: originalSale.id,
@@ -2808,7 +2908,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         originalInvoiceNumber: cleanAffectedInvoice,
         originalControlNumber: cleanAffectedControl,
         fallbackBcvRate: bcvRate,
-        cashierName: googleUser?.name || 'Cajero'
+        cashierName: googleUser?.name || 'Cajero',
+        treasuryBankAccountId: originalSale.paymentDetails?.treasuryBankAccountId || defaultBank.id,
+        treasuryBankAccountName: defaultBank.name
       });
 
       setCreditNotes(prev => [createdNC, ...prev.filter(n => n.id !== createdNC.id)]);
@@ -2979,6 +3081,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
+      const defaultBank = getDefaultTreasuryBank();
       if ((newExp.items && newExp.items.length > 0) || linkedCuenta) {
         await saveExpenseWithInventoryAtomic(
           uid,
@@ -2986,10 +3089,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           newExp.bcvRate || bcvRate,
           baseCurrency,
           linkedCuenta,
-          googleUser?.name
+          googleUser?.name,
+          defaultBank.id
         );
       } else {
-        await saveExpenseToFirestore(uid, newExp);
+        await saveExpenseToFirestore(uid, newExp, {
+          defaultBsBankAccountId: defaultBank.id,
+          createdBy: googleUser?.name
+        });
       }
       setExpenses(prev => [newExp, ...prev.filter(e => e.id !== newExp.id)]);
       if (linkedCuenta) {
@@ -3040,7 +3147,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     amountUSD: number,
     method: PaymentMethod,
     reference?: string,
-    notes?: string
+    notes?: string,
+    options?: { bankAccountId?: string; bankAccountLabel?: string }
   ): Promise<void> => {
     const uid = getActiveUid();
     if (!uid) {
@@ -3049,8 +3157,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw err;
     }
     try {
-      await addAbonoToFiadoTransaction(uid, fiadoId, amountUSD, method, bcvRate, reference, notes);
-      notifyUser('success', 'Abono registrado', 'Pago aplicado a la cuenta por cobrar en Cloud Firestore.');
+      const defaultBank = getDefaultTreasuryBank();
+      await addAbonoToFiadoTransaction(uid, fiadoId, amountUSD, method, bcvRate, reference, notes, {
+        bankAccountId: options?.bankAccountId,
+        bankAccountLabel: options?.bankAccountLabel,
+        defaultBsBankAccountId: defaultBank.id,
+        createdBy: googleUser?.name
+      });
+      notifyUser('success', 'Abono registrado', 'Pago aplicado a la cuenta por cobrar y acreditado en Tesorería.');
     } catch (e) {
       notifyError(e, 'No se pudo registrar el abono');
       throw e;
@@ -3243,7 +3357,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     amountUSD: number,
     method: PaymentMethod,
     reference?: string,
-    notes?: string
+    notes?: string,
+    options?: {
+      bankAccountId?: string;
+      bankAccountLabel?: string;
+      enteredCurrency?: 'USD' | 'Bs';
+      exactAmountBs?: number;
+      bankFeeAmount?: number;
+    }
   ): Promise<void> => {
     const uid = getActiveUid();
     if (!uid) {
@@ -3252,8 +3373,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw err;
     }
     try {
-      await addAbonoToCuentaPorPagarTransaction(uid, cuentaId, amountUSD, method, bcvRate, reference, notes);
-      notifyUser('success', 'Abono registrado', 'Pago a proveedor y egreso guardados en Cloud Firestore.');
+      const defaultBank = getDefaultTreasuryBank();
+      await addAbonoToCuentaPorPagarTransaction(uid, cuentaId, amountUSD, method, bcvRate, reference, notes, {
+        ...options,
+        defaultBsBankAccountId: defaultBank.id,
+        createdBy: googleUser?.name
+      });
+      notifyUser('success', 'Abono registrado', 'Pago a proveedor y débito en Tesorería guardados en Cloud Firestore.');
     } catch (e) {
       notifyError(e, 'No se pudo registrar el abono al proveedor');
       throw e;
@@ -3272,6 +3398,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const remainingUSD = isPaidNow ? 0 : round2(Math.max(0, data.amountUSD - paidUSD));
     const isNonFiscal = isNonFiscalPersonalOrSalaryCategory(data.category);
     const accountingType = getExpenseAccountingType(data.category);
+    const bankFeeAmount = typeof data.bankFeeAmount === 'number' && data.bankFeeAmount > 0 ? round2(data.bankFeeAmount) : undefined;
+    const bankFeeCurrency = bankFeeAmount ? (data.bankFeeCurrency || 'Bs') : undefined;
 
     const initialAbonos: Abono[] = isPaidNow
       ? [
@@ -3285,6 +3413,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             paymentMethod: data.paymentMethod || 'pago_movil',
             bankAccountId: data.bankAccountId,
             bankAccountLabel: data.bankAccountLabel,
+            treasuryAccountId: data.treasuryAccountId || data.bankAccountId,
+            bankFeeAmount,
+            bankFeeCurrency,
             reference: data.reference,
             notes: 'Pago completo al registrar el movimiento'
           }
@@ -3298,6 +3429,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amountBs: data.enteredCurrency === 'Bs' && data.amountBs > 0 ? round2(data.amountBs) : round2(data.amountUSD * rate),
       paidAmountUSD: paidUSD,
       remainingUSD,
+      bankFeeAmount,
+      bankFeeCurrency,
       status: remainingUSD <= 0.009 ? 'pagado' : (paidUSD > 0 ? 'parcial' : 'pendiente'),
       abonos: initialAbonos
     };
@@ -3327,6 +3460,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         paymentMethod: mapMethodToExpenseMethod(data.paymentMethod),
         bankAccountId: data.bankAccountId,
         bankAccountLabel: data.bankAccountLabel,
+        treasuryAccountId: data.treasuryAccountId || data.bankAccountId,
+        bankFeeAmount,
+        bankFeeCurrency,
         excludeFromLibroCompras: isNonFiscal,
         accountingType,
         reference: data.reference,
@@ -3337,8 +3473,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const uid = getActiveUid();
     if (uid) {
+      const defaultBank = getDefaultTreasuryBank();
       if (cashOutflowExpense) {
-        saveGastoWithCashOutflowAtomic(uid, newGasto, cashOutflowExpense).catch(e =>
+        saveGastoWithCashOutflowAtomic(uid, newGasto, cashOutflowExpense, {
+          defaultBsBankAccountId: defaultBank.id,
+          createdBy: googleUser?.name
+        }).catch(e =>
           console.error('Firestore addGastoOperativo atomic error:', e)
         );
       } else {
@@ -3392,6 +3532,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bankAccountLabel?: string;
       enteredCurrency?: 'USD' | 'Bs';
       exactAmountBs?: number;
+      bankFeeAmount?: number;
     }
   ): Promise<void> => {
     const uid = getActiveUid();
@@ -3401,8 +3542,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw err;
     }
     try {
-      await markGastoOperativoPagadoTransaction(uid, id, paymentMethod, bcvRate, reference, amountUSD, notes, options);
-      notifyUser('success', 'Pago registrado', 'El pago del movimiento se sincronizó en Cloud Firestore.');
+      const defaultBank = getDefaultTreasuryBank();
+      await markGastoOperativoPagadoTransaction(uid, id, paymentMethod, bcvRate, reference, amountUSD, notes, {
+        ...options,
+        defaultBsBankAccountId: defaultBank.id,
+        createdBy: googleUser?.name
+      });
+      notifyUser('success', 'Pago registrado', 'El pago y débito en Tesorería se sincronizaron en Cloud Firestore.');
     } catch (e) {
       notifyError(e, 'No se pudo registrar el pago del gasto');
       throw e;
@@ -3443,9 +3589,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     try {
-      await saveLoanToFirestore(uid, newLoan);
+      const defaultBank = getDefaultTreasuryBank();
+      await saveLoanToFirestore(uid, newLoan, {
+        defaultBsBankAccountId: defaultBank.id,
+        createdBy: googleUser?.name
+      });
       setLoans(prev => [newLoan, ...prev.filter(l => l.id !== newLoan.id)]);
-      notifyUser('success', 'Préstamo registrado', `"${newLoan.lenderName}" guardado en Cloud Firestore.`);
+      notifyUser('success', 'Préstamo registrado', `"${newLoan.lenderName}" guardado y acreditado en Tesorería.`);
       return newLoan;
     } catch (e) {
       notifyError(e, 'No se pudo registrar el préstamo');
@@ -3519,6 +3669,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     method: PaymentMethod | 'externo_dueno';
     reference?: string;
     notes?: string;
+    bankAccountId?: string;
+    bankAccountLabel?: string;
+    bankFeeAmount?: number;
   }): Promise<void> => {
     const uid = getActiveUid();
     if (!uid) {
@@ -3532,17 +3685,122 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
+      const defaultBank = getDefaultTreasuryBank();
       await addAbonoToLoanTransaction(uid, params.loanId, {
         amount: params.amount,
         enteredCurrency: params.enteredCurrency,
         method: params.method,
         bcvRate,
         reference: params.reference,
-        notes: params.notes
+        notes: params.notes,
+        bankAccountId: params.bankAccountId,
+        bankAccountLabel: params.bankAccountLabel,
+        defaultBsBankAccountId: defaultBank.id,
+        bankFeeAmount: params.bankFeeAmount,
+        createdBy: googleUser?.name
       });
-      notifyUser('success', 'Abono registrado', 'Pago aplicado al préstamo en Cloud Firestore.');
+      notifyUser('success', 'Abono registrado', 'Pago aplicado al préstamo y debitado de Tesorería.');
     } catch (e) {
       notifyError(e, 'No se pudo registrar el abono al préstamo');
+      throw e;
+    }
+  };
+
+  // Tesorería / Estado de Cuenta en Vivo
+  const saveTreasuryAccount = async (
+    account: Omit<TreasuryAccount, 'createdAt' | 'updatedAt'> & { createdAt?: string; updatedAt?: string },
+    options?: { recordInitialMovement?: boolean }
+  ): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para gestionar cuentas de Tesorería.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    const nowIso = new Date().toISOString();
+    const payload: TreasuryAccount = {
+      ...account,
+      createdAt: account.createdAt || nowIso,
+      updatedAt: nowIso
+    };
+    try {
+      await saveTreasuryAccountToFirestore(uid, payload, {
+        recordInitialMovement: options?.recordInitialMovement,
+        bcvRate,
+        createdBy: googleUser?.name
+      });
+      notifyUser('success', 'Cuenta guardada', `"${payload.name}" sincronizada en Tesorería.`);
+    } catch (e) {
+      notifyError(e, 'No se pudo guardar la cuenta bancaria');
+      throw e;
+    }
+  };
+
+  const deleteTreasuryAccount = async (accountId: string): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para eliminar cuentas bancarias.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await deleteTreasuryAccountFromFirestore(uid, accountId);
+      notifyUser('success', 'Cuenta eliminada', 'La cuenta bancaria fue eliminada de Tesorería.');
+    } catch (e) {
+      notifyError(e, 'No se pudo eliminar la cuenta');
+      throw e;
+    }
+  };
+
+  const transferBetweenTreasuryAccounts = async (params: {
+    sourceAccountId: string;
+    destinationAccountId: string;
+    sourceAmount: number;
+    exchangeRate?: number;
+    bankFeeAmount?: number;
+    reference?: string;
+    notes?: string;
+  }): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para transferir fondos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await transferBetweenTreasuryAccountsTransaction(uid, {
+        ...params,
+        bcvRate,
+        createdBy: googleUser?.name
+      });
+      notifyUser('success', 'Transferencia registrada', 'Movimiento interno entre cuentas aplicado atómicamente.');
+    } catch (e) {
+      notifyError(e, 'No se pudo completar la transferencia');
+      throw e;
+    }
+  };
+
+  const adjustTreasuryAccountBalance = async (params: {
+    accountId: string;
+    newBalance: number;
+    reason?: string;
+    setAsInitialBalance?: boolean;
+  }): Promise<void> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      const err = new Error('Debes iniciar sesión con Google para ajustar saldos.');
+      notifyError(err, 'Sesión requerida');
+      throw err;
+    }
+    try {
+      await adjustTreasuryAccountBalanceTransaction(uid, {
+        ...params,
+        bcvRate,
+        createdBy: googleUser?.name
+      });
+      notifyUser('success', 'Saldo actualizado', 'Ajuste de saldo registrado en el extracto de Tesorería.');
+    } catch (e) {
+      notifyError(e, 'No se pudo ajustar el saldo');
       throw e;
     }
   };
@@ -3763,6 +4021,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateLoan,
         deleteLoan,
         addAbonoToLoan,
+        treasuryAccounts,
+        treasuryMovements,
+        saveTreasuryAccount,
+        deleteTreasuryAccount,
+        transferBetweenTreasuryAccounts,
+        adjustTreasuryAccountBalance,
         firestoreSyncStatus,
         notification,
         dismissNotification,

@@ -76,6 +76,11 @@ import { RegistrarGastoModal } from './RegistrarGastoModal';
 import { BackupDriveModal } from './Modals/BackupDriveModal';
 import { ComprobanteTicketModal } from './Modals/ComprobanteTicketModal';
 import { ComprobanteNotaCreditoModal } from './Modals/ComprobanteNotaCreditoModal';
+import {
+  TreasuryAccountSelector,
+  getDefaultBankAccount,
+  formatTreasuryAccountLabel
+} from './TreasuryAccountSelector';
 
 export const ContabilidadView: React.FC = () => {
   const { 
@@ -86,6 +91,7 @@ export const ContabilidadView: React.FC = () => {
     deleteExpense,
     bcvRate, 
     businessInfo,
+    treasuryAccounts,
     cashShift,
     cashShiftHistory,
     cuentasPorPagar,
@@ -172,6 +178,9 @@ export const ContabilidadView: React.FC = () => {
   const [cuentaForAbono, setCuentaForAbono] = useState<CuentaPorPagar | null>(null);
   const [cuentaAbonoAmount, setCuentaAbonoAmount] = useState('');
   const [cuentaAbonoMethod, setCuentaAbonoMethod] = useState<PaymentMethod>('transferencia');
+  const [cuentaAbonoBankAccountId, setCuentaAbonoBankAccountId] = useState('');
+  const [cuentaAbonoBankAccountLabel, setCuentaAbonoBankAccountLabel] = useState('');
+  const [cuentaAbonoBankFeeInput, setCuentaAbonoBankFeeInput] = useState('');
   const [cuentaAbonoRef, setCuentaAbonoRef] = useState('');
   const [cuentaAbonoNotes, setCuentaAbonoNotes] = useState('');
 
@@ -192,6 +201,8 @@ export const ContabilidadView: React.FC = () => {
   const [gastoAbonoAmount, setGastoAbonoAmount] = useState('');
   const [gastoAbonoMethod, setGastoAbonoMethod] = useState<PaymentMethod>('efectivo_usd');
   const [gastoAbonoBankAccountId, setGastoAbonoBankAccountId] = useState('');
+  const [gastoAbonoBankAccountLabel, setGastoAbonoBankAccountLabel] = useState('');
+  const [gastoAbonoBankFeeInput, setGastoAbonoBankFeeInput] = useState('');
   const [gastoAbonoRef, setGastoAbonoRef] = useState('');
   const [gastoAbonoNotes, setGastoAbonoNotes] = useState('');
 
@@ -275,6 +286,10 @@ export const ContabilidadView: React.FC = () => {
     setCuentaForAbono(c);
     setCuentaAbonoAmount(c.remainingUSD.toFixed(2));
     setCuentaAbonoMethod('transferencia');
+    const defBank = getDefaultBankAccount(treasuryAccounts);
+    setCuentaAbonoBankAccountId(defBank?.id || '');
+    setCuentaAbonoBankAccountLabel(defBank ? formatTreasuryAccountLabel(defBank) : '');
+    setCuentaAbonoBankFeeInput('');
     setCuentaAbonoRef('');
     setCuentaAbonoNotes('');
     setAbonoCuentaError(null);
@@ -286,6 +301,13 @@ export const ContabilidadView: React.FC = () => {
     if (!cuentaForAbono || isSubmittingAbonoCuenta) return;
     const amt = parseFloat(cuentaAbonoAmount) || 0;
     if (amt <= 0) return;
+
+    const usesBank = isBankPaymentMethod(cuentaAbonoMethod);
+    const chosenBank = usesBank
+      ? (treasuryAccounts.find((a) => a.id === cuentaAbonoBankAccountId) || getDefaultBankAccount(treasuryAccounts))
+      : undefined;
+    const parsedBankFee = usesBank ? round2(Math.max(0, parseFloat(cuentaAbonoBankFeeInput) || 0)) : 0;
+
     setIsSubmittingAbonoCuenta(true);
     setAbonoCuentaError(null);
     try {
@@ -294,7 +316,13 @@ export const ContabilidadView: React.FC = () => {
         Math.min(amt, cuentaForAbono.remainingUSD),
         cuentaAbonoMethod,
         cuentaAbonoRef.trim() || undefined,
-        cuentaAbonoNotes.trim() || undefined
+        cuentaAbonoNotes.trim() || undefined,
+        {
+          bankAccountId: chosenBank?.id,
+          bankAccountLabel: chosenBank ? (cuentaAbonoBankAccountLabel || formatTreasuryAccountLabel(chosenBank)) : undefined,
+          enteredCurrency: 'USD',
+          bankFeeAmount: parsedBankFee > 0 ? parsedBankFee : undefined
+        }
       );
       setCuentaForAbono(null);
     } catch (err: any) {
@@ -344,8 +372,11 @@ export const ContabilidadView: React.FC = () => {
     setGastoAbonoMethod(g.paymentMethod || 'efectivo_usd');
     setGastoAbonoRef('');
     setGastoAbonoNotes('');
-    const defaultBank = (businessInfo.bankAccounts || [])[0]?.id || (businessInfo.pagoMovilBank ? 'default-pm' : '');
-    setGastoAbonoBankAccountId(g.bankAccountId || defaultBank);
+    const matchedTreasuryBank = treasuryAccounts.find((a) => a.accountType === 'bank' && a.id === g.bankAccountId);
+    const defaultBank = matchedTreasuryBank || getDefaultBankAccount(treasuryAccounts);
+    setGastoAbonoBankAccountId(defaultBank?.id || g.bankAccountId || '');
+    setGastoAbonoBankAccountLabel(defaultBank ? formatTreasuryAccountLabel(defaultBank) : (g.bankAccountLabel || ''));
+    setGastoAbonoBankFeeInput('');
     setAbonoGastoError(null);
     setIsSubmittingAbonoGasto(false);
   };
@@ -357,13 +388,11 @@ export const ContabilidadView: React.FC = () => {
     const amt = parseFloat(gastoAbonoAmount) || 0;
     if (amt <= 0) return;
 
-    const bankAccounts = businessInfo.bankAccounts || [];
     const usesBank = isBankPaymentMethod(gastoAbonoMethod);
-    const chosenBankId = usesBank ? (gastoAbonoBankAccountId || bankAccounts[0]?.id || (businessInfo.pagoMovilBank ? 'default-pm' : undefined)) : undefined;
-    const chosenBankObj = chosenBankId ? bankAccounts.find(b => b.id === chosenBankId) : undefined;
-    const chosenBankLabel = chosenBankObj
-      ? `${chosenBankObj.bank} (••••${chosenBankObj.accountNumber.slice(-4)})`
-      : (chosenBankId === 'default-pm' && businessInfo.pagoMovilBank ? `${businessInfo.pagoMovilBank} (Pago Móvil)` : undefined);
+    const chosenBank = usesBank
+      ? (treasuryAccounts.find((a) => a.id === gastoAbonoBankAccountId) || getDefaultBankAccount(treasuryAccounts))
+      : undefined;
+    const parsedBankFee = usesBank ? round2(Math.max(0, parseFloat(gastoAbonoBankFeeInput) || 0)) : 0;
 
     setIsSubmittingAbonoGasto(true);
     setAbonoGastoError(null);
@@ -375,9 +404,10 @@ export const ContabilidadView: React.FC = () => {
         Math.min(amt, remaining),
         gastoAbonoNotes.trim() || undefined,
         {
-          bankAccountId: chosenBankId,
-          bankAccountLabel: chosenBankLabel,
-          enteredCurrency: 'USD'
+          bankAccountId: chosenBank?.id,
+          bankAccountLabel: chosenBank ? (gastoAbonoBankAccountLabel || formatTreasuryAccountLabel(chosenBank)) : undefined,
+          enteredCurrency: 'USD',
+          bankFeeAmount: parsedBankFee > 0 ? parsedBankFee : undefined
         }
       );
       setGastoForAbono(null);
@@ -3523,6 +3553,23 @@ export const ContabilidadView: React.FC = () => {
                 </select>
               </div>
 
+              <TreasuryAccountSelector
+                paymentMethod={cuentaAbonoMethod}
+                treasuryAccounts={treasuryAccounts}
+                selectedBankAccountId={cuentaAbonoBankAccountId}
+                onSelectBankAccount={(id, label) => {
+                  setCuentaAbonoBankAccountId(id);
+                  if (label) setCuentaAbonoBankAccountLabel(label);
+                }}
+                amountUSD={round2(parseFloat(cuentaAbonoAmount) || 0)}
+                amountBs={round2((parseFloat(cuentaAbonoAmount) || 0) * bcvRate)}
+                mode="outflow"
+                showBankFee={true}
+                bankFeeInput={cuentaAbonoBankFeeInput}
+                onChangeBankFeeInput={setCuentaAbonoBankFeeInput}
+                compact
+              />
+
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Nº Referencia</label>
                 <input type="text" value={cuentaAbonoRef} onChange={e => setCuentaAbonoRef(e.target.value)} placeholder="Opcional" className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl font-mono-numbers" />
@@ -3690,26 +3737,22 @@ export const ContabilidadView: React.FC = () => {
                   </select>
                 </div>
 
-                {isBankPaymentMethod(gastoAbonoMethod) && ((businessInfo.bankAccounts || []).length > 0 || businessInfo.pagoMovilBank) && (
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Cuenta Bancaria de Origen</label>
-                    <select
-                      value={gastoAbonoBankAccountId}
-                      onChange={e => setGastoAbonoBankAccountId(e.target.value)}
-                      className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl font-semibold"
-                    >
-                      {(businessInfo.bankAccounts || []).length > 0 ? (
-                        (businessInfo.bankAccounts || []).map(bk => (
-                          <option key={bk.id} value={bk.id}>
-                            {bk.bank} (••••{bk.accountNumber.slice(-4)})
-                          </option>
-                        ))
-                      ) : (
-                        <option value="default-pm">{businessInfo.pagoMovilBank} (Pago Móvil)</option>
-                      )}
-                    </select>
-                  </div>
-                )}
+                <TreasuryAccountSelector
+                  paymentMethod={gastoAbonoMethod}
+                  treasuryAccounts={treasuryAccounts}
+                  selectedBankAccountId={gastoAbonoBankAccountId}
+                  onSelectBankAccount={(id, label) => {
+                    setGastoAbonoBankAccountId(id);
+                    if (label) setGastoAbonoBankAccountLabel(label);
+                  }}
+                  amountUSD={parsedPay}
+                  amountBs={round2(parsedPay * bcvRate)}
+                  mode="outflow"
+                  showBankFee={true}
+                  bankFeeInput={gastoAbonoBankFeeInput}
+                  onChangeBankFeeInput={setGastoAbonoBankFeeInput}
+                  compact
+                />
 
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Nº Referencia</label>

@@ -16,6 +16,7 @@ const ProductsView = lazy(() => import('./components/ProductsView').then(m => ({
 const ClientesView = lazy(() => import('./components/ClientesView').then(m => ({ default: m.ClientesView })));
 const FiadosView = lazy(() => import('./components/FiadosView').then(m => ({ default: m.FiadosView })));
 const CuentasPorPagarView = lazy(() => import('./components/CuentasPorPagarView').then(m => ({ default: m.CuentasPorPagarView })));
+const TesoreriaView = lazy(() => import('./components/TesoreriaView').then(m => ({ default: m.TesoreriaView })));
 const ContabilidadView = lazy(() => import('./components/ContabilidadView').then(m => ({ default: m.ContabilidadView })));
 
 // Lazy-loaded global modals (downloaded on demand only when opened)
@@ -257,6 +258,7 @@ const AppContent: React.FC = () => {
           {activeTab === 'clientes' && <ClientesView />}
           {activeTab === 'fiados' && <FiadosView />}
           {activeTab === 'cuentas_por_pagar' && <CuentasPorPagarView />}
+          {activeTab === 'tesoreria' && <TesoreriaView />}
           {activeTab === 'contabilidad' && <ContabilidadView />}
         </Suspense>
       </main>

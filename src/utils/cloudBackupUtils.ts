@@ -15,7 +15,9 @@ import {
   InventoryDischarge,
   KardexEntry,
   BaseCurrency,
-  Loan
+  Loan,
+  TreasuryAccount,
+  TreasuryMovement
 } from '../types';
 import { getLocalDateStr, getProductPriceBs, getProductPriceUSD } from './exportUtils';
 
@@ -42,6 +44,8 @@ export interface BackupDataPayload {
   clients: Client[];
   suppliers?: Supplier[];
   loans?: Loan[];
+  bankAccounts?: TreasuryAccount[];
+  treasuryMovements?: TreasuryMovement[];
   creditNotes?: CreditNote[];
   inventoryDischarges?: InventoryDischarge[];
   kardex?: KardexEntry[];

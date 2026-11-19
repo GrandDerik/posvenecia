@@ -57,6 +57,11 @@ import { ComprobanteTicketModal } from './Modals/ComprobanteTicketModal';
 import { VenderServicioModal } from './Modals/VenderServicioModal';
 import { RecargoModal } from './Modals/RecargoModal';
 import { DescuentoModal } from './Modals/DescuentoModal';
+import {
+  getActiveBankAccounts,
+  getDefaultBankAccount,
+  formatTreasuryAccountLabel
+} from './TreasuryAccountSelector';
 
 export const POSView: React.FC = () => {
   const { 
@@ -92,7 +97,8 @@ export const POSView: React.FC = () => {
     fetchLiveRate,
     fetchLiveEuroRate,
     isFetchingLiveRate,
-    isOnline
+    isOnline,
+    treasuryAccounts
   } = useApp();
 
   // Search & Filters (starts empty/unselected until explicit category click or search)
@@ -133,9 +139,23 @@ export const POSView: React.FC = () => {
   const [customClientPhone, setCustomClientPhone] = useState('');
   const [customClientAddress, setCustomClientAddress] = useState('');
 
-  // Transferencia details
+  // Transferencia details & live Tesorería destination bank account
   const [transferenciaBank, setTransferenciaBank] = useState('0102 - Banco de Venezuela');
   const [transferenciaRef, setTransferenciaRef] = useState('');
+  const [selectedPosBankAccountId, setSelectedPosBankAccountId] = useState('');
+
+  const activePosBankAccounts = useMemo(() => getActiveBankAccounts(treasuryAccounts), [treasuryAccounts]);
+
+  useEffect(() => {
+    if (activePosBankAccounts.length === 0) return;
+    if (!selectedPosBankAccountId || !activePosBankAccounts.some((b) => b.id === selectedPosBankAccountId)) {
+      const def = getDefaultBankAccount(treasuryAccounts) || activePosBankAccounts[0];
+      if (def) {
+        setSelectedPosBankAccountId(def.id);
+        setTransferenciaBank(formatTreasuryAccountLabel(def));
+      }
+    }
+  }, [activePosBankAccounts, selectedPosBankAccountId, treasuryAccounts]);
 
   const [successSale, setSuccessSale] = useState<Sale | null>(null);
   const [ticketModalSale, setTicketModalSale] = useState<Sale | null>(null);
@@ -396,8 +416,17 @@ export const POSView: React.FC = () => {
     setIsProcessingCheckout(true);
 
     try {
+      const usesDirectBank =
+        selectedMethod === 'pago_movil' ||
+        selectedMethod === 'debito' ||
+        selectedMethod === 'transferencia';
+      const resolvedPosBankId = usesDirectBank
+        ? (selectedPosBankAccountId || getDefaultBankAccount(treasuryAccounts)?.id)
+        : undefined;
+
       const paymentDetails: PaymentDetails = {
         method: selectedMethod,
+        treasuryBankAccountId: resolvedPosBankId,
         pagoMovilRef: pagoMovilData?.ref,
         pagoMovilBank: pagoMovilData?.bank,
         pagoMovilPhone: pagoMovilData?.phone,
@@ -1721,6 +1750,32 @@ export const POSView: React.FC = () => {
                     3x ${formatUSD(round2(safeDiv(totalUSD, 3, 0)))}
                   </span>
                 </button>
+
+                {/* Live Destination Bank Account Selector for Bank Sales */}
+                {(selectedMethod === 'pago_movil' || selectedMethod === 'debito' || selectedMethod === 'transferencia') &&
+                  activePosBankAccounts.length > 0 && (
+                    <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1">
+                      <label className="text-[10px] font-bold text-blue-900 flex items-center gap-1">
+                        <Landmark className="w-3 h-3 text-blue-600" />
+                        <span>Cuenta Bancaria Destino (Acredita en Tesorería)</span>
+                      </label>
+                      <select
+                        value={selectedPosBankAccountId}
+                        onChange={(e) => {
+                          setSelectedPosBankAccountId(e.target.value);
+                          const found = activePosBankAccounts.find((b) => b.id === e.target.value);
+                          if (found) setTransferenciaBank(formatTreasuryAccountLabel(found));
+                        }}
+                        className="w-full px-2.5 py-1.5 bg-white border border-blue-200 rounded-lg text-[11px] font-semibold text-slate-900 focus:border-blue-500 focus:outline-none"
+                      >
+                        {activePosBankAccounts.map((bk) => (
+                          <option key={bk.id} value={bk.id}>
+                            {formatTreasuryAccountLabel(bk)} — {bk.currency === 'USD' ? `$${formatUSD(bk.balance)}` : `Bs. ${formatBs(bk.balance)}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
               </div>
 
               {/* Mandatory Manual Fiscal Correlatives (SENIAT) */}
@@ -2093,22 +2148,40 @@ export const POSView: React.FC = () => {
               className="space-y-3"
             >
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Cuenta Bancaria Receptora</label>
-                <select
-                  value={transferenciaBank}
-                  onChange={(e) => setTransferenciaBank(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:bg-white focus:outline-none"
-                >
-                  {businessInfo.bankAccounts && businessInfo.bankAccounts.length > 0 ? (
-                    businessInfo.bankAccounts.map((b) => (
-                      <option key={b.id} value={`${b.bank} - ${b.accountNumber.slice(-4)}`}>
-                        {b.bank} (••• {b.accountNumber.slice(-4)})
+                <label className="block text-xs font-bold text-slate-700 mb-1">Cuenta Bancaria Receptora (Tesorería)</label>
+                {activePosBankAccounts.length > 0 ? (
+                  <select
+                    value={selectedPosBankAccountId}
+                    onChange={(e) => {
+                      setSelectedPosBankAccountId(e.target.value);
+                      const found = activePosBankAccounts.find((b) => b.id === e.target.value);
+                      if (found) setTransferenciaBank(formatTreasuryAccountLabel(found));
+                    }}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:bg-white focus:outline-none"
+                  >
+                    {activePosBankAccounts.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {formatTreasuryAccountLabel(b)} — Saldo: {b.currency === 'USD' ? `$${formatUSD(b.balance)}` : `Bs. ${formatBs(b.balance)}`}
                       </option>
-                    ))
-                  ) : (
-                    <option value="0102 - Banco de Venezuela">0102 - Banco de Venezuela</option>
-                  )}
-                </select>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    value={transferenciaBank}
+                    onChange={(e) => setTransferenciaBank(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:bg-white focus:outline-none"
+                  >
+                    {businessInfo.bankAccounts && businessInfo.bankAccounts.length > 0 ? (
+                      businessInfo.bankAccounts.map((b) => (
+                        <option key={b.id} value={`${b.bank} - ${b.accountNumber.slice(-4)}`}>
+                          {b.bank} (••• {b.accountNumber.slice(-4)})
+                        </option>
+                      ))
+                    ) : (
+                      <option value="0102 - Banco de Venezuela">0102 - Banco de Venezuela</option>
+                    )}
+                  </select>
+                )}
               </div>
 
               <div>

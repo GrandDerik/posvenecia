@@ -102,6 +102,7 @@ export interface PaymentDetails {
   transferenciaRef?: string;
   transferenciaBank?: string;
   transferenciaAccount?: string;
+  treasuryBankAccountId?: string;
   fiaoClientId?: string;
   fiaoClientName?: string;
   fiaoClientCI?: string;
@@ -118,14 +119,17 @@ export interface PaymentDetails {
     pagoMovil?: number;
     pagoMovilRef?: string;
     pagoMovilBank?: string;
+    pagoMovilBankAccountId?: string;
     pagoMovilPhone?: string;
     debito?: number;
     debitoRef?: string;
     debitoBank?: string;
+    debitoBankAccountId?: string;
     fiaoRemaining?: number;
     transferencia?: number;
     transferenciaRef?: string;
     transferenciaBank?: string;
+    transferenciaBankAccountId?: string;
     notes?: string;
   };
 }
@@ -267,6 +271,7 @@ export interface Expense {
     | 'Nómina'
     | 'Sueldo Propietario / Nómina'
     | 'Retiro Personal / Adelanto Dueño'
+    | 'Comisión Bancaria'
     | 'Mantenimiento'
     | 'Otros';
   amountUSD: number;
@@ -280,6 +285,9 @@ export interface Expense {
   paymentMethod: 'efectivo_usd' | 'efectivo_bs' | 'pago_movil' | 'debito' | 'transferencia' | 'credito';
   bankAccountId?: string;
   bankAccountLabel?: string;
+  treasuryAccountId?: string;
+  bankFeeAmount?: number;
+  bankFeeCurrency?: TreasuryCurrency;
   excludeFromLibroCompras?: boolean;
   accountingType?: 'operating_expense' | 'owner_salary' | 'owner_withdrawal';
   dueDate?: string;
@@ -318,6 +326,9 @@ export interface Abono {
   paymentMethod: PaymentMethod;
   bankAccountId?: string;
   bankAccountLabel?: string;
+  treasuryAccountId?: string;
+  bankFeeAmount?: number;
+  bankFeeCurrency?: TreasuryCurrency;
   reference?: string;
   notes?: string;
 }
@@ -429,6 +440,7 @@ export interface CuentaPorPagar {
 export type GastoOperativoCategory = 
   | 'Sueldo Propietario / Nómina'
   | 'Retiro Personal / Adelanto Dueño'
+  | 'Comisión Bancaria'
   | 'Alquiler' 
   | 'Servicios' 
   | 'Nómina' 
@@ -467,6 +479,9 @@ export interface GastoOperativo {
   paymentMethod?: PaymentMethod;
   bankAccountId?: string;
   bankAccountLabel?: string;
+  treasuryAccountId?: string;
+  bankFeeAmount?: number;
+  bankFeeCurrency?: TreasuryCurrency;
   reference?: string;
   notes?: string;
 }
@@ -630,6 +645,10 @@ export interface LoanAbono {
   bcvRate: number;
   enteredCurrency?: 'USD' | 'Bs';
   paymentMethod: PaymentMethod | 'externo_dueno';
+  bankAccountId?: string;
+  bankAccountLabel?: string;
+  bankFeeAmount?: number;
+  bankFeeCurrency?: TreasuryCurrency;
   reference?: string;
   notes?: string;
 }
@@ -658,4 +677,65 @@ export interface Loan {
   notes?: string;
   abonos: LoanAbono[];
   createdAt: string;
+}
+
+export type TreasuryAccountType = 'cash_usd' | 'cash_bs' | 'bank';
+export type TreasuryCurrency = 'USD' | 'Bs';
+
+export interface TreasuryAccount {
+  id: string;
+  name: string;
+  bankName?: string;
+  accountNumber?: string;
+  alias?: string;
+  accountType: TreasuryAccountType;
+  currency: TreasuryCurrency;
+  balance: number;
+  initialBalance: number;
+  isSystemCash?: boolean;
+  isDefault?: boolean;
+  isActive?: boolean;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TreasuryMovementType =
+  | 'venta'
+  | 'abono_fiado'
+  | 'compra'
+  | 'pago_proveedor'
+  | 'gasto_operativo'
+  | 'comision_bancaria'
+  | 'sueldo'
+  | 'retiro_personal'
+  | 'prestamo'
+  | 'transferencia'
+  | 'ajuste_inicial'
+  | 'nota_credito'
+  | 'anulacion';
+
+export interface TreasuryMovement {
+  id: string;
+  date: string;
+  accountId: string;
+  accountName: string;
+  accountCurrency: TreasuryCurrency;
+  direction: 'in' | 'out';
+  amount: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  bcvRate: number;
+  type: TreasuryMovementType;
+  concept: string;
+  reference?: string;
+  paymentMethod?: string;
+  linkedEntityType?: string;
+  linkedEntityId?: string;
+  transferPairId?: string;
+  counterpartyAccountId?: string;
+  counterpartyAccountName?: string;
+  exchangeRateUsed?: number;
+  notes?: string;
+  createdBy?: string;
 }

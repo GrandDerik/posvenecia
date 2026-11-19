@@ -357,6 +357,59 @@
         "createdAt": { "type": "string", "maxLength": 100 }
       },
       "required": ["id", "lenderName", "grantDate", "dueDate", "enteredCurrency", "originalAmountUSD", "originalAmountBs", "cashDestination", "status", "createdAt"]
+    },
+    "TreasuryAccount": {
+      "title": "TreasuryAccount",
+      "description": "Live treasury cash or bank account balance in native currency (USD or Bs)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "bankName": { "type": "string", "maxLength": 200 },
+        "accountNumber": { "type": "string", "maxLength": 100 },
+        "alias": { "type": "string", "maxLength": 120 },
+        "accountType": { "type": "string", "maxLength": 30 },
+        "currency": { "type": "string", "maxLength": 10 },
+        "balance": { "type": "number" },
+        "initialBalance": { "type": "number" },
+        "isSystemCash": { "type": "boolean" },
+        "isDefault": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 100 },
+        "updatedAt": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "name", "accountType", "currency", "balance", "initialBalance", "createdAt", "updatedAt"]
+    },
+    "TreasuryMovement": {
+      "title": "TreasuryMovement",
+      "description": "Immutable treasury audit ledger entry with running balance before and after",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 100 },
+        "accountId": { "type": "string", "maxLength": 128 },
+        "accountName": { "type": "string", "maxLength": 200 },
+        "accountCurrency": { "type": "string", "maxLength": 10 },
+        "direction": { "type": "string", "maxLength": 10 },
+        "amount": { "type": "number" },
+        "balanceBefore": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "bcvRate": { "type": "number" },
+        "type": { "type": "string", "maxLength": 50 },
+        "concept": { "type": "string", "maxLength": 300 },
+        "reference": { "type": "string", "maxLength": 150 },
+        "paymentMethod": { "type": "string", "maxLength": 50 },
+        "linkedEntityType": { "type": "string", "maxLength": 50 },
+        "linkedEntityId": { "type": "string", "maxLength": 128 },
+        "transferPairId": { "type": "string", "maxLength": 128 },
+        "counterpartyAccountId": { "type": "string", "maxLength": 128 },
+        "counterpartyAccountName": { "type": "string", "maxLength": 200 },
+        "exchangeRateUsed": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "createdBy": { "type": "string", "maxLength": 120 }
+      },
+      "required": ["id", "date", "accountId", "accountName", "accountCurrency", "direction", "amount", "balanceBefore", "balanceAfter", "bcvRate", "type", "concept"]
     }
   },
   "firestore": {
@@ -419,6 +472,14 @@
     "/users/{userId}/loans/{loanId}": {
       "schema": { "$ref": "Loan" },
       "description": "Credits and loans payable with cash register destination tracking"
+    },
+    "/users/{userId}/bankAccounts/{accountId}": {
+      "schema": { "$ref": "TreasuryAccount" },
+      "description": "Live treasury cash and bank account balances in native currency"
+    },
+    "/users/{userId}/treasuryMovements/{movementId}": {
+      "schema": { "$ref": "TreasuryMovement" },
+      "description": "Immutable treasury audit ledger with running balance before and after"
     }
   }
 }

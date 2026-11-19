@@ -14,9 +14,15 @@ import {
 } from 'lucide-react';
 import { FiadoRecord, PaymentMethod } from '../types';
 import { formatBs, formatUSD, round2, safeDiv } from '../utils/exportUtils';
+import { isBankPaymentMethod } from '../utils/accountingUtils';
+import {
+  TreasuryAccountSelector,
+  getDefaultBankAccount,
+  formatTreasuryAccountLabel
+} from './TreasuryAccountSelector';
 
 export const FiadosView: React.FC = () => {
-  const { fiados, addAbonoToFiado, createManualFiado, bcvRate, businessInfo } = useApp();
+  const { fiados, addAbonoToFiado, createManualFiado, bcvRate, businessInfo, treasuryAccounts } = useApp();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'todos' | 'pendiente' | 'parcial' | 'saldado'>('todos');
@@ -26,6 +32,8 @@ export const FiadosView: React.FC = () => {
   const [abonoCurrency, setAbonoCurrency] = useState<'USD' | 'Bs'>('USD');
   const [abonoAmountInput, setAbonoAmountInput] = useState('');
   const [abonoMethod, setAbonoMethod] = useState<PaymentMethod>('pago_movil');
+  const [abonoBankAccountId, setAbonoBankAccountId] = useState('');
+  const [abonoBankAccountLabel, setAbonoBankAccountLabel] = useState('');
   const [abonoRef, setAbonoRef] = useState('');
   const [abonoNotes, setAbonoNotes] = useState('');
   const [abonoError, setAbonoError] = useState<string | null>(null);
@@ -81,6 +89,9 @@ export const FiadosView: React.FC = () => {
     setAbonoCurrency('USD');
     setAbonoAmountInput(f.remainingDebtUSD.toFixed(2));
     setAbonoMethod('pago_movil');
+    const defBank = getDefaultBankAccount(treasuryAccounts);
+    setAbonoBankAccountId(defBank?.id || '');
+    setAbonoBankAccountLabel(defBank ? formatTreasuryAccountLabel(defBank) : '');
     setAbonoRef('');
     setAbonoNotes('Abono a cuenta');
     setAbonoError(null);
@@ -96,10 +107,27 @@ export const FiadosView: React.FC = () => {
     const amountUSD = abonoCurrency === 'USD' ? round2(rawVal) : round2(safeDiv(rawVal, bcvRate));
     if (amountUSD <= 0) return;
 
+    const usesBank = isBankPaymentMethod(abonoMethod);
+    const chosenBank = usesBank
+      ? (treasuryAccounts.find((a) => a.id === abonoBankAccountId) || getDefaultBankAccount(treasuryAccounts))
+      : undefined;
+
     setIsSubmittingAbono(true);
     setAbonoError(null);
     try {
-      await addAbonoToFiado(selectedFiadoForAbono.id, amountUSD, abonoMethod, abonoRef, abonoNotes);
+      await addAbonoToFiado(
+        selectedFiadoForAbono.id,
+        amountUSD,
+        abonoMethod,
+        abonoRef,
+        abonoNotes,
+        usesBank && chosenBank
+          ? {
+              bankAccountId: chosenBank.id,
+              bankAccountLabel: abonoBankAccountLabel || formatTreasuryAccountLabel(chosenBank)
+            }
+          : undefined
+      );
       setSelectedFiadoForAbono(null);
     } catch (err: any) {
       setAbonoError(err?.message || 'No se pudo registrar el abono en Cloud Firestore.');
@@ -489,9 +517,32 @@ Para cancelar mediante Pago Móvil:
                   <option value="pago_movil">Pago Móvil</option>
                   <option value="efectivo_usd">Efectivo USD (Divisas)</option>
                   <option value="efectivo_bs">Efectivo Bolívares</option>
-                  <option value="debito">Punto de Débito / Transferencia</option>
+                  <option value="debito">Punto de Débito</option>
+                  <option value="transferencia">Transferencia Bancaria</option>
                 </select>
               </div>
+
+              <TreasuryAccountSelector
+                paymentMethod={abonoMethod}
+                treasuryAccounts={treasuryAccounts}
+                selectedBankAccountId={abonoBankAccountId}
+                onSelectBankAccount={(id, label) => {
+                  setAbonoBankAccountId(id);
+                  if (label) setAbonoBankAccountLabel(label);
+                }}
+                amountUSD={
+                  abonoCurrency === 'USD'
+                    ? round2(parseFloat(abonoAmountInput) || 0)
+                    : round2(safeDiv(parseFloat(abonoAmountInput) || 0, bcvRate))
+                }
+                amountBs={
+                  abonoCurrency === 'Bs'
+                    ? round2(parseFloat(abonoAmountInput) || 0)
+                    : round2((parseFloat(abonoAmountInput) || 0) * bcvRate)
+                }
+                mode="inflow"
+                compact
+              />
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">

@@ -24,6 +24,13 @@ import {
 } from 'lucide-react';
 import { formatUSD, formatBs, getLocalDateStr, round2, safeDiv } from '../utils/exportUtils';
 import { Loan, LoanCashDestination, LoanStatus, PaymentMethod } from '../types';
+import { isBankPaymentMethod } from '../utils/accountingUtils';
+import {
+  TreasuryAccountSelector,
+  getActiveBankAccounts,
+  getDefaultBankAccount,
+  formatTreasuryAccountLabel
+} from './TreasuryAccountSelector';
 
 interface LoansSubTabProps {
   openCreateSignal: number;
@@ -64,6 +71,7 @@ export const LoansSubTab: React.FC<LoansSubTabProps> = ({ openCreateSignal }) =>
     addAbonoToLoan,
     bcvRate,
     businessInfo,
+    treasuryAccounts,
     isCashRegisterOpen,
     setIsAperturaModalOpen
   } = useApp();
@@ -107,28 +115,35 @@ export const LoansSubTab: React.FC<LoansSubTabProps> = ({ openCreateSignal }) =>
   const [abonoCurrency, setAbonoCurrency] = useState<'USD' | 'Bs'>('USD');
   const [abonoAmountInput, setAbonoAmountInput] = useState('');
   const [abonoMethod, setAbonoMethod] = useState<PaymentMethod | 'externo_dueno'>('transferencia');
+  const [abonoBankAccountId, setAbonoBankAccountId] = useState('');
+  const [abonoBankAccountLabel, setAbonoBankAccountLabel] = useState('');
+  const [abonoBankFeeInput, setAbonoBankFeeInput] = useState('');
   const [abonoRef, setAbonoRef] = useState('');
   const [abonoNotes, setAbonoNotes] = useState('');
   const [abonoError, setAbonoError] = useState<string | null>(null);
   const [isSubmittingAbono, setIsSubmittingAbono] = useState(false);
 
-  // Bank/PM options from businessInfo
+  // Bank/PM options prioritizing live Tesorería bank accounts
   const bankAndPmOptions = useMemo(() => {
-    const list: Array<{ id: string; label: string }> = [];
-    (businessInfo.bankAccounts || []).forEach(b => {
-      list.push({
+    const liveBanks = getActiveBankAccounts(treasuryAccounts);
+    if (liveBanks.length > 0) {
+      return liveBanks.map((b) => ({
         id: b.id,
-        label: `Banco: ${b.bank} (${b.accountNumber.slice(-4) || b.holderName})`
-      });
+        label: formatTreasuryAccountLabel(b),
+        displayLabel: `${formatTreasuryAccountLabel(b)} — Saldo: ${b.currency === 'USD' ? `$${formatUSD(b.balance)}` : `Bs. ${formatBs(b.balance)}`}`
+      }));
+    }
+    const list: Array<{ id: string; label: string; displayLabel: string }> = [];
+    (businessInfo.bankAccounts || []).forEach(b => {
+      const lbl = `Banco: ${b.bank} (${b.accountNumber.slice(-4) || b.holderName})`;
+      list.push({ id: b.id, label: lbl, displayLabel: lbl });
     });
     (businessInfo.pagoMovilAccounts || []).forEach(pm => {
-      list.push({
-        id: pm.id,
-        label: `Pago Móvil: ${pm.bank} (${pm.phone})`
-      });
+      const lbl = `Pago Móvil: ${pm.bank} (${pm.phone})`;
+      list.push({ id: pm.id, label: lbl, displayLabel: lbl });
     });
     return list;
-  }, [businessInfo.bankAccounts, businessInfo.pagoMovilAccounts]);
+  }, [treasuryAccounts, businessInfo.bankAccounts, businessInfo.pagoMovilAccounts]);
 
   const todayYMD = getLocalDateStr();
 
@@ -227,6 +242,11 @@ export const LoansSubTab: React.FC<LoansSubTabProps> = ({ openCreateSignal }) =>
             ? 'efectivo_bs'
             : 'transferencia'
     );
+    const matchingLoanBank = treasuryAccounts.find((a) => a.accountType === 'bank' && a.id === loan.bankAccountId);
+    const defaultBank = matchingLoanBank || getDefaultBankAccount(treasuryAccounts);
+    setAbonoBankAccountId(defaultBank?.id || '');
+    setAbonoBankAccountLabel(defaultBank ? formatTreasuryAccountLabel(defaultBank) : '');
+    setAbonoBankFeeInput('');
     setAbonoRef('');
     setAbonoNotes('');
     setAbonoError(null);
@@ -422,6 +442,12 @@ export const LoansSubTab: React.FC<LoansSubTabProps> = ({ openCreateSignal }) =>
       return;
     }
 
+    const isBankMethod = abonoMethod !== 'externo_dueno' && isBankPaymentMethod(abonoMethod);
+    const chosenBank = isBankMethod
+      ? (treasuryAccounts.find((a) => a.id === abonoBankAccountId) || getDefaultBankAccount(treasuryAccounts))
+      : undefined;
+    const parsedBankFee = isBankMethod ? round2(Math.max(0, parseFloat(abonoBankFeeInput) || 0)) : 0;
+
     setIsSubmittingAbono(true);
     setAbonoError(null);
     try {
@@ -431,7 +457,10 @@ export const LoansSubTab: React.FC<LoansSubTabProps> = ({ openCreateSignal }) =>
         enteredCurrency: abonoCurrency,
         method: abonoMethod,
         reference: abonoRef.trim() || undefined,
-        notes: abonoNotes.trim() || undefined
+        notes: abonoNotes.trim() || undefined,
+        bankAccountId: chosenBank?.id,
+        bankAccountLabel: chosenBank ? (abonoBankAccountLabel || formatTreasuryAccountLabel(chosenBank)) : undefined,
+        bankFeeAmount: parsedBankFee > 0 ? parsedBankFee : undefined
       });
       setAbonoLoan(null);
     } catch (err: any) {
@@ -1120,7 +1149,7 @@ export const LoansSubTab: React.FC<LoansSubTabProps> = ({ openCreateSignal }) =>
                       <option value="">-- Seleccionar cuenta bancaria / Pago Móvil --</option>
                       {bankAndPmOptions.map((opt) => (
                         <option key={opt.id} value={opt.id}>
-                          {opt.label}
+                          {opt.displayLabel}
                         </option>
                       ))}
                     </select>
@@ -1306,6 +1335,33 @@ export const LoansSubTab: React.FC<LoansSubTabProps> = ({ openCreateSignal }) =>
                   <option value="externo_dueno">Pago Externo / Cuenta del Dueño (No afecta caja)</option>
                 </select>
               </div>
+
+              {abonoMethod !== 'externo_dueno' && (
+                <TreasuryAccountSelector
+                  paymentMethod={abonoMethod}
+                  treasuryAccounts={treasuryAccounts}
+                  selectedBankAccountId={abonoBankAccountId}
+                  onSelectBankAccount={(id, label) => {
+                    setAbonoBankAccountId(id);
+                    if (label) setAbonoBankAccountLabel(label);
+                  }}
+                  amountUSD={
+                    abonoCurrency === 'USD'
+                      ? round2(parseFloat(abonoAmountInput) || 0)
+                      : round2(safeDiv(parseFloat(abonoAmountInput) || 0, bcvRate, 0))
+                  }
+                  amountBs={
+                    abonoCurrency === 'Bs'
+                      ? round2(parseFloat(abonoAmountInput) || 0)
+                      : round2((parseFloat(abonoAmountInput) || 0) * bcvRate)
+                  }
+                  mode="outflow"
+                  showBankFee={true}
+                  bankFeeInput={abonoBankFeeInput}
+                  onChangeBankFeeInput={setAbonoBankFeeInput}
+                  compact
+                />
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>

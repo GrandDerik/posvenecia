@@ -14,6 +14,11 @@ import {
   HelpCircle
 } from 'lucide-react';
 import { formatBs, formatUSD, round2, safeDiv } from '../../utils/exportUtils';
+import {
+  getActiveBankAccounts,
+  getDefaultBankAccount,
+  formatTreasuryAccountLabel
+} from '../TreasuryAccountSelector';
 
 interface PagoCombinadoModalProps {
   isOpen: boolean;
@@ -27,14 +32,17 @@ interface PagoCombinadoModalProps {
     pagoMovil?: number;
     pagoMovilRef?: string;
     pagoMovilBank?: string;
+    pagoMovilBankAccountId?: string;
     pagoMovilPhone?: string;
     debito?: number;
     debitoRef?: string;
     debitoBank?: string;
+    debitoBankAccountId?: string;
     fiaoRemaining?: number;
     transferencia?: number;
     transferenciaRef?: string;
     transferenciaBank?: string;
+    transferenciaBankAccountId?: string;
     notes?: string;
   }) => void;
 }
@@ -47,7 +55,9 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
   bcvRate,
   onConfirm
 }) => {
-  const { businessInfo } = useApp();
+  const { businessInfo, treasuryAccounts } = useApp();
+  const liveBankAccounts = getActiveBankAccounts(treasuryAccounts);
+  const defaultLiveBankId = getDefaultBankAccount(treasuryAccounts)?.id || '';
 
   // Enabled methods checkboxes / toggles
   const [useUsdCash, setUseUsdCash] = useState<boolean>(true);
@@ -64,17 +74,20 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
   const [pagoMovil, setPagoMovil] = useState<string>('0');
   const [pagoMovilRef, setPagoMovilRef] = useState<string>('');
   const [pagoMovilBank, setPagoMovilBank] = useState<string>('Banesco');
+  const [pagoMovilBankAccountId, setPagoMovilBankAccountId] = useState<string>('');
   const [pagoMovilPhone, setPagoMovilPhone] = useState<string>('');
 
   const [debito, setDebito] = useState<string>('0');
   const [debitoRef, setDebitoRef] = useState<string>('');
   const [debitoBank] = useState<string>('Banesco');
+  const [debitoBankAccountId, setDebitoBankAccountId] = useState<string>('');
 
   const [fiaoRemaining, setFiaoRemaining] = useState<string>('0');
 
   const [transferencia, setTransferencia] = useState<string>('0');
   const [transferenciaRef, setTransferenciaRef] = useState<string>('');
   const [transferenciaBank, setTransferenciaBank] = useState<string>('Banesco');
+  const [transferenciaBankAccountId, setTransferenciaBankAccountId] = useState<string>('');
 
   const [notes] = useState<string>('');
 
@@ -128,20 +141,27 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
     e.preventDefault();
     if (!isComplete && remainingUSD > 0.05) return;
 
+    const resolvedPmBankId = pagoMovilBankAccountId || defaultLiveBankId || undefined;
+    const resolvedDebBankId = debitoBankAccountId || defaultLiveBankId || undefined;
+    const resolvedTrBankId = transferenciaBankAccountId || defaultLiveBankId || undefined;
+
     onConfirm({
       usdCash: useUsdCash ? numUsdCash : 0,
       bsCash: useBsCash ? numBsCash : 0,
       pagoMovil: usePagoMovil ? numPagoMovil : 0,
       pagoMovilRef: usePagoMovil ? pagoMovilRef.trim() : undefined,
       pagoMovilBank: usePagoMovil ? pagoMovilBank : undefined,
+      pagoMovilBankAccountId: usePagoMovil ? resolvedPmBankId : undefined,
       pagoMovilPhone: usePagoMovil ? pagoMovilPhone.trim() : undefined,
       debito: useDebito ? numDebito : 0,
       debitoRef: useDebito ? debitoRef.trim() : undefined,
       debitoBank: useDebito ? debitoBank : undefined,
+      debitoBankAccountId: useDebito ? resolvedDebBankId : undefined,
       fiaoRemaining: useFiado ? numFiado : 0,
       transferencia: useTransferencia ? numTransferencia : 0,
       transferenciaRef: useTransferencia ? transferenciaRef.trim() : undefined,
       transferenciaBank: useTransferencia ? transferenciaBank : undefined,
+      transferenciaBankAccountId: useTransferencia ? resolvedTrBankId : undefined,
       notes: notes.trim() || undefined
     });
   };
@@ -389,16 +409,32 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
-                    <span className="text-[10px] font-semibold text-slate-500 block mb-1">Banco Receptor:</span>
-                    <select
-                      value={pagoMovilBank}
-                      onChange={(e) => setPagoMovilBank(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs"
-                    >
-                      {VENEZUELAN_BANKS.map((b) => (
-                        <option key={b} value={b}>{b}</option>
-                      ))}
-                    </select>
+                    <span className="text-[10px] font-semibold text-slate-500 block mb-1">Cuenta Bancaria Destino (Tesorería):</span>
+                    {liveBankAccounts.length > 0 ? (
+                      <select
+                        value={pagoMovilBankAccountId || defaultLiveBankId}
+                        onChange={(e) => {
+                          setPagoMovilBankAccountId(e.target.value);
+                          const found = liveBankAccounts.find((b) => b.id === e.target.value);
+                          if (found) setPagoMovilBank(formatTreasuryAccountLabel(found));
+                        }}
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs"
+                      >
+                        {liveBankAccounts.map((b) => (
+                          <option key={b.id} value={b.id}>{formatTreasuryAccountLabel(b)}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        value={pagoMovilBank}
+                        onChange={(e) => setPagoMovilBank(e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs"
+                      >
+                        {VENEZUELAN_BANKS.map((b) => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
 
                   <div>
@@ -446,30 +482,47 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
             </div>
 
             {useDebito && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
-                <div>
-                  <span className="text-[10px] font-semibold text-slate-500 block mb-1">Monto en Punto Débito (Bs.):</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={debito}
-                    onChange={(e) => setDebito(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900"
-                  />
+              <div className="space-y-2 mt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <span className="text-[10px] font-semibold text-slate-500 block mb-1">Monto en Punto Débito (Bs.):</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={debito}
+                      onChange={(e) => setDebito(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] font-semibold text-slate-500 block mb-1">N° Aprobación POS:</span>
+                    <input
+                      type="text"
+                      value={debitoRef}
+                      onChange={(e) => setDebitoRef(e.target.value)}
+                      placeholder="Ej: 004128"
+                      className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono"
+                    />
+                  </div>
                 </div>
 
-                <div>
-                  <span className="text-[10px] font-semibold text-slate-500 block mb-1">N° Aprobación POS:</span>
-                  <input
-                    type="text"
-                    value={debitoRef}
-                    onChange={(e) => setDebitoRef(e.target.value)}
-                    placeholder="Ej: 004128"
-                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-mono"
-                  />
-                </div>
+                {liveBankAccounts.length > 0 && (
+                  <div>
+                    <span className="text-[10px] font-semibold text-slate-500 block mb-1">Cuenta Bancaria del Punto (Tesorería):</span>
+                    <select
+                      value={debitoBankAccountId || defaultLiveBankId}
+                      onChange={(e) => setDebitoBankAccountId(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs"
+                    >
+                      {liveBankAccounts.map((b) => (
+                        <option key={b.id} value={b.id}>{formatTreasuryAccountLabel(b)}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -532,24 +585,40 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
                 </div>
 
                 <div>
-                  <span className="text-[10px] font-semibold text-slate-500 block mb-1">Cuenta Bancaria Receptora:</span>
-                  <select
-                    value={transferenciaBank}
-                    onChange={(e) => setTransferenciaBank(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs"
-                  >
-                    {businessInfo.bankAccounts && businessInfo.bankAccounts.length > 0 ? (
-                      businessInfo.bankAccounts.map((b) => (
-                        <option key={b.id} value={`${b.bank} - ${b.accountNumber.slice(-4)}`}>
-                          {b.bank} (••• {b.accountNumber.slice(-4)})
-                        </option>
-                      ))
-                    ) : (
-                      VENEZUELAN_BANKS.map((b) => (
-                        <option key={b} value={b}>{b}</option>
-                      ))
-                    )}
-                  </select>
+                  <span className="text-[10px] font-semibold text-slate-500 block mb-1">Cuenta Bancaria Receptora (Tesorería):</span>
+                  {liveBankAccounts.length > 0 ? (
+                    <select
+                      value={transferenciaBankAccountId || defaultLiveBankId}
+                      onChange={(e) => {
+                        setTransferenciaBankAccountId(e.target.value);
+                        const found = liveBankAccounts.find((b) => b.id === e.target.value);
+                        if (found) setTransferenciaBank(formatTreasuryAccountLabel(found));
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs"
+                    >
+                      {liveBankAccounts.map((b) => (
+                        <option key={b.id} value={b.id}>{formatTreasuryAccountLabel(b)}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select
+                      value={transferenciaBank}
+                      onChange={(e) => setTransferenciaBank(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs"
+                    >
+                      {businessInfo.bankAccounts && businessInfo.bankAccounts.length > 0 ? (
+                        businessInfo.bankAccounts.map((b) => (
+                          <option key={b.id} value={`${b.bank} - ${b.accountNumber.slice(-4)}`}>
+                            {b.bank} (••• {b.accountNumber.slice(-4)})
+                          </option>
+                        ))
+                      ) : (
+                        VENEZUELAN_BANKS.map((b) => (
+                          <option key={b} value={b}>{b}</option>
+                        ))
+                      )}
+                    </select>
+                  )}
                 </div>
               </div>
             )}

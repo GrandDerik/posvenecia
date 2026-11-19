@@ -44,6 +44,12 @@ import {
   isOwnerSalaryCategory,
   isOwnerWithdrawalCategory
 } from '../utils/accountingUtils';
+import {
+  TreasuryAccountSelector,
+  getActiveBankAccounts,
+  getDefaultBankAccount,
+  formatTreasuryAccountLabel
+} from './TreasuryAccountSelector';
 
 export const CuentasPorPagarView: React.FC = () => {
   const { 
@@ -64,6 +70,7 @@ export const CuentasPorPagarView: React.FC = () => {
     loans,
     bcvRate,
     businessInfo,
+    treasuryAccounts,
     isCashRegisterOpen,
     setIsAperturaModalOpen
   } = useApp();
@@ -136,6 +143,9 @@ export const CuentasPorPagarView: React.FC = () => {
   // Abono Cuenta Por Pagar Form
   const [abonoAmountUSD, setAbonoAmountUSD] = useState('');
   const [abonoMethod, setAbonoMethod] = useState<PaymentMethod>('transferencia');
+  const [abonoBankAccountId, setAbonoBankAccountId] = useState('');
+  const [abonoBankAccountLabel, setAbonoBankAccountLabel] = useState('');
+  const [abonoBankFeeInput, setAbonoBankFeeInput] = useState('');
   const [abonoRef, setAbonoRef] = useState('');
   const [abonoNotes, setAbonoNotes] = useState('');
   const [abonoError, setAbonoError] = useState<string | null>(null);
@@ -168,6 +178,7 @@ export const CuentasPorPagarView: React.FC = () => {
   const [gastoInitialStatus, setGastoInitialStatus] = useState<'pendiente' | 'pagado'>('pendiente');
   const [gastoPayMethod, setGastoPayMethod] = useState<PaymentMethod>('pago_movil');
   const [gastoBankAccountId, setGastoBankAccountId] = useState('');
+  const [gastoBankFeeInput, setGastoBankFeeInput] = useState('');
   const [gastoPayRef, setGastoPayRef] = useState('');
   const [gastoNotes, setGastoNotes] = useState('');
 
@@ -177,30 +188,41 @@ export const CuentasPorPagarView: React.FC = () => {
   const [pagarAmountBs, setPagarAmountBs] = useState('');
   const [pagarMethod, setPagarMethod] = useState<PaymentMethod>('pago_movil');
   const [pagarBankAccountId, setPagarBankAccountId] = useState('');
+  const [pagarBankFeeInput, setPagarBankFeeInput] = useState('');
   const [pagarRef, setPagarRef] = useState('');
   const [pagarNotes, setPagarNotes] = useState('');
 
-  // Configured bank accounts from business profile for exact bank traceability
+  // Configured bank accounts prioritizing live Tesorería bank accounts
   const availableBankOptions = (() => {
+    const liveBanks = getActiveBankAccounts(treasuryAccounts);
+    if (liveBanks.length > 0) {
+      return liveBanks.map((bk) => ({
+        id: bk.id,
+        label: formatTreasuryAccountLabel(bk),
+        currency: bk.currency
+      }));
+    }
     const accounts = businessInfo.bankAccounts || [];
     if (accounts.length > 0) {
       return accounts.map((bk) => ({
         id: bk.id,
-        label: `${bk.bank} (••••${bk.accountNumber.slice(-4)})`
+        label: `${bk.bank} (••••${bk.accountNumber.slice(-4)})`,
+        currency: 'Bs' as const
       }));
     }
     if (businessInfo.pagoMovilBank) {
       return [
         {
           id: 'default-pm',
-          label: `${businessInfo.pagoMovilBank} (Pago Móvil)`
+          label: `${businessInfo.pagoMovilBank} (Pago Móvil)`,
+          currency: 'Bs' as const
         }
       ];
     }
-    return [] as { id: string; label: string }[];
+    return [] as { id: string; label: string; currency: 'USD' | 'Bs' }[];
   })();
 
-  const defaultBankId = availableBankOptions[0]?.id || '';
+  const defaultBankId = getDefaultBankAccount(treasuryAccounts)?.id || availableBankOptions[0]?.id || '';
 
   const getBankLabelById = (bankId?: string): string | undefined => {
     if (!bankId) return undefined;
@@ -442,6 +464,7 @@ export const CuentasPorPagarView: React.FC = () => {
     setGastoInitialStatus(isOwnerDisbursement ? 'pagado' : 'pendiente');
     setGastoPayMethod(isOwnerDisbursement ? 'efectivo_usd' : 'pago_movil');
     setGastoBankAccountId(defaultBankId);
+    setGastoBankFeeInput('');
     setGastoPayRef('');
     setGastoNotes('');
     setIsAddGastoModalOpen(true);
@@ -467,6 +490,7 @@ export const CuentasPorPagarView: React.FC = () => {
     setGastoInitialStatus(g.status === 'pagado' ? 'pagado' : 'pendiente');
     setGastoPayMethod(g.paymentMethod || 'pago_movil');
     setGastoBankAccountId(g.bankAccountId || defaultBankId);
+    setGastoBankFeeInput(g.bankFeeAmount && g.bankFeeAmount > 0 ? g.bankFeeAmount.toFixed(2) : '');
     setGastoPayRef(g.reference || '');
     setGastoNotes(g.notes || '');
     setIsAddGastoModalOpen(true);
@@ -592,6 +616,12 @@ export const CuentasPorPagarView: React.FC = () => {
       return;
     }
 
+    const usesBank = isBankPaymentMethod(abonoMethod);
+    const chosenBank = usesBank
+      ? (treasuryAccounts.find((a) => a.id === abonoBankAccountId) || getDefaultBankAccount(treasuryAccounts))
+      : undefined;
+    const parsedBankFee = usesBank ? round2(Math.max(0, parseFloat(abonoBankFeeInput) || 0)) : 0;
+
     setIsSubmittingAbono(true);
     setAbonoError(null);
     try {
@@ -600,12 +630,19 @@ export const CuentasPorPagarView: React.FC = () => {
         amount,
         abonoMethod,
         abonoRef.trim() || undefined,
-        abonoNotes.trim() || undefined
+        abonoNotes.trim() || undefined,
+        {
+          bankAccountId: chosenBank?.id,
+          bankAccountLabel: chosenBank ? (abonoBankAccountLabel || formatTreasuryAccountLabel(chosenBank)) : undefined,
+          enteredCurrency: 'USD',
+          bankFeeAmount: parsedBankFee > 0 ? parsedBankFee : undefined
+        }
       );
 
       setIsAbonoModalOpen(false);
       setCuentaForAbono(null);
       setAbonoAmountUSD('');
+      setAbonoBankFeeInput('');
       setAbonoRef('');
       setAbonoNotes('');
     } catch (err: any) {
@@ -668,6 +705,17 @@ export const CuentasPorPagarView: React.FC = () => {
         return;
       }
 
+      const chosenBankObj = usesBank ? treasuryAccounts.find((a) => a.id === chosenBankId) : undefined;
+      const parsedGastoBankFee = usesBank ? round2(Math.max(0, parseFloat(gastoBankFeeInput) || 0)) : 0;
+      const resolvedTreasuryId =
+        gastoInitialStatus !== 'pagado'
+          ? undefined
+          : gastoPayMethod === 'efectivo_usd'
+            ? 'cash_usd'
+            : gastoPayMethod === 'efectivo_bs'
+              ? 'cash_bs'
+              : chosenBankId;
+
       addGastoOperativo({
         concept: gastoConcept.trim(),
         category: gastoCategory,
@@ -689,6 +737,9 @@ export const CuentasPorPagarView: React.FC = () => {
         paymentMethod: gastoInitialStatus === 'pagado' ? gastoPayMethod : undefined,
         bankAccountId: chosenBankId,
         bankAccountLabel: chosenBankLabel,
+        treasuryAccountId: resolvedTreasuryId,
+        bankFeeAmount: parsedGastoBankFee > 0 ? parsedGastoBankFee : undefined,
+        bankFeeCurrency: parsedGastoBankFee > 0 ? (chosenBankObj?.currency || 'Bs') : undefined,
         reference: gastoInitialStatus === 'pagado' ? gastoPayRef.trim() || undefined : undefined,
         notes: gastoNotes.trim() || undefined
       });
@@ -707,6 +758,7 @@ export const CuentasPorPagarView: React.FC = () => {
     setPagarAmountBs(round2(remaining * bcvRate).toFixed(2));
     setPagarMethod(defaultCurr === 'Bs' ? 'pago_movil' : 'efectivo_usd');
     setPagarBankAccountId(gasto.bankAccountId || defaultBankId);
+    setPagarBankFeeInput('');
     setPagarRef('');
     setPagarNotes('');
     setPagarGastoError(null);
@@ -739,6 +791,7 @@ export const CuentasPorPagarView: React.FC = () => {
     const usesBank = isBankPaymentMethod(pagarMethod);
     const chosenBankId = usesBank ? (pagarBankAccountId || defaultBankId || undefined) : undefined;
     const chosenBankLabel = usesBank ? getBankLabelById(chosenBankId) : undefined;
+    const parsedPagarBankFee = usesBank ? round2(Math.max(0, parseFloat(pagarBankFeeInput) || 0)) : 0;
 
     setIsSubmittingPagarGasto(true);
     setPagarGastoError(null);
@@ -753,7 +806,8 @@ export const CuentasPorPagarView: React.FC = () => {
           bankAccountId: chosenBankId,
           bankAccountLabel: chosenBankLabel,
           enteredCurrency: pagarCurrencyInput,
-          exactAmountBs: exactBs
+          exactAmountBs: exactBs,
+          bankFeeAmount: parsedPagarBankFee > 0 ? parsedPagarBankFee : undefined
         }
       );
 
@@ -761,6 +815,7 @@ export const CuentasPorPagarView: React.FC = () => {
       setGastoForPagar(null);
       setPagarAmountUSD('');
       setPagarAmountBs('');
+      setPagarBankFeeInput('');
       setPagarRef('');
       setPagarNotes('');
     } catch (err: any) {
@@ -1575,6 +1630,10 @@ export const CuentasPorPagarView: React.FC = () => {
                           onClick={() => {
                             setCuentaForAbono(cuenta);
                             setAbonoAmountUSD(cuenta.remainingUSD.toString());
+                            const defBank = getDefaultBankAccount(treasuryAccounts);
+                            setAbonoBankAccountId(defBank?.id || '');
+                            setAbonoBankAccountLabel(defBank ? formatTreasuryAccountLabel(defBank) : '');
+                            setAbonoBankFeeInput('');
                             setAbonoError(null);
                             setIsSubmittingAbono(false);
                             setIsAbonoModalOpen(true);
@@ -2005,24 +2064,19 @@ export const CuentasPorPagarView: React.FC = () => {
                         </div>
                       </div>
 
-                      {isBankPaymentMethod(gastoPayMethod) && availableBankOptions.length > 0 && (
-                        <div>
-                          <label className="block text-[11px] font-bold text-emerald-900 mb-0.5">
-                            Cuenta Bancaria de Origen (se descuenta al cierre)
-                          </label>
-                          <select
-                            value={gastoBankAccountId}
-                            onChange={(e) => setGastoBankAccountId(e.target.value)}
-                            className="w-full px-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-semibold focus:outline-none"
-                          >
-                            {availableBankOptions.map((bk) => (
-                              <option key={bk.id} value={bk.id}>
-                                {bk.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
+                      <TreasuryAccountSelector
+                        paymentMethod={gastoPayMethod}
+                        treasuryAccounts={treasuryAccounts}
+                        selectedBankAccountId={gastoBankAccountId}
+                        onSelectBankAccount={(id) => setGastoBankAccountId(id)}
+                        amountUSD={round2(parseFloat(gastoAmountUSD) || 0)}
+                        amountBs={round2(parseFloat(gastoAmountBs) || 0)}
+                        mode="outflow"
+                        showBankFee={true}
+                        bankFeeInput={gastoBankFeeInput}
+                        onChangeBankFeeInput={setGastoBankFeeInput}
+                        compact
+                      />
                     </div>
                   )}
                 </>
@@ -2225,24 +2279,19 @@ export const CuentasPorPagarView: React.FC = () => {
                   </select>
                 </div>
 
-                {isBankPaymentMethod(pagarMethod) && availableBankOptions.length > 0 && (
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Cuenta Bancaria de Origen *
-                    </label>
-                    <select
-                      value={pagarBankAccountId}
-                      onChange={(e) => setPagarBankAccountId(e.target.value)}
-                      className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-semibold text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
-                    >
-                      {availableBankOptions.map((bk) => (
-                        <option key={bk.id} value={bk.id}>
-                          {bk.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                <TreasuryAccountSelector
+                  paymentMethod={pagarMethod}
+                  treasuryAccounts={treasuryAccounts}
+                  selectedBankAccountId={pagarBankAccountId}
+                  onSelectBankAccount={(id) => setPagarBankAccountId(id)}
+                  amountUSD={enteredAmountUSD}
+                  amountBs={enteredAmountBs}
+                  mode="outflow"
+                  showBankFee={true}
+                  bankFeeInput={pagarBankFeeInput}
+                  onChangeBankFeeInput={setPagarBankFeeInput}
+                  compact
+                />
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Número de Referencia / Comprobante</label>
@@ -2816,6 +2865,23 @@ export const CuentasPorPagarView: React.FC = () => {
                   <option value="debito">Tarjeta de Débito</option>
                 </select>
               </div>
+
+              <TreasuryAccountSelector
+                paymentMethod={abonoMethod}
+                treasuryAccounts={treasuryAccounts}
+                selectedBankAccountId={abonoBankAccountId}
+                onSelectBankAccount={(id, label) => {
+                  setAbonoBankAccountId(id);
+                  if (label) setAbonoBankAccountLabel(label);
+                }}
+                amountUSD={round2(parseFloat(abonoAmountUSD) || 0)}
+                amountBs={round2((parseFloat(abonoAmountUSD) || 0) * bcvRate)}
+                mode="outflow"
+                showBankFee={true}
+                bankFeeInput={abonoBankFeeInput}
+                onChangeBankFeeInput={setAbonoBankFeeInput}
+                compact
+              />
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Número de Referencia / Comprobante</label>

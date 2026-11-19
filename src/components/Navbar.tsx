@@ -15,7 +15,8 @@ import {
   Sparkles,
   WifiOff,
   LogOut,
-  Cloud
+  Cloud,
+  Landmark
 } from 'lucide-react';
 import { formatBs } from '../utils/exportUtils';
 import { GoogleSyncModal } from './Modals/GoogleSyncModal';
@@ -102,7 +103,7 @@ export const Navbar: React.FC = () => {
   };
 
   interface NavItem {
-    id: 'inicio' | 'tasa' | 'vender' | 'productos' | 'clientes' | 'fiados' | 'cuentas_por_pagar' | 'contabilidad';
+    id: 'inicio' | 'tasa' | 'vender' | 'productos' | 'clientes' | 'fiados' | 'cuentas_por_pagar' | 'tesoreria' | 'contabilidad';
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: number;
@@ -117,6 +118,7 @@ export const Navbar: React.FC = () => {
     { id: 'clientes', label: 'Clientes', icon: UserCheck },
     { id: 'fiados', label: 'Fiados', icon: Users, badge: activeFiadosCount > 0 ? activeFiadosCount : undefined },
     { id: 'cuentas_por_pagar', label: 'Por Pagar', icon: CreditCard, badge: activeCuentasPorPagarCount > 0 ? activeCuentasPorPagarCount : undefined },
+    { id: 'tesoreria', label: 'Tesorería', icon: Landmark },
     { id: 'contabilidad', label: 'Contabilidad', icon: FileSpreadsheet, seniat: true },
   ];
 
