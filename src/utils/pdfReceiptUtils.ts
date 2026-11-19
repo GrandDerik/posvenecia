@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Sale, Expense, BusinessInfo, CashShift, CreditNote, Abono, Loan } from '../types';
 import { formatBs, formatUSD, getLocalDateStr, round2, safeDiv, isCartItemExempt } from './exportUtils';
+import { isExpenseOwnerSalary, isExpenseOwnerWithdrawal } from './accountingUtils';
 
 type JsPDFWithAutoTable = jsPDF & {
   lastAutoTable?: { finalY?: number };
@@ -533,9 +534,15 @@ export const generateComprobanteCierrePDF = (
   const totalSalesUSD = sales.reduce((a, s) => a + s.totalUSD, 0);
   const totalSalesBs = sales.reduce((a, s) => a + s.totalBs, 0);
 
-  // Gastos
+  // Gastos + Sueldo Propietario + Retiros Personales
   const totalExpUSD = expenses.reduce((a, e) => a + e.amountUSD, 0);
   const totalExpBs = expenses.reduce((a, e) => a + e.amountBs, 0);
+  const ownerSalaryExps = expenses.filter(isExpenseOwnerSalary);
+  const ownerWithdrawalExps = expenses.filter(isExpenseOwnerWithdrawal);
+  const ownerSalaryUSD = shift.totalOwnerSalaryUSD ?? ownerSalaryExps.reduce((a, e) => a + e.amountUSD, 0);
+  const ownerSalaryBs = shift.totalOwnerSalaryBs ?? ownerSalaryExps.reduce((a, e) => a + e.amountBs, 0);
+  const ownerWithdrawalsUSD = shift.totalOwnerWithdrawalsUSD ?? ownerWithdrawalExps.reduce((a, e) => a + e.amountUSD, 0);
+  const ownerWithdrawalsBs = shift.totalOwnerWithdrawalsBs ?? ownerWithdrawalExps.reduce((a, e) => a + e.amountBs, 0);
 
   // Arqueo Data
   const expectedUSD = shift.expectedCashUSD ?? (shift.initialCashUSD + cashUSDSales - totalExpUSD);
@@ -566,6 +573,12 @@ export const generateComprobanteCierrePDF = (
       ['Otros / Combinados', sales.filter(s => !['efectivo_usd', 'efectivo_bs', 'pago_movil', 'debito', 'fiao'].includes(s.paymentMethod)).length.toString(), `$ ${formatUSD(sales.filter(s => !['efectivo_usd', 'efectivo_bs', 'pago_movil', 'debito', 'fiao'].includes(s.paymentMethod)).reduce((a, s) => a + s.totalUSD, 0))}`, `Bs. ${formatBs(sales.filter(s => !['efectivo_usd', 'efectivo_bs', 'pago_movil', 'debito', 'fiao'].includes(s.paymentMethod)).reduce((a, s) => a + s.totalBs, 0))}`],
       ['TOTAL VENTAS BRUTAS', sales.length.toString(), `$ ${formatUSD(totalSalesUSD)}`, `Bs. ${formatBs(totalSalesBs)}`],
       ['EGRESOS Y GASTOS DEL TURNO', expenses.length.toString(), `-$ ${formatUSD(totalExpUSD)}`, `-Bs. ${formatBs(totalExpBs)}`],
+      ...(ownerSalaryUSD > 0 || ownerSalaryBs > 0
+        ? [['  • Sueldo Propietario / Nómina (sin SENIAT)', ownerSalaryExps.length.toString(), `-$ ${formatUSD(ownerSalaryUSD)}`, `-Bs. ${formatBs(ownerSalaryBs)}`]]
+        : []),
+      ...(ownerWithdrawalsUSD > 0 || ownerWithdrawalsBs > 0
+        ? [['  • Retiros Personales / Dueño (fuera de costos)', ownerWithdrawalExps.length.toString(), `-$ ${formatUSD(ownerWithdrawalsUSD)}`, `-Bs. ${formatBs(ownerWithdrawalsBs)}`]]
+        : []),
     ],
     margin: { left: 14, right: 14 },
   });
@@ -596,9 +609,46 @@ export const generateComprobanteCierrePDF = (
     margin: { left: 14, right: 14 },
   });
 
-  y = getLastAutoTableY(doc, y) + 8;
+  y = getLastAutoTableY(doc, y) + 6;
 
-  // Notes & observations
+  // Bank Accounts Summary if available
+  if (shift.initialBanks && shift.initialBanks.length > 0) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('3. Resumen de Cuentas Bancarias del Turno', 14, y);
+    y += 3;
+
+    autoTable(doc, {
+      startY: y,
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.8 },
+      bodyStyles: { fontSize: 7.8 },
+      head: [['Banco', 'Cuenta', 'Inicial Bs', 'Egresos Bs', 'Esperado Bs', 'Contado Bs']],
+      body: shift.initialBanks.map(b => [
+        b.bankName,
+        b.accountNumber,
+        `Bs. ${formatBs(b.initialBalanceBs)}`,
+        `Bs. ${formatBs(b.outflowsBs || 0)}`,
+        `Bs. ${formatBs(b.expectedBalanceBs ?? b.initialBalanceBs)}`,
+        `Bs. ${formatBs(b.countedBalanceBs ?? b.expectedBalanceBs ?? b.initialBalanceBs)}`
+      ]),
+      margin: { left: 14, right: 14 },
+    });
+
+    y = getLastAutoTableY(doc, y) + 6;
+  }
+
+  // Opening audit & closing observations
+  if (shift.openingDifferenceReason || shift.openingDifferenceNotes) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(120, 53, 15);
+    const openAuditStr = `AUDITORÍA DE APERTURA: ${[shift.openingDifferenceReason, shift.openingDifferenceNotes].filter(Boolean).join(' - ')}`;
+    doc.text(doc.splitTextToSize(openAuditStr, pageWidth - 28), 14, y);
+    y += 7;
+  }
+
   if (shift.closedNotes || shift.notes) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
@@ -611,7 +661,7 @@ export const generateComprobanteCierrePDF = (
     doc.text(doc.splitTextToSize(noteText, pageWidth - 28), 14, y);
     y += 14;
   } else {
-    y += 8;
+    y += 6;
   }
 
   // Signatures

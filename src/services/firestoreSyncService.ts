@@ -43,6 +43,11 @@ import {
   LoanAbono
 } from '../types';
 import { BackupDataPayload } from '../utils/cloudBackupUtils';
+import {
+  getExpenseAccountingType,
+  isNonFiscalPersonalOrSalaryCategory,
+  mapGastoCategoryToExpenseCategory
+} from '../utils/accountingUtils';
 
 export type TransactionsDatePreset =
   | 'current_month'
@@ -328,16 +333,6 @@ const mapMethodToExpenseMethod = (m?: PaymentMethod): Expense['paymentMethod'] =
     return m;
   }
   return 'transferencia';
-};
-
-const mapGastoCategoryToExpenseCategory = (cat: GastoOperativoCategory): Expense['category'] => {
-  if (cat === 'Alquiler' || cat === 'Servicios' || cat === 'Nómina' || cat === 'Mantenimiento') {
-    return cat;
-  }
-  if (cat === 'Insumos / Papelería' || cat === 'Papelería') {
-    return 'Mercancía';
-  }
-  return 'Otros';
 };
 
 const deniedOptionalCollections = new Set<string>();
@@ -2464,7 +2459,13 @@ export const markGastoOperativoPagadoTransaction = async (
   bcvRate: number,
   reference?: string,
   amountUSD?: number,
-  notes?: string
+  notes?: string,
+  options?: {
+    bankAccountId?: string;
+    bankAccountLabel?: string;
+    enteredCurrency?: 'USD' | 'Bs';
+    exactAmountBs?: number;
+  }
 ): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/gastosOperativos/${gastoId}`;
@@ -2483,16 +2484,44 @@ export const markGastoOperativoPagadoTransaction = async (
           throw new Error('Este gasto operativo ya se encuentra pagado en su totalidad.');
         }
 
-        const requestedAmount =
-          amountUSD !== undefined && !isNaN(amountUSD) && amountUSD > 0
-            ? round2(amountUSD)
-            : currentRemaining;
-        const payAmount = Math.min(currentRemaining, Math.max(0.01, requestedAmount));
-        const payAmountBs = round2(payAmount * bcvRate);
+        const enteredCurrency: 'USD' | 'Bs' =
+          options?.enteredCurrency ||
+          (paymentMethod === 'efectivo_usd' ? 'USD' : liveTarget.enteredCurrency || 'USD');
+
+        let payAmount: number;
+        let payAmountBs: number;
+
+        if (enteredCurrency === 'Bs' && typeof options?.exactAmountBs === 'number' && options.exactAmountBs > 0) {
+          payAmountBs = round2(options.exactAmountBs);
+          const equivUsd = bcvRate > 0 ? round2(payAmountBs / bcvRate) : round2(amountUSD || currentRemaining);
+          payAmount = Math.min(currentRemaining, Math.max(0.01, equivUsd));
+        } else {
+          const requestedAmount =
+            amountUSD !== undefined && !isNaN(amountUSD) && amountUSD > 0
+              ? round2(amountUSD)
+              : currentRemaining;
+          payAmount = Math.min(currentRemaining, Math.max(0.01, requestedAmount));
+          // Preserve exact original Bs if settling a Bs-entered full expense
+          if (
+            liveTarget.enteredCurrency === 'Bs' &&
+            currentPaid === 0 &&
+            Math.abs(payAmount - liveTarget.amountUSD) < 0.01 &&
+            liveTarget.amountBs > 0
+          ) {
+            payAmountBs = round2(liveTarget.amountBs);
+          } else {
+            payAmountBs = round2(payAmount * bcvRate);
+          }
+        }
+
         const newPaid = round2(currentPaid + payAmount);
         const newRemaining = round2(Math.max(0, liveTarget.amountUSD - newPaid));
         const newStatus: GastoOperativo['status'] = newRemaining <= 0.009 ? 'pagado' : 'parcial';
         const nowIso = new Date().toISOString();
+        const bankAccountId = options?.bankAccountId || liveTarget.bankAccountId || undefined;
+        const bankAccountLabel = options?.bankAccountLabel || liveTarget.bankAccountLabel || undefined;
+        const isNonFiscal = isNonFiscalPersonalOrSalaryCategory(liveTarget.category);
+        const accountingType = getExpenseAccountingType(liveTarget.category);
 
         const newAbono: Abono = {
           id: 'abono-gasto-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
@@ -2500,7 +2529,10 @@ export const markGastoOperativoPagadoTransaction = async (
           amountUSD: payAmount,
           amountBs: payAmountBs,
           bcvRate,
+          enteredCurrency,
           paymentMethod,
+          bankAccountId,
+          bankAccountLabel,
           reference,
           notes:
             notes ||
@@ -2514,21 +2546,26 @@ export const markGastoOperativoPagadoTransaction = async (
         const cashOutflowExpense: Expense = {
           id: 'exp-gasto-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
           date: nowIso,
-          invoiceNumber: liveTarget.invoiceNumber || 'REC-GASTO',
+          invoiceNumber: liveTarget.invoiceNumber || (isNonFiscal ? 'INT-CAJA' : 'REC-GASTO'),
           controlNumber: '00-00000',
           supplierName: liveTarget.supplierName || liveTarget.concept,
           supplierRIF: liveTarget.supplierRIF || 'N/A',
           supplierPhone: liveTarget.supplierPhone,
-          description: `${newStatus === 'pagado' && currentPaid === 0 ? 'Pago' : 'Abono'} Gasto (${liveTarget.concept})${notes ? ` - ${notes}` : ''}`,
+          description: `${newStatus === 'pagado' && currentPaid === 0 ? 'Pago' : 'Abono'} ${liveTarget.category} (${liveTarget.concept})${notes ? ` - ${notes}` : ''}`,
           category: mapGastoCategoryToExpenseCategory(liveTarget.category),
           amountUSD: payAmount,
           amountBs: payAmountBs,
-          baseImponibleBs: payAmountBs,
+          baseImponibleBs: isNonFiscal ? 0 : payAmountBs,
           ivaBs: 0,
           retencionIVABs: 0,
           retencionISLRBs: 0,
           bcvRate,
+          enteredCurrency,
           paymentMethod: mapMethodToExpenseMethod(paymentMethod),
+          bankAccountId,
+          bankAccountLabel,
+          excludeFromLibroCompras: isNonFiscal,
+          accountingType,
           reference,
           linkedGastoId: liveTarget.id
         };
@@ -2539,6 +2576,8 @@ export const markGastoOperativoPagadoTransaction = async (
           status: newStatus,
           paymentDate: nowIso,
           paymentMethod,
+          bankAccountId: bankAccountId || null,
+          bankAccountLabel: bankAccountLabel || null,
           reference: reference || liveTarget.reference || null,
           abonos: cleanForFirestore([newAbono, ...(liveTarget.abonos || [])])
         });

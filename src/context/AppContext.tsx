@@ -18,6 +18,7 @@ import {
   CashShift,
   AppTheme,
   BankInitialBalance,
+  CashOpeningAuditMeta,
   CreditNote,
   InventoryDischarge,
   InventoryDischargeReason,
@@ -33,6 +34,14 @@ import {
   RatePriceCurrencyScope
 } from '../types';
 import { fetchLiveBCVRate, fetchLiveBCVEuroRate } from '../utils/bcvFetcher';
+import {
+  computeShiftBankSummaries,
+  getExpenseAccountingType,
+  isExpenseOwnerSalary,
+  isExpenseOwnerWithdrawal,
+  isNonFiscalPersonalOrSalaryCategory,
+  mapGastoCategoryToExpenseCategory
+} from '../utils/accountingUtils';
 import {
   initAuth,
   signInWithGoogle,
@@ -505,7 +514,19 @@ interface AppContextType {
   addGastoOperativo: (gasto: Omit<GastoOperativo, 'id'>) => void;
   updateGastoOperativo: (updated: GastoOperativo) => void;
   deleteGastoOperativo: (id: string) => void;
-  markGastoOperativoPagado: (id: string, paymentMethod: PaymentMethod, reference?: string, amountUSD?: number, notes?: string) => Promise<void>;
+  markGastoOperativoPagado: (
+    id: string,
+    paymentMethod: PaymentMethod,
+    reference?: string,
+    amountUSD?: number,
+    notes?: string,
+    options?: {
+      bankAccountId?: string;
+      bankAccountLabel?: string;
+      enteredCurrency?: 'USD' | 'Bs';
+      exactAmountBs?: number;
+    }
+  ) => Promise<void>;
 
   // Créditos y Préstamos por Pagar
   loans: Loan[];
@@ -543,7 +564,13 @@ interface AppContextType {
   cashShift: CashShift | null;
   isCashRegisterOpen: boolean;
   cashShiftHistory: CashShift[];
-  openCashShift: (initialCashUSD: number, initialCashBs: number, notes?: string, initialBanks?: BankInitialBalance[]) => Promise<void>;
+  openCashShift: (
+    initialCashUSD: number,
+    initialCashBs: number,
+    notes?: string,
+    initialBanks?: BankInitialBalance[],
+    openingAudit?: CashOpeningAuditMeta
+  ) => Promise<void>;
   closeCashShift: (countedUSD: number, countedBs: number, notes?: string, countedBanks?: BankInitialBalance[]) => Promise<CashShift>;
   isAperturaModalOpen: boolean;
   setIsAperturaModalOpen: (open: boolean) => void;
@@ -1134,7 +1161,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   /**
    * Apertura de Caja para iniciar la jornada diaria
    */
-  const openCashShift = useCallback(async (initialCashUSD: number, initialCashBs: number, notes?: string, initialBanks?: BankInitialBalance[]): Promise<void> => {
+  const openCashShift = useCallback(async (
+    initialCashUSD: number,
+    initialCashBs: number,
+    notes?: string,
+    initialBanks?: BankInitialBalance[],
+    openingAudit?: CashOpeningAuditMeta
+  ): Promise<void> => {
     const uid = getActiveUid();
     if (!uid) {
       const err = new Error('Debes iniciar sesión con Google para abrir la caja.');
@@ -1144,16 +1177,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const now = new Date();
     const timeStr = now.toLocaleDateString('es-VE') + ' ' + now.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
+    const exactInitialUSD = round2(Math.max(0, Number(initialCashUSD) || 0));
+    const exactInitialBs = round2(Math.max(0, Number(initialCashBs) || 0));
+
     const newShift: CashShift = {
       id: 'shift-' + Date.now(),
       isOpen: true,
       openedAt: now.toISOString(),
       openedDateFormatted: timeStr,
-      initialCashUSD: Math.max(0, Number(initialCashUSD) || 0),
-      initialCashBs: Math.max(0, Number(initialCashBs) || 0),
+      initialCashUSD: exactInitialUSD,
+      initialCashBs: exactInitialBs,
       initialBanks: initialBanks && initialBanks.length > 0 ? initialBanks : undefined,
       notes: notes || undefined,
-      openedBy: googleUser?.name || 'Administrador'
+      openedBy: googleUser?.name || 'Administrador',
+      ...(openingAudit && {
+        previousShiftId: openingAudit.previousShiftId,
+        previousCloseDateFormatted: openingAudit.previousCloseDateFormatted,
+        previousCloseCashUSD: typeof openingAudit.previousCloseCashUSD === 'number' ? round2(openingAudit.previousCloseCashUSD) : undefined,
+        previousCloseCashBs: typeof openingAudit.previousCloseCashBs === 'number' ? round2(openingAudit.previousCloseCashBs) : undefined,
+        openingDifferenceUSD: typeof openingAudit.openingDifferenceUSD === 'number' ? round2(openingAudit.openingDifferenceUSD) : undefined,
+        openingDifferenceBs: typeof openingAudit.openingDifferenceBs === 'number' ? round2(openingAudit.openingDifferenceBs) : undefined,
+        openingMatchedOutflowsUSD: typeof openingAudit.openingMatchedOutflowsUSD === 'number' ? round2(openingAudit.openingMatchedOutflowsUSD) : undefined,
+        openingMatchedOutflowsBs: typeof openingAudit.openingMatchedOutflowsBs === 'number' ? round2(openingAudit.openingMatchedOutflowsBs) : undefined,
+        openingMatchedMovementsCount: typeof openingAudit.openingMatchedMovementsCount === 'number' ? openingAudit.openingMatchedMovementsCount : undefined,
+        openingDifferenceReason: openingAudit.openingDifferenceReason || undefined,
+        openingDifferenceNotes: openingAudit.openingDifferenceNotes || undefined
+      })
     };
 
     try {
@@ -1271,6 +1320,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const totalExpensesUSD = round2(shiftExpenses.reduce((acc, e) => acc + e.amountUSD, 0));
     const totalExpensesBs = round2(shiftExpenses.reduce((acc, e) => acc + e.amountBs, 0));
 
+    const totalOwnerSalaryUSD = round2(
+      shiftExpenses.filter(e => isExpenseOwnerSalary(e)).reduce((acc, e) => acc + e.amountUSD, 0)
+    );
+    const totalOwnerSalaryBs = round2(
+      shiftExpenses.filter(e => isExpenseOwnerSalary(e)).reduce((acc, e) => acc + e.amountBs, 0)
+    );
+    const totalOwnerWithdrawalsUSD = round2(
+      shiftExpenses.filter(e => isExpenseOwnerWithdrawal(e)).reduce((acc, e) => acc + e.amountUSD, 0)
+    );
+    const totalOwnerWithdrawalsBs = round2(
+      shiftExpenses.filter(e => isExpenseOwnerWithdrawal(e)).reduce((acc, e) => acc + e.amountBs, 0)
+    );
+
+    const bankTraceSummaries = computeShiftBankSummaries(
+      countedBanks || cashShift?.initialBanks,
+      shiftSales,
+      shiftExpenses,
+      shiftCreditNotes,
+      shiftFiadoAbonos,
+      shiftLoans
+    );
+    const enrichedBanks: BankInitialBalance[] | undefined = (countedBanks || cashShift?.initialBanks)?.map((b) => {
+      const trace = bankTraceSummaries.find((s) => s.bankId === b.bankId);
+      return trace
+        ? {
+            ...b,
+            outflowsBs: trace.outflowsBs,
+            outflowsUSD: trace.outflowsUSD,
+            expectedBalanceBs: trace.expectedBalanceBs,
+            expectedBalanceUSD: trace.expectedBalanceUSD
+          }
+        : b;
+    });
+
     const salesBreakdown: Record<string, { usd: number; bs: number }> = {};
     shiftSales.forEach(s => {
       const m = s.paymentMethod;
@@ -1299,13 +1382,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       differenceUSD: diffUSD,
       differenceBs: diffBs,
       closedNotes,
-      initialBanks: countedBanks || cashShift?.initialBanks,
+      initialBanks: enrichedBanks,
       totalSalesUSD,
       totalSalesBs,
       salesBreakdown,
       transactionsCount,
       totalExpensesUSD,
       totalExpensesBs,
+      totalOwnerSalaryUSD,
+      totalOwnerSalaryBs,
+      totalOwnerWithdrawalsUSD,
+      totalOwnerWithdrawalsBs,
       totalCreditNotesUSD,
       totalCreditNotesBs,
       totalFiadoAbonosUSD: round2(totalFiadoAbonosUSD),
@@ -3151,16 +3238,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return 'transferencia';
   };
 
-  const mapGastoCategoryToExpenseCategory = (cat: GastoOperativoCategory): Expense['category'] => {
-    if (cat === 'Alquiler' || cat === 'Servicios' || cat === 'Nómina' || cat === 'Mantenimiento') {
-      return cat;
-    }
-    if (cat === 'Insumos / Papelería' || cat === 'Papelería') {
-      return 'Mercancía';
-    }
-    return 'Otros';
-  };
-
   const addAbonoToCuentaPorPagar = async (
     cuentaId: string,
     amountUSD: number,
@@ -3183,12 +3260,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Gastos Operativos del Mes (Alquiler, Servicios, Insumos, Eventuales)
+  // Gastos Operativos del Mes (Alquiler, Servicios, Insumos, Sueldo Propietario, Retiros Personales)
   const addGastoOperativo = (data: Omit<GastoOperativo, 'id'>) => {
     const nowIso = new Date().toISOString();
     const isPaidNow = data.status === 'pagado';
-    const paidUSD = isPaidNow ? Number(data.amountUSD.toFixed(2)) : Number((data.paidAmountUSD || 0).toFixed(2));
-    const remainingUSD = isPaidNow ? 0 : Number(Math.max(0, data.amountUSD - paidUSD).toFixed(2));
+    const rate = data.bcvRate || bcvRate;
+    const paidUSD = isPaidNow ? round2(data.amountUSD) : round2(data.paidAmountUSD || 0);
+    const exactPaidBs = isPaidNow
+      ? (data.enteredCurrency === 'Bs' && data.amountBs > 0 ? round2(data.amountBs) : round2(paidUSD * rate))
+      : 0;
+    const remainingUSD = isPaidNow ? 0 : round2(Math.max(0, data.amountUSD - paidUSD));
+    const isNonFiscal = isNonFiscalPersonalOrSalaryCategory(data.category);
+    const accountingType = getExpenseAccountingType(data.category);
 
     const initialAbonos: Abono[] = isPaidNow
       ? [
@@ -3196,11 +3279,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: 'abono-gasto-' + Date.now(),
             date: data.paymentDate || nowIso,
             amountUSD: paidUSD,
-            amountBs: Number((paidUSD * (data.bcvRate || bcvRate)).toFixed(2)),
-            bcvRate: data.bcvRate || bcvRate,
+            amountBs: exactPaidBs,
+            bcvRate: rate,
+            enteredCurrency: data.enteredCurrency || (data.paymentMethod === 'efectivo_bs' ? 'Bs' : 'USD'),
             paymentMethod: data.paymentMethod || 'pago_movil',
+            bankAccountId: data.bankAccountId,
+            bankAccountLabel: data.bankAccountLabel,
             reference: data.reference,
-            notes: 'Pago completo al registrar el gasto'
+            notes: 'Pago completo al registrar el movimiento'
           }
         ]
       : (data.abonos || []);
@@ -3208,6 +3294,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newGasto: GastoOperativo = {
       ...data,
       id: 'gasto-' + Date.now(),
+      amountUSD: round2(data.amountUSD),
+      amountBs: data.enteredCurrency === 'Bs' && data.amountBs > 0 ? round2(data.amountBs) : round2(data.amountUSD * rate),
       paidAmountUSD: paidUSD,
       remainingUSD,
       status: remainingUSD <= 0.009 ? 'pagado' : (paidUSD > 0 ? 'parcial' : 'pendiente'),
@@ -3217,27 +3305,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setGastosOperativos(prev => [newGasto, ...prev]);
 
     let cashOutflowExpense: Expense | undefined = undefined;
-    if (isPaidNow && paidUSD > 0) {
-      const rate = data.bcvRate || bcvRate;
-      const amountBs = Number((paidUSD * rate).toFixed(2));
+    if (isPaidNow && (paidUSD > 0 || exactPaidBs > 0)) {
       cashOutflowExpense = {
         id: 'exp-gasto-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
         date: data.paymentDate || nowIso,
-        invoiceNumber: data.invoiceNumber || 'REC-GASTO',
+        invoiceNumber: data.invoiceNumber || (isNonFiscal ? 'INT-CAJA' : 'REC-GASTO'),
         controlNumber: '00-00000',
         supplierName: data.supplierName || data.concept,
         supplierRIF: data.supplierRIF || 'N/A',
         supplierPhone: data.supplierPhone,
-        description: `Gasto del Mes: ${data.concept}${data.notes ? ` (${data.notes})` : ''}`,
+        description: `${data.category}: ${data.concept}${data.notes ? ` (${data.notes})` : ''}`,
         category: mapGastoCategoryToExpenseCategory(data.category),
         amountUSD: paidUSD,
-        amountBs,
-        baseImponibleBs: amountBs,
+        amountBs: exactPaidBs,
+        baseImponibleBs: isNonFiscal ? 0 : exactPaidBs,
         ivaBs: 0,
         retencionIVABs: 0,
         retencionISLRBs: 0,
         bcvRate: rate,
+        enteredCurrency: data.enteredCurrency || (data.paymentMethod === 'efectivo_bs' ? 'Bs' : 'USD'),
         paymentMethod: mapMethodToExpenseMethod(data.paymentMethod),
+        bankAccountId: data.bankAccountId,
+        bankAccountLabel: data.bankAccountLabel,
+        excludeFromLibroCompras: isNonFiscal,
+        accountingType,
         reference: data.reference,
         linkedGastoId: newGasto.id
       };
@@ -3295,7 +3386,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     paymentMethod: PaymentMethod,
     reference?: string,
     amountUSD?: number,
-    notes?: string
+    notes?: string,
+    options?: {
+      bankAccountId?: string;
+      bankAccountLabel?: string;
+      enteredCurrency?: 'USD' | 'Bs';
+      exactAmountBs?: number;
+    }
   ): Promise<void> => {
     const uid = getActiveUid();
     if (!uid) {
@@ -3304,8 +3401,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw err;
     }
     try {
-      await markGastoOperativoPagadoTransaction(uid, id, paymentMethod, bcvRate, reference, amountUSD, notes);
-      notifyUser('success', 'Pago registrado', 'El pago del gasto operativo se sincronizó en Cloud Firestore.');
+      await markGastoOperativoPagadoTransaction(uid, id, paymentMethod, bcvRate, reference, amountUSD, notes, options);
+      notifyUser('success', 'Pago registrado', 'El pago del movimiento se sincronizó en Cloud Firestore.');
     } catch (e) {
       notifyError(e, 'No se pudo registrar el pago del gasto');
       throw e;

@@ -14,10 +14,16 @@ import {
   FileText,
   Landmark,
   Download,
-  ClipboardCheck
+  ClipboardCheck,
+  Wallet
 } from 'lucide-react';
 import { formatBs, formatUSD, round2, safeDiv, getLocalDateStr, isSameLocalDate } from '../utils/exportUtils';
 import { generateReporteZPDF, generateCorteParcialXPDF } from '../utils/pdfReceiptUtils';
+import {
+  computeShiftBankSummaries,
+  isExpenseOwnerSalary,
+  isExpenseOwnerWithdrawal
+} from '../utils/accountingUtils';
 
 export const CuadreCajaModal: React.FC = () => {
   const { 
@@ -180,6 +186,26 @@ export const CuadreCajaModal: React.FC = () => {
   const totalNetUSD = round2(totalSalesUSD - totalExpUSD);
   const totalNetBs = round2(totalNetUSD * bcvRate);
   const totalCashInDrawerUSD = round2(drawerCashUsdExpected + safeDiv(drawerCashBsExpected, bcvRate));
+
+  // Owner salary & personal withdrawals traceability in shift/day
+  const ownerSalaryToday = todayExpenses.filter(isExpenseOwnerSalary);
+  const ownerWithdrawalsToday = todayExpenses.filter(isExpenseOwnerWithdrawal);
+  const ownerSalaryTotalUSD = round2(ownerSalaryToday.reduce((acc, e) => acc + e.amountUSD, 0));
+  const ownerSalaryTotalBs = round2(ownerSalaryToday.reduce((acc, e) => acc + e.amountBs, 0));
+  const ownerWithdrawalsTotalUSD = round2(ownerWithdrawalsToday.reduce((acc, e) => acc + e.amountUSD, 0));
+  const ownerWithdrawalsTotalBs = round2(ownerWithdrawalsToday.reduce((acc, e) => acc + e.amountBs, 0));
+  const hasOwnerDisbursements =
+    ownerSalaryTotalUSD > 0 || ownerSalaryTotalBs > 0 || ownerWithdrawalsTotalUSD > 0 || ownerWithdrawalsTotalBs > 0;
+
+  // Per-bank balance tracking during shift
+  const bankSummaries = computeShiftBankSummaries(
+    cashShift?.initialBanks,
+    todaySales,
+    todayExpenses,
+    todayCreditNotes,
+    todayFiadoAbonos,
+    todayLoans
+  );
 
   const handlePrintReporteZ = () => {
     generateReporteZPDF(todaySales, todayExpenses, bcvRate, businessInfo);
@@ -440,33 +466,85 @@ export const CuadreCajaModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Opened Bank Balances (if configured when opening cash shift) */}
+          {/* Owner Salary & Personal Withdrawals Traceability */}
+          {hasOwnerDisbursements && (
+            <div className="bg-purple-50/70 border border-purple-200 rounded-xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="flex items-center gap-1.5 text-xs font-extrabold text-purple-950 uppercase tracking-wide">
+                  <Wallet className="w-4 h-4 text-purple-600" />
+                  Sueldo Propietario y Retiros Personales
+                </span>
+                <span className="text-[10px] font-bold text-purple-700 bg-white border border-purple-200 px-2 py-0.5 rounded-md">
+                  Sin Libro de Compras SENIAT
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                {(ownerSalaryTotalUSD > 0 || ownerSalaryTotalBs > 0) && (
+                  <div className="bg-white rounded-lg p-2.5 border border-indigo-200 flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-indigo-950">Sueldo Propietario / Nómina</div>
+                      <div className="text-[10px] text-indigo-600 font-semibold">Cuenta como gasto operativo</div>
+                    </div>
+                    <div className="text-right font-mono">
+                      <div className="font-extrabold text-slate-900">${formatUSD(ownerSalaryTotalUSD)}</div>
+                      <div className="text-[10px] text-slate-500">Bs. {formatBs(ownerSalaryTotalBs)}</div>
+                    </div>
+                  </div>
+                )}
+                {(ownerWithdrawalsTotalUSD > 0 || ownerWithdrawalsTotalBs > 0) && (
+                  <div className="bg-white rounded-lg p-2.5 border border-purple-200 flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-purple-950">Retiro Personal / Dueño</div>
+                      <div className="text-[10px] text-purple-600 font-semibold">Separado de costos operativos</div>
+                    </div>
+                    <div className="text-right font-mono">
+                      <div className="font-extrabold text-slate-900">${formatUSD(ownerWithdrawalsTotalUSD)}</div>
+                      <div className="text-[10px] text-slate-500">Bs. {formatBs(ownerWithdrawalsTotalBs)}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Opened Bank Balances & Live Expected Balances (if configured when opening cash shift) */}
           {cashShift?.initialBanks && cashShift.initialBanks.length > 0 && (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
               <div className="flex items-center justify-between text-xs font-bold text-slate-800">
                 <span className="flex items-center gap-1.5 uppercase tracking-wide">
                   <Landmark className="w-4 h-4 text-blue-600" />
-                  Saldos Iniciales de Bancos Registrados al Abrir Caja
+                  Saldos de Bancos del Turno (Inicial vs Esperado)
                 </span>
                 <span className="text-[10px] text-slate-500 font-mono">
                   {cashShift.openedDateFormatted}
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {cashShift.initialBanks.map((bk) => (
-                  <div key={bk.bankId} className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center justify-between text-xs">
-                    <div>
-                      <div className="font-bold text-slate-800">{bk.bankName}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">{bk.accountNumber}</div>
+                {cashShift.initialBanks.map((bk) => {
+                  const summary = bankSummaries.find(s => s.bankId === bk.bankId);
+                  return (
+                    <div key={bk.bankId} className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center justify-between text-xs">
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-800 truncate">{bk.bankName}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">{bk.accountNumber}</div>
+                        {summary && summary.outflowsBs > 0 && (
+                          <div className="text-[10px] text-rose-600 font-mono">
+                            Egresos: -Bs. {formatBs(summary.outflowsBs)}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right font-mono shrink-0">
+                        <div className="text-[10px] text-slate-400">Ini: Bs. {formatBs(bk.initialBalanceBs)}</div>
+                        <div className="font-extrabold text-blue-700">
+                          Esp: Bs. {formatBs(summary ? summary.expectedBalanceBs : bk.initialBalanceBs)}
+                        </div>
+                        {bk.initialBalanceUSD ? (
+                          <div className="text-[10px] text-slate-500">${formatUSD(summary ? summary.expectedBalanceUSD : bk.initialBalanceUSD)}</div>
+                        ) : null}
+                      </div>
                     </div>
-                    <div className="text-right font-mono">
-                      <div className="font-extrabold text-blue-700">Bs. {formatBs(bk.initialBalanceBs)}</div>
-                      {bk.initialBalanceUSD ? (
-                        <div className="text-[10px] text-slate-500">${formatUSD(bk.initialBalanceUSD)}</div>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   KeyRound, 
@@ -11,19 +11,56 @@ import {
   Store, 
   ShieldCheck, 
   AlertCircle,
+  AlertTriangle,
   FileText,
   Landmark,
   CreditCard,
-  RefreshCw
+  RefreshCw,
+  History
 } from 'lucide-react';
-import { formatBs } from '../../utils/exportUtils';
-import { BankInitialBalance } from '../../types';
+import { formatBs, formatUSD, round2 } from '../../utils/exportUtils';
+import { BankInitialBalance, CashOpeningAuditMeta, CashOpeningDifferenceReason } from '../../types';
+import {
+  isExpenseOwnerSalary,
+  isExpenseOwnerWithdrawal,
+  isOwnerSalaryCategory,
+  isOwnerWithdrawalCategory
+} from '../../utils/accountingUtils';
+
+const OPENING_DIFF_REASONS: CashOpeningDifferenceReason[] = [
+  'Retiro / Adelanto al Socio',
+  'Sueldo / Nómina',
+  'Resguardo / Caja Fuerte',
+  'Diferencia de Conteo / Faltante',
+  'Pago/gasto fuera de turno',
+  'Observación de apertura'
+];
+
+interface BetweenShiftCashOutflow {
+  id: string;
+  date: string;
+  category: string;
+  description: string;
+  paymentMethod: 'efectivo_usd' | 'efectivo_bs';
+  amountUSD: number;
+  amountBs: number;
+  isOwnerWithdrawal: boolean;
+  isOwnerSalary: boolean;
+}
+
+const formatExactInputNumber = (value: number): string => {
+  const clean = round2(Math.max(0, Number(value) || 0));
+  return Number.isInteger(clean) ? String(clean) : clean.toFixed(2);
+};
 
 export const AperturaCajaModal: React.FC = () => {
   const { 
     isAperturaModalOpen, 
     setIsAperturaModalOpen, 
     openCashShift, 
+    cashShiftHistory,
+    expenses,
+    gastosOperativos,
     bcvRate, 
     bcvEuroRate,
     isBcvRateUpdatedToday,
@@ -40,6 +77,8 @@ export const AperturaCajaModal: React.FC = () => {
   const [initialUSD, setInitialUSD] = useState<string>('');
   const [initialBs, setInitialBs] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
+  const [openingDiffReason, setOpeningDiffReason] = useState<CashOpeningDifferenceReason | ''>('');
+  const [openingDiffNotes, setOpeningDiffNotes] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [manualRateInput, setManualRateInput] = useState<string>('');
@@ -51,11 +90,128 @@ export const AperturaCajaModal: React.FC = () => {
 
   const configuredBanks = businessInfo.bankAccounts || [];
 
+  // Most recent closed shift to compare physical cash continuity (independent USD and Bs)
+  const lastClosedShift = useMemo(() => {
+    const closed = cashShiftHistory.filter(
+      (s) => !s.isOpen && (s.closedAt || typeof s.countedCashUSD === 'number' || typeof s.countedCashBs === 'number')
+    );
+    if (closed.length === 0) return null;
+    return [...closed].sort((a, b) => {
+      const tA = new Date(a.closedAt || a.openedAt).getTime();
+      const tB = new Date(b.closedAt || b.openedAt).getTime();
+      return tB - tA;
+    })[0];
+  }, [cashShiftHistory]);
+
+  const lastCloseUSD = useMemo(
+    () => (lastClosedShift ? round2(lastClosedShift.countedCashUSD ?? lastClosedShift.expectedCashUSD ?? 0) : 0),
+    [lastClosedShift]
+  );
+
+  const lastCloseBs = useMemo(
+    () => (lastClosedShift ? round2(lastClosedShift.countedCashBs ?? lastClosedShift.expectedCashBs ?? 0) : 0),
+    [lastClosedShift]
+  );
+
+  const parsedInitialUSD = round2(Math.max(0, parseFloat(initialUSD) || 0));
+  const parsedInitialBs = round2(Math.max(0, parseFloat(initialBs) || 0));
+
+  // Independent exact differences per currency — zero inverse USD<->Bs conversion
+  const openingDiffUSD = lastClosedShift ? round2(parsedInitialUSD - lastCloseUSD) : 0;
+  const openingDiffBs = lastClosedShift ? round2(parsedInitialBs - lastCloseBs) : 0;
+  const hasUsdDiff = Boolean(lastClosedShift && Math.abs(openingDiffUSD) >= 0.01);
+  const hasBsDiff = Boolean(lastClosedShift && Math.abs(openingDiffBs) >= 0.01);
+  const hasOpeningDifference = hasUsdDiff || hasBsDiff;
+
+  // Cross-check cash outflows registered AFTER the previous close (retiros personales, sueldos, pagos en efectivo)
+  const recentBetweenShiftCashOutflows = useMemo<BetweenShiftCashOutflow[]>(() => {
+    if (!lastClosedShift) return [];
+    const lastCloseMs = new Date(lastClosedShift.closedAt || lastClosedShift.openedAt).getTime();
+    if (Number.isNaN(lastCloseMs)) return [];
+
+    const items: BetweenShiftCashOutflow[] = [];
+
+    const afterCloseExpenses = expenses.filter((e) => {
+      if (e.paymentMethod !== 'efectivo_usd' && e.paymentMethod !== 'efectivo_bs') return false;
+      const ms = new Date(e.date).getTime();
+      return !Number.isNaN(ms) && ms > lastCloseMs;
+    });
+
+    afterCloseExpenses.forEach((e) => {
+      items.push({
+        id: e.id,
+        date: e.date,
+        category: e.category,
+        description: e.description || e.category,
+        paymentMethod: e.paymentMethod as 'efectivo_usd' | 'efectivo_bs',
+        amountUSD: e.paymentMethod === 'efectivo_usd' ? round2(e.amountUSD || 0) : 0,
+        amountBs: e.paymentMethod === 'efectivo_bs' ? round2(e.amountBs || 0) : 0,
+        isOwnerWithdrawal: isExpenseOwnerWithdrawal(e),
+        isOwnerSalary: isExpenseOwnerSalary(e)
+      });
+    });
+
+    // Also inspect gastosOperativos abonos in case any cash abono isn't mirrored in expenses
+    gastosOperativos.forEach((g) => {
+      (g.abonos || []).forEach((ab) => {
+        if (ab.paymentMethod !== 'efectivo_usd' && ab.paymentMethod !== 'efectivo_bs') return;
+        const ms = new Date(ab.date).getTime();
+        if (Number.isNaN(ms) || ms <= lastCloseMs) return;
+
+        const alreadyLinked = afterCloseExpenses.some((e) => {
+          if (e.linkedGastoId !== g.id || e.paymentMethod !== ab.paymentMethod) return false;
+          const diff = ab.paymentMethod === 'efectivo_usd'
+            ? Math.abs((e.amountUSD || 0) - (ab.amountUSD || 0))
+            : Math.abs((e.amountBs || 0) - (ab.amountBs || 0));
+          return diff < 0.05;
+        });
+
+        if (!alreadyLinked) {
+          items.push({
+            id: `${g.id}_${ab.id}`,
+            date: ab.date,
+            category: g.category,
+            description: g.concept || g.category,
+            paymentMethod: ab.paymentMethod,
+            amountUSD: ab.paymentMethod === 'efectivo_usd' ? round2(ab.amountUSD || 0) : 0,
+            amountBs: ab.paymentMethod === 'efectivo_bs' ? round2(ab.amountBs || 0) : 0,
+            isOwnerWithdrawal: isOwnerWithdrawalCategory(g.category),
+            isOwnerSalary: isOwnerSalaryCategory(g.category)
+          });
+        }
+      });
+    });
+
+    return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [lastClosedShift, expenses, gastosOperativos]);
+
+  const isUsdLower = Boolean(lastClosedShift && openingDiffUSD <= -0.01);
+  const isBsLower = Boolean(lastClosedShift && openingDiffBs <= -0.01);
+  const isOpeningLower = isUsdLower || isBsLower;
+
+  const shortfallUSD = isUsdLower ? round2(Math.abs(openingDiffUSD)) : 0;
+  const shortfallBs = isBsLower ? round2(Math.abs(openingDiffBs)) : 0;
+
+  const registeredOutflowsUSD = round2(recentBetweenShiftCashOutflows.reduce((s, m) => s + m.amountUSD, 0));
+  const registeredOutflowsBs = round2(recentBetweenShiftCashOutflows.reduce((s, m) => s + m.amountBs, 0));
+
+  const matchedOutflowsUSD = round2(Math.min(shortfallUSD, registeredOutflowsUSD));
+  const matchedOutflowsBs = round2(Math.min(shortfallBs, registeredOutflowsBs));
+
+  const unexplainedShortfallUSD = round2(Math.max(0, shortfallUSD - registeredOutflowsUSD));
+  const unexplainedShortfallBs = round2(Math.max(0, shortfallBs - registeredOutflowsBs));
+
+  const hasRegisteredSupport = isOpeningLower && (matchedOutflowsUSD >= 0.01 || matchedOutflowsBs >= 0.01);
+  const isFullyExplainedByMovements =
+    hasRegisteredSupport && unexplainedShortfallUSD < 0.01 && unexplainedShortfallBs < 0.01;
+
   // Initialize or reset bank balance fields + auto-sync daily BCV rate if stale on modal open
   useEffect(() => {
     if (isAperturaModalOpen) {
       setErrorMsg(null);
       setIsSubmitting(false);
+      setOpeningDiffReason('');
+      setOpeningDiffNotes('');
       const initialMap: Record<string, { balanceBs: string; balanceUSD: string }> = {};
       if (configuredBanks.length > 0) {
         configuredBanks.forEach(bk => {
@@ -113,11 +269,35 @@ export const AperturaCajaModal: React.FC = () => {
     setInitialUSD(val.toString());
   };
 
-  const handleConvertUsdToBs = () => {
-    const parsedUsd = parseFloat(initialUSD);
-    if (!isNaN(parsedUsd) && parsedUsd > 0) {
-      setInitialBs((parsedUsd * bcvRate).toFixed(2));
-    }
+  const handleCopyLastCloseAmounts = () => {
+    if (!lastClosedShift) return;
+    setInitialUSD(formatExactInputNumber(lastCloseUSD));
+    setInitialBs(formatExactInputNumber(lastCloseBs));
+    setErrorMsg(null);
+  };
+
+  const handleApplyDetectedMovements = () => {
+    if (recentBetweenShiftCashOutflows.length === 0) return;
+    const hasWithdrawal = recentBetweenShiftCashOutflows.some((m) => m.isOwnerWithdrawal);
+    const hasSalary = recentBetweenShiftCashOutflows.some((m) => m.isOwnerSalary);
+    const autoReason: CashOpeningDifferenceReason = hasWithdrawal
+      ? 'Retiro / Adelanto al Socio'
+      : hasSalary
+        ? 'Sueldo / Nómina'
+        : 'Pago/gasto fuera de turno';
+    setOpeningDiffReason(autoReason);
+
+    const summaryParts = recentBetweenShiftCashOutflows.slice(0, 3).map((m) => {
+      const amtStr = m.paymentMethod === 'efectivo_usd'
+        ? `$${formatUSD(m.amountUSD)}`
+        : `Bs ${formatBs(m.amountBs)}`;
+      return `${m.category} (${amtStr})`;
+    });
+    const extraCount = recentBetweenShiftCashOutflows.length > 3
+      ? ` +${recentBetweenShiftCashOutflows.length - 3} más`
+      : '';
+    setOpeningDiffNotes(`Respaldado por egresos registrados: ${summaryParts.join(', ')}${extraCount}`);
+    setErrorMsg(null);
   };
 
   const handleBankBalanceChange = (id: string, field: 'balanceBs' | 'balanceUSD', val: string) => {
@@ -133,11 +313,19 @@ export const AperturaCajaModal: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
-    const usd = parseFloat(initialUSD) || 0;
-    const bs = parseFloat(initialBs) || 0;
+    const rawUsd = parseFloat(initialUSD);
+    const rawBs = parseFloat(initialBs);
 
-    if (usd < 0 || bs < 0) {
+    if ((!isNaN(rawUsd) && rawUsd < 0) || (!isNaN(rawBs) && rawBs < 0)) {
       setErrorMsg('Los montos del fondo inicial no pueden ser negativos.');
+      return;
+    }
+
+    const usd = round2(Math.max(0, isNaN(rawUsd) ? 0 : rawUsd));
+    const bs = round2(Math.max(0, isNaN(rawBs) ? 0 : rawBs));
+
+    if (hasOpeningDifference && !openingDiffReason && !openingDiffNotes.trim()) {
+      setErrorMsg('Existe una diferencia respecto al último cierre. Selecciona un motivo o escribe una breve justificación de apertura.');
       return;
     }
 
@@ -146,8 +334,8 @@ export const AperturaCajaModal: React.FC = () => {
     if (configuredBanks.length > 0) {
       configuredBanks.forEach(bk => {
         const entry = bankBalances[bk.id];
-        const bBs = parseFloat(entry?.balanceBs || '0') || 0;
-        const bUsd = parseFloat(entry?.balanceUSD || '0') || 0;
+        const bBs = round2(Math.max(0, parseFloat(entry?.balanceBs || '0') || 0));
+        const bUsd = round2(Math.max(0, parseFloat(entry?.balanceUSD || '0') || 0));
         initialBanksList.push({
           bankId: bk.id,
           bankName: bk.bank,
@@ -158,8 +346,8 @@ export const AperturaCajaModal: React.FC = () => {
       });
     } else if (businessInfo.pagoMovilBank) {
       const entry = bankBalances['default-pm'];
-      const bBs = parseFloat(entry?.balanceBs || '0') || 0;
-      const bUsd = parseFloat(entry?.balanceUSD || '0') || 0;
+      const bBs = round2(Math.max(0, parseFloat(entry?.balanceBs || '0') || 0));
+      const bUsd = round2(Math.max(0, parseFloat(entry?.balanceUSD || '0') || 0));
       initialBanksList.push({
         bankId: 'default-pm',
         bankName: businessInfo.pagoMovilBank,
@@ -169,13 +357,31 @@ export const AperturaCajaModal: React.FC = () => {
       });
     }
 
+    const openingAudit: CashOpeningAuditMeta | undefined = lastClosedShift
+      ? {
+          previousShiftId: lastClosedShift.id,
+          previousCloseDateFormatted: lastClosedShift.closedDateFormatted || lastClosedShift.openedDateFormatted,
+          previousCloseCashUSD: lastCloseUSD,
+          previousCloseCashBs: lastCloseBs,
+          openingDifferenceUSD: round2(usd - lastCloseUSD),
+          openingDifferenceBs: round2(bs - lastCloseBs),
+          openingDifferenceReason: hasOpeningDifference ? (openingDiffReason || 'Observación de apertura') : undefined,
+          openingDifferenceNotes: hasOpeningDifference && openingDiffNotes.trim() ? openingDiffNotes.trim() : undefined,
+          openingMatchedOutflowsUSD: matchedOutflowsUSD > 0 ? matchedOutflowsUSD : undefined,
+          openingMatchedOutflowsBs: matchedOutflowsBs > 0 ? matchedOutflowsBs : undefined,
+          openingMatchedMovementsCount: hasRegisteredSupport ? recentBetweenShiftCashOutflows.length : undefined
+        }
+      : undefined;
+
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
-      await openCashShift(usd, bs, notes.trim(), initialBanksList);
+      await openCashShift(usd, bs, notes.trim(), initialBanksList, openingAudit);
       setInitialUSD('');
       setInitialBs('');
       setNotes('');
+      setOpeningDiffReason('');
+      setOpeningDiffNotes('');
     } catch (err: any) {
       setErrorMsg(err?.message || 'No se pudo abrir la caja en Cloud Firestore.');
     } finally {
@@ -184,11 +390,11 @@ export const AperturaCajaModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
-      <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+      <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-200">
         
         {/* Header */}
-        <div className="bg-gradient-to-r from-emerald-600 via-teal-700 to-slate-900 text-white p-5 flex items-start justify-between">
+        <div className="bg-gradient-to-r from-emerald-600 via-teal-700 to-slate-900 text-white p-5 flex items-start justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white shrink-0 shadow-xs">
               <KeyRound className="w-6 h-6 text-emerald-300" />
@@ -239,7 +445,7 @@ export const AperturaCajaModal: React.FC = () => {
         )}
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
           
           {/* User Responsible Banner */}
           <div className="flex items-center justify-between p-3 rounded-2xl bg-emerald-50/70 border border-emerald-100 text-xs">
@@ -356,9 +562,45 @@ export const AperturaCajaModal: React.FC = () => {
 
           {/* Section: Fondo Inicial en Efectivo */}
           <div className="space-y-3">
-            <label className="block text-xs font-black uppercase tracking-wider text-slate-600">
-              Fondo de Caja Inicial (Base en Efectivo)
-            </label>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="block text-xs font-black uppercase tracking-wider text-slate-600">
+                Fondo de Caja Inicial (Base en Efectivo)
+              </label>
+              {lastClosedShift && (
+                <button
+                  type="button"
+                  onClick={handleCopyLastCloseAmounts}
+                  className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                >
+                  Usar último cierre
+                </button>
+              )}
+            </div>
+
+            {/* Previous Closing Reference Box */}
+            {lastClosedShift && (
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+                <div className="flex items-center justify-between gap-2 text-[11px]">
+                  <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-slate-500" />
+                    Último cierre registrado
+                  </span>
+                  <span className="text-slate-500 font-medium">
+                    {lastClosedShift.closedDateFormatted || lastClosedShift.openedDateFormatted}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <div className="px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between">
+                    <span className="text-[10px] font-semibold text-slate-500">Cierre USD:</span>
+                    <span className="font-mono font-extrabold text-slate-900">${formatUSD(lastCloseUSD)}</span>
+                  </div>
+                  <div className="px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between">
+                    <span className="text-[10px] font-semibold text-slate-500">Cierre Bs:</span>
+                    <span className="font-mono font-extrabold text-slate-900">Bs. {formatBs(lastCloseBs)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* USD Cash Base Input */}
             <div className="space-y-1.5">
@@ -367,7 +609,7 @@ export const AperturaCajaModal: React.FC = () => {
                   <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
                   Efectivo en Dólares ($ USD)
                 </span>
-                <span className="text-[11px] text-slate-400">Si arrancas sin base, deja 0</span>
+                <span className="text-[11px] text-slate-400">Monto exacto en divisas</span>
               </div>
               <div className="relative">
                 <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-sm">$</span>
@@ -406,15 +648,7 @@ export const AperturaCajaModal: React.FC = () => {
                   <Coins className="w-3.5 h-3.5 text-blue-600" />
                   Efectivo en Bolívares (Bs.)
                 </span>
-                {parseFloat(initialUSD) > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleConvertUsdToBs}
-                    className="text-[11px] text-blue-600 hover:text-blue-800 font-bold transition-colors cursor-pointer underline"
-                  >
-                    Calcular desde USD
-                  </button>
-                )}
+                <span className="text-[11px] text-slate-400">Independiente del monto en USD</span>
               </div>
               <div className="relative">
                 <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-xs">Bs</span>
@@ -429,6 +663,193 @@ export const AperturaCajaModal: React.FC = () => {
                 />
               </div>
             </div>
+
+            {/* Opening Difference Detection & Audit Justification */}
+            {hasOpeningDifference && lastClosedShift && (
+              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 space-y-3 text-xs animate-in fade-in">
+                <div className="flex items-start gap-2 text-amber-950">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <p className="font-extrabold leading-snug">
+                      Diferencia detectada respecto al último cierre de caja
+                    </p>
+                    <p className="text-[11px] text-amber-800 leading-snug">
+                      Indica brevemente qué ocurrió con esta variación para el registro interno de auditoría de caja.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Independent Exact Variation Breakdown (USD & Bs) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className={`p-2.5 rounded-xl border ${hasUsdDiff ? 'bg-white border-amber-300' : 'bg-amber-50/50 border-amber-200/70'}`}>
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500 block">
+                      Variación en USD
+                    </span>
+                    <div className={`font-mono font-black text-sm mt-0.5 ${
+                      !hasUsdDiff
+                        ? 'text-emerald-700'
+                        : openingDiffUSD > 0
+                          ? 'text-blue-700'
+                          : 'text-rose-700'
+                    }`}>
+                      {!hasUsdDiff
+                        ? 'Sin variación ($0.00)'
+                        : `${openingDiffUSD > 0 ? '+' : '-'}$${formatUSD(Math.abs(openingDiffUSD))}`}
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      Cierre: ${formatUSD(lastCloseUSD)} → Hoy: ${formatUSD(parsedInitialUSD)}
+                    </span>
+                  </div>
+
+                  <div className={`p-2.5 rounded-xl border ${hasBsDiff ? 'bg-white border-amber-300' : 'bg-amber-50/50 border-amber-200/70'}`}>
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500 block">
+                      Variación en Bolívares
+                    </span>
+                    <div className={`font-mono font-black text-sm mt-0.5 ${
+                      !hasBsDiff
+                        ? 'text-emerald-700'
+                        : openingDiffBs > 0
+                          ? 'text-blue-700'
+                          : 'text-rose-700'
+                    }`}>
+                      {!hasBsDiff
+                        ? 'Sin variación (Bs. 0,00)'
+                        : `${openingDiffBs > 0 ? '+' : '-'}Bs. ${formatBs(Math.abs(openingDiffBs))}`}
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      Cierre: Bs. {formatBs(lastCloseBs)} → Hoy: Bs. {formatBs(parsedInitialBs)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Cross-check with recent between-shift cash withdrawals/outflows when opening is lower */}
+                {isOpeningLower && (
+                  <div
+                    className={`p-3 rounded-xl border space-y-2 ${
+                      isFullyExplainedByMovements
+                        ? 'bg-emerald-50/95 border-emerald-300 text-emerald-950'
+                        : hasRegisteredSupport
+                          ? 'bg-blue-50/90 border-blue-300 text-blue-950'
+                          : 'bg-rose-50/90 border-rose-300 text-rose-950'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2 flex-wrap">
+                      <div className="flex items-start gap-2">
+                        {isFullyExplainedByMovements ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                        ) : (
+                          <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${hasRegisteredSupport ? 'text-blue-600' : 'text-rose-600'}`} />
+                        )}
+                        <div>
+                          <p className="font-extrabold text-[11px] leading-snug">
+                            {isFullyExplainedByMovements
+                              ? 'Disminución respaldada por retiros / egresos ya registrados'
+                              : hasRegisteredSupport
+                                ? 'Disminución parcialmente respaldada — existe faltante sin movimiento registrado'
+                                : 'Sin retiros ni pagos en efectivo registrados desde el último cierre'}
+                          </p>
+                          <p className="text-[10px] opacity-85 leading-snug mt-0.5">
+                            {isFullyExplainedByMovements
+                              ? 'El sistema detectó egresos de efectivo posteriores al último cierre que justifican esta diferencia.'
+                              : hasRegisteredSupport
+                                ? `Faltante sin movimiento registrado: ${unexplainedShortfallUSD >= 0.01 ? `$${formatUSD(unexplainedShortfallUSD)}` : ''}${unexplainedShortfallUSD >= 0.01 && unexplainedShortfallBs >= 0.01 ? ' y ' : ''}${unexplainedShortfallBs >= 0.01 ? `Bs. ${formatBs(unexplainedShortfallBs)}` : ''}.`
+                                : 'No hay retiros personales, sueldos ni pagos en efectivo registrados tras el cierre anterior. Indica si fue resguardo, retiro pendiente por anotar o faltante de conteo.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {recentBetweenShiftCashOutflows.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleApplyDetectedMovements}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-extrabold cursor-pointer transition-colors shrink-0"
+                        >
+                          Aplicar como justificación
+                        </button>
+                      )}
+                    </div>
+
+                    {recentBetweenShiftCashOutflows.length > 0 && (
+                      <div className="space-y-1 pt-1 border-t border-black/10">
+                        <span className="block text-[10px] font-bold uppercase tracking-wide opacity-75">
+                          Egresos de efectivo detectados tras el último cierre ({recentBetweenShiftCashOutflows.length}):
+                        </span>
+                        <div className="max-h-28 overflow-y-auto space-y-1">
+                          {recentBetweenShiftCashOutflows.map((mov) => (
+                            <div
+                              key={mov.id}
+                              className="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-white/90 border border-black/10 text-[11px]"
+                            >
+                              <div className="min-w-0">
+                                <span className="font-bold text-slate-900 truncate block">{mov.category}</span>
+                                <span className="text-[10px] text-slate-500 truncate block">{mov.description}</span>
+                              </div>
+                              <span className="font-mono font-extrabold text-rose-700 shrink-0">
+                                {mov.paymentMethod === 'efectivo_usd'
+                                  ? `-$${formatUSD(mov.amountUSD)}`
+                                  : `-Bs. ${formatBs(mov.amountBs)}`}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Reason Selector */}
+                <div className="space-y-1.5">
+                  <span className="block text-[11px] font-extrabold text-amber-950">
+                    Motivo / Justificación de Apertura (Auditoría C.A.):
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    {OPENING_DIFF_REASONS.map((reason) => {
+                      const active = openingDiffReason === reason;
+                      const isShortageOption = reason === 'Diferencia de Conteo / Faltante';
+                      return (
+                        <button
+                          key={reason}
+                          type="button"
+                          onClick={() => {
+                            setOpeningDiffReason(reason);
+                            setErrorMsg(null);
+                          }}
+                          className={`px-2.5 py-2 rounded-xl border text-left text-[11px] font-bold transition-all cursor-pointer ${
+                            active
+                              ? isShortageOption
+                                ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
+                                : 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                              : isShortageOption
+                                ? 'bg-white hover:bg-rose-50 text-rose-900 border-rose-200'
+                                : 'bg-white hover:bg-amber-100/70 text-amber-950 border-amber-200'
+                          }`}
+                        >
+                          {reason}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Brief Justification Text */}
+                <div className="space-y-1">
+                  <input
+                    type="text"
+                    maxLength={250}
+                    placeholder="Detalle breve (Ej: Retiro del socio $50 / Resguardo en caja fuerte / Faltante al contar)..."
+                    value={openingDiffNotes}
+                    onChange={(e) => {
+                      setOpeningDiffNotes(e.target.value);
+                      if (errorMsg) setErrorMsg(null);
+                    }}
+                    className="w-full px-3 py-2 bg-white border border-amber-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <p className="text-[10px] text-amber-800/90 leading-snug">
+                    Guardado en el historial de caja (auditoría interna). No altera el Libro de Ventas, Libro de Compras ni cálculos fiscales SENIAT.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Section: Bancos Agregados en Mi Perfil (Apertura de Saldos Bancarios) */}

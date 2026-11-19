@@ -5,6 +5,7 @@ import { LoginView } from './components/LoginView';
 import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X, Copy, Check, RefreshCw, ExternalLink } from 'lucide-react';
 import { formatBs } from './utils/exportUtils';
 import { firebaseConfig } from './config/firebaseConfig';
+import { usePWAUpdate } from './hooks/usePWAUpdate';
 import firestoreRulesSource from '../firestore.rules?raw';
 
 // Lazy-loaded tab views for fast initial startup and optimal code splitting
@@ -64,6 +65,7 @@ const AppContent: React.FC = () => {
 
   const [dismissedRulesBanner, setDismissedRulesBanner] = useState(false);
   const [copiedRules, setCopiedRules] = useState(false);
+  const { updateAvailable, isUpdating, applyUpdate, dismissUpdate } = usePWAUpdate();
 
   const handleCopyFirestoreRules = async () => {
     try {
@@ -167,6 +169,44 @@ const AppContent: React.FC = () => {
           </div>
         );
       })()}
+
+      {/* PWA New Version Available Floating Banner */}
+      {updateAvailable && (
+        <div
+          role="status"
+          className="fixed bottom-4 right-4 left-4 sm:left-auto sm:max-w-sm z-50 animate-in fade-in slide-in-from-bottom-2"
+        >
+          <div className="bg-slate-900 text-white rounded-2xl p-3.5 shadow-2xl border border-blue-500/40 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <RefreshCw className={`w-4 h-4 text-blue-400 shrink-0 mt-0.5 ${isUpdating ? 'animate-spin' : ''}`} />
+              <div className="min-w-0">
+                <p className="font-extrabold text-white leading-tight">Nueva versión disponible</p>
+                <p className="text-[11px] text-slate-300 leading-snug mt-0.5">
+                  Actualiza para cargar los últimos cambios sin borrar caché.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                disabled={isUpdating}
+                onClick={applyUpdate}
+                className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold text-[11px] transition-colors cursor-pointer whitespace-nowrap"
+              >
+                {isUpdating ? 'Actualizando...' : 'Actualizar'}
+              </button>
+              <button
+                type="button"
+                onClick={dismissUpdate}
+                aria-label="Cerrar aviso de actualización"
+                className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Global Dismissible Notification Banner / Toast */}
       {notification && (

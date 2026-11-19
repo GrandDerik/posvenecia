@@ -32,7 +32,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
-  History
+  History,
+  Wallet
 } from 'lucide-react';
 import { 
   formatBs, 
@@ -63,6 +64,14 @@ import {
   GastoOperativoCategory,
   PaymentMethod
 } from '../types';
+import {
+  OWNER_SALARY_CATEGORY,
+  OWNER_WITHDRAWAL_CATEGORY,
+  isBankPaymentMethod,
+  isExpenseExcludedFromLibroCompras,
+  isExpenseOwnerSalary,
+  isExpenseOwnerWithdrawal
+} from '../utils/accountingUtils';
 import { RegistrarGastoModal } from './RegistrarGastoModal';
 import { BackupDriveModal } from './Modals/BackupDriveModal';
 import { ComprobanteTicketModal } from './Modals/ComprobanteTicketModal';
@@ -182,6 +191,7 @@ export const ContabilidadView: React.FC = () => {
   const [gastoForAbono, setGastoForAbono] = useState<GastoOperativo | null>(null);
   const [gastoAbonoAmount, setGastoAbonoAmount] = useState('');
   const [gastoAbonoMethod, setGastoAbonoMethod] = useState<PaymentMethod>('efectivo_usd');
+  const [gastoAbonoBankAccountId, setGastoAbonoBankAccountId] = useState('');
   const [gastoAbonoRef, setGastoAbonoRef] = useState('');
   const [gastoAbonoNotes, setGastoAbonoNotes] = useState('');
 
@@ -334,6 +344,8 @@ export const ContabilidadView: React.FC = () => {
     setGastoAbonoMethod(g.paymentMethod || 'efectivo_usd');
     setGastoAbonoRef('');
     setGastoAbonoNotes('');
+    const defaultBank = (businessInfo.bankAccounts || [])[0]?.id || (businessInfo.pagoMovilBank ? 'default-pm' : '');
+    setGastoAbonoBankAccountId(g.bankAccountId || defaultBank);
     setAbonoGastoError(null);
     setIsSubmittingAbonoGasto(false);
   };
@@ -344,6 +356,15 @@ export const ContabilidadView: React.FC = () => {
     const remaining = gastoForAbono.remainingUSD ?? Math.max(0, gastoForAbono.amountUSD - (gastoForAbono.paidAmountUSD || 0));
     const amt = parseFloat(gastoAbonoAmount) || 0;
     if (amt <= 0) return;
+
+    const bankAccounts = businessInfo.bankAccounts || [];
+    const usesBank = isBankPaymentMethod(gastoAbonoMethod);
+    const chosenBankId = usesBank ? (gastoAbonoBankAccountId || bankAccounts[0]?.id || (businessInfo.pagoMovilBank ? 'default-pm' : undefined)) : undefined;
+    const chosenBankObj = chosenBankId ? bankAccounts.find(b => b.id === chosenBankId) : undefined;
+    const chosenBankLabel = chosenBankObj
+      ? `${chosenBankObj.bank} (••••${chosenBankObj.accountNumber.slice(-4)})`
+      : (chosenBankId === 'default-pm' && businessInfo.pagoMovilBank ? `${businessInfo.pagoMovilBank} (Pago Móvil)` : undefined);
+
     setIsSubmittingAbonoGasto(true);
     setAbonoGastoError(null);
     try {
@@ -352,7 +373,12 @@ export const ContabilidadView: React.FC = () => {
         gastoAbonoMethod,
         gastoAbonoRef.trim() || undefined,
         Math.min(amt, remaining),
-        gastoAbonoNotes.trim() || undefined
+        gastoAbonoNotes.trim() || undefined,
+        {
+          bankAccountId: chosenBankId,
+          bankAccountLabel: chosenBankLabel,
+          enteredCurrency: 'USD'
+        }
       );
       setGastoForAbono(null);
     } catch (err: any) {
@@ -433,7 +459,9 @@ export const ContabilidadView: React.FC = () => {
   const nonDuplicatedExpenses = expenses.filter(
     e => !(e.linkedCuentaId && e.paymentMethod !== 'credito' && creditLinkedCuentaIds.has(e.linkedCuentaId))
   );
-  const filteredExpenses = nonDuplicatedExpenses.filter(e => 
+  // Strict SENIAT Isolation: Libro de Compras NEVER includes Sueldo Propietario / Nómina or Retiro Personal / Adelanto Dueño
+  const libroComprasExpenses = nonDuplicatedExpenses.filter(e => !isExpenseExcludedFromLibroCompras(e));
+  const filteredExpenses = libroComprasExpenses.filter(e => 
     e.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
     e.supplierName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     e.supplierRIF.toLowerCase().includes(searchTerm.toLowerCase())
@@ -452,7 +480,7 @@ export const ContabilidadView: React.FC = () => {
   const totalIgtfBs = round2(activeFilteredSales.reduce((a, s) => a + s.igtfBs, 0));
   const totalIgtfUSD = round2(activeFilteredSales.reduce((a, s) => a + s.igtfUSD, 0));
 
-  // Purchases totals (SENIAT)
+  // Purchases totals (SENIAT — strictly fiscal records only)
   const totalExpBs = round2(filteredExpenses.reduce((a, e) => a + e.amountBs, 0));
   const totalExpUSD = round2(filteredExpenses.reduce((a, e) => a + e.amountUSD, 0));
   const totalBaseExpBs = round2(filteredExpenses.reduce((a, e) => a + e.baseImponibleBs, 0));
@@ -460,15 +488,27 @@ export const ContabilidadView: React.FC = () => {
   const totalRetIvaBs = round2(filteredExpenses.reduce((a, e) => a + e.retencionIVABs, 0));
   const totalRetIslrBs = round2(filteredExpenses.reduce((a, e) => a + e.retencionISLRBs, 0));
 
-  // Net Balance (Active Sales minus Credit Notes minus Purchases/Expenses)
+  // Operating Expenses (includes Sueldo Propietario / Nómina for true profitability; EXCLUDES Retiro Personal / Adelanto Dueño)
+  const operatingExpensesOnly = nonDuplicatedExpenses.filter(e => !isExpenseOwnerWithdrawal(e));
+  const ownerSalaryExpensesOnly = nonDuplicatedExpenses.filter(e => isExpenseOwnerSalary(e));
+  const ownerWithdrawalExpensesOnly = nonDuplicatedExpenses.filter(e => isExpenseOwnerWithdrawal(e));
+
+  const sueldoPropietarioUSD = round2(ownerSalaryExpensesOnly.reduce((a, e) => a + e.amountUSD, 0));
+  const sueldoPropietarioBs = round2(ownerSalaryExpensesOnly.reduce((a, e) => a + e.amountBs, 0));
+  const retirosPersonalesUSD = round2(ownerWithdrawalExpensesOnly.reduce((a, e) => a + e.amountUSD, 0));
+  const retirosPersonalesBs = round2(ownerWithdrawalExpensesOnly.reduce((a, e) => a + e.amountBs, 0));
+
+  // Net Balance (Active Sales minus Credit Notes minus True Operating Expenses)
   const allActiveSalesUSD = round2(activeSales.reduce((a, s) => a + s.totalUSD, 0));
   const allActiveSalesBs = round2(activeSales.reduce((a, s) => a + s.totalBs, 0));
   const netIngresosUSD = round2(Math.max(0, allActiveSalesUSD - totalCreditNotesUSD));
   const netIngresosBs = round2(Math.max(0, allActiveSalesBs - totalCreditNotesBs));
-  const allExpUSD = round2(nonDuplicatedExpenses.reduce((a, e) => a + e.amountUSD, 0));
-  const allExpBs = round2(nonDuplicatedExpenses.reduce((a, e) => a + e.amountBs, 0));
+  const allExpUSD = round2(operatingExpensesOnly.reduce((a, e) => a + e.amountUSD, 0));
+  const allExpBs = round2(operatingExpensesOnly.reduce((a, e) => a + e.amountBs, 0));
   const netUSD = round2(netIngresosUSD - allExpUSD);
   const netBs = round2(netIngresosBs - allExpBs);
+  const flujoTrasRetirosUSD = round2(netUSD - retirosPersonalesUSD);
+  const flujoTrasRetirosBs = round2(netBs - retirosPersonalesBs);
 
   // Breakdown by payment methods for active sales
   const methodsVentas: Record<string, { usd: number; bs: number }> = {};
@@ -485,8 +525,14 @@ export const ContabilidadView: React.FC = () => {
     ventasTotalUSD: netIngresosUSD,
     gastosTotalBs: allExpBs,
     gastosTotalUSD: allExpUSD,
+    sueldoPropietarioUSD,
+    sueldoPropietarioBs,
+    retirosPersonalesUSD,
+    retirosPersonalesBs,
     netoBs: netBs,
     netoUSD: netUSD,
+    flujoTrasRetirosUSD,
+    flujoTrasRetirosBs,
     igtfBs: round2(activeSales.reduce((a, s) => a + s.igtfBs, 0)),
     igtfUSD: round2(activeSales.reduce((a, s) => a + s.igtfUSD, 0)),
     metodosVentas: methodsVentas,
@@ -1072,8 +1118,13 @@ export const ContabilidadView: React.FC = () => {
 
           {/* Compras Table */}
           <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] overflow-hidden">
-            <div className="p-3.5 bg-[#F8FAFC] border-b border-[#DCE4F0] flex items-center justify-between text-xs">
-              <span className="font-bold text-[#0B1528]">Libro de Compras y Gastos - Crédito Fiscal SENIAT</span>
+            <div className="p-3.5 bg-[#F8FAFC] border-b border-[#DCE4F0] flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div>
+                <span className="font-bold text-[#0B1528]">Libro de Compras y Gastos - Crédito Fiscal SENIAT</span>
+                <span className="block text-[10px] text-slate-500">
+                  Excluye automáticamente Sueldo Propietario / Nómina y Retiros Personales del Dueño (sin IVA ni retenciones).
+                </span>
+              </div>
               <span className="text-slate-500 font-mono-numbers">{filteredExpenses.length} facturas</span>
             </div>
 
@@ -1776,7 +1827,15 @@ export const ContabilidadView: React.FC = () => {
                             {shift.closedBy || shift.openedBy || 'Admin'}
                           </td>
                           <td className="py-2.5 px-3 text-right font-bold text-slate-800">
-                            ${formatUSD(shift.initialCashUSD)}
+                            <div>${formatUSD(shift.initialCashUSD)}</div>
+                            {(Math.abs(shift.openingDifferenceUSD || 0) >= 0.01 || Math.abs(shift.openingDifferenceBs || 0) >= 0.01) && (
+                              <span
+                                title={`${shift.openingDifferenceReason || 'Diferencia de apertura'}${shift.openingDifferenceNotes ? ': ' + shift.openingDifferenceNotes : ''}`}
+                                className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 font-sans text-[9px] font-extrabold"
+                              >
+                                Var. apertura
+                              </span>
+                            )}
                           </td>
                           <td className="py-2.5 px-3 text-right font-bold text-[#1D4ED8]">
                             ${formatUSD(shift.totalSalesUSD || 0)}
@@ -2337,7 +2396,7 @@ export const ContabilidadView: React.FC = () => {
             {/* Egresos */}
             <div className="bg-white/95 p-5 rounded-2xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-500 uppercase">Total Egresos (Gastos)</span>
+                <span className="text-xs font-bold text-slate-500 uppercase">Gastos Operativos y Compras</span>
                 <span className="p-1.5 rounded-lg bg-[#FEECEF] border border-[#FBC4CD] text-[#BE123C]">
                   <TrendingDown className="w-4 h-4" />
                 </span>
@@ -2349,14 +2408,14 @@ export const ContabilidadView: React.FC = () => {
                 Bs. {formatBs(allExpBs)}
               </div>
               <p className="text-[11px] text-slate-400 pt-1 border-t border-[#DCE4F0]">
-                Compras a proveedores y gastos operativos
+                Incluye compras, operativos y sueldo propietario (excluye retiros personales)
               </p>
             </div>
 
             {/* Saldo Neto */}
             <div className="bg-[#0B1528] text-white p-5 rounded-2xl shadow-md border border-[#0B1528] space-y-2">
               <span className="text-[10px] font-bold text-blue-300 uppercase tracking-wider block">
-                Balance Operativo Neto
+                Rentabilidad Operativa Real
               </span>
               <div className="text-3xl font-black text-white font-mono-numbers">
                 ${formatUSD(netUSD)}
@@ -2365,10 +2424,63 @@ export const ContabilidadView: React.FC = () => {
                 Bs. {formatBs(netBs)}
               </div>
               <p className="text-[11px] text-slate-300 pt-1 border-t border-white/10">
-                Utilidad bruta antes de deducciones tributarias
+                Utilidad real del negocio antes de retiros personales e impuestos
               </p>
             </div>
           </div>
+
+          {/* Separated Owner Salary & Personal Withdrawals Breakdown */}
+          {(sueldoPropietarioUSD > 0 || sueldoPropietarioBs > 0 || retirosPersonalesUSD > 0 || retirosPersonalesBs > 0) && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-indigo-50/70 p-4 rounded-2xl border border-indigo-200 space-y-1">
+                <span className="text-[10px] font-bold text-indigo-800 uppercase tracking-wider block">
+                  Sueldo Propietario / Nómina (en Gastos Operativos)
+                </span>
+                <div className="text-xl font-black text-indigo-950 font-mono-numbers">
+                  ${formatUSD(sueldoPropietarioUSD)}
+                </div>
+                <div className="text-xs font-bold text-indigo-700 font-mono-numbers">
+                  Bs. {formatBs(sueldoPropietarioBs)}
+                </div>
+                <p className="text-[10px] text-indigo-800/80">
+                  Incluido en rentabilidad operativa • Excluido del Libro de Compras SENIAT
+                </p>
+              </div>
+
+              <div className="bg-purple-50/80 p-4 rounded-2xl border border-purple-200 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-purple-800 uppercase tracking-wider">
+                    Retiros Personales / Adelanto Dueño
+                  </span>
+                  <Wallet className="w-4 h-4 text-purple-600" />
+                </div>
+                <div className="text-xl font-black text-purple-950 font-mono-numbers">
+                  ${formatUSD(retirosPersonalesUSD)}
+                </div>
+                <div className="text-xs font-bold text-purple-700 font-mono-numbers">
+                  Bs. {formatBs(retirosPersonalesBs)}
+                </div>
+                <p className="text-[10px] text-purple-800/80">
+                  Separado de costos operativos • Descontado de caja/banco • Sin SENIAT
+                </p>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1">
+                <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">
+                  Flujo Neto Disponible tras Retiros Personales
+                </span>
+                <div className={`text-xl font-black font-mono-numbers ${flujoTrasRetirosUSD >= 0 ? 'text-emerald-800' : 'text-rose-700'}`}>
+                  ${formatUSD(flujoTrasRetirosUSD)}
+                </div>
+                <div className="text-xs font-bold text-slate-700 font-mono-numbers">
+                  Bs. {formatBs(flujoTrasRetirosBs)}
+                </div>
+                <p className="text-[10px] text-slate-500">
+                  Rentabilidad operativa menos retiros personales del dueño
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Breakdown by Payment Method Table */}
           <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] overflow-hidden">
@@ -2489,6 +2601,22 @@ export const ContabilidadView: React.FC = () => {
                   <span className="text-slate-500">Gastos Pagados en Efectivo ($):</span>
                   <span className="font-bold text-[#BE123C] font-mono-numbers">${formatUSD(selectedShiftForDetail.totalExpensesUSD || 0)}</span>
                 </div>
+                {((selectedShiftForDetail.totalOwnerSalaryUSD || 0) > 0 || (selectedShiftForDetail.totalOwnerSalaryBs || 0) > 0) && (
+                  <div className="flex justify-between py-1 border-t border-[#DCE4F0] text-indigo-800">
+                    <span>Sueldo Propietario (Turno):</span>
+                    <span className="font-bold font-mono-numbers">
+                      ${formatUSD(selectedShiftForDetail.totalOwnerSalaryUSD || 0)} / Bs {formatBs(selectedShiftForDetail.totalOwnerSalaryBs || 0)}
+                    </span>
+                  </div>
+                )}
+                {((selectedShiftForDetail.totalOwnerWithdrawalsUSD || 0) > 0 || (selectedShiftForDetail.totalOwnerWithdrawalsBs || 0) > 0) && (
+                  <div className="flex justify-between py-1 border-t border-[#DCE4F0] text-purple-800">
+                    <span>Retiros Personales (Turno):</span>
+                    <span className="font-bold font-mono-numbers">
+                      ${formatUSD(selectedShiftForDetail.totalOwnerWithdrawalsUSD || 0)} / Bs {formatBs(selectedShiftForDetail.totalOwnerWithdrawalsBs || 0)}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="p-4 bg-[#E7F8EE] rounded-2xl border border-[#A7E6C4] space-y-2 text-xs">
@@ -2536,8 +2664,10 @@ export const ContabilidadView: React.FC = () => {
                       <tr>
                         <th className="py-2 px-3">Banco</th>
                         <th className="py-2 px-3">Cuenta</th>
-                        <th className="py-2 px-3 text-right">Saldo Inicial Bs</th>
-                        <th className="py-2 px-3 text-right">Saldo Inicial $</th>
+                        <th className="py-2 px-3 text-right">Inicial Bs</th>
+                        <th className="py-2 px-3 text-right">Egresos Bs</th>
+                        <th className="py-2 px-3 text-right">Esperado Bs</th>
+                        <th className="py-2 px-3 text-right">Cierre Bs</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#DCE4F0]/60 font-mono-numbers">
@@ -2545,8 +2675,16 @@ export const ContabilidadView: React.FC = () => {
                         <tr key={i}>
                           <td className="py-2 px-3 font-sans font-bold text-slate-800">{b.bankName}</td>
                           <td className="py-2 px-3 text-slate-600">{b.accountNumber}</td>
-                          <td className="py-2 px-3 text-right font-bold text-[#1D4ED8]">Bs. {formatBs(b.initialBalanceBs)}</td>
-                          <td className="py-2 px-3 text-right font-bold text-slate-800">${formatUSD(b.initialBalanceUSD || 0)}</td>
+                          <td className="py-2 px-3 text-right text-slate-700">Bs. {formatBs(b.initialBalanceBs)}</td>
+                          <td className="py-2 px-3 text-right text-rose-600">
+                            {(b.outflowsBs || 0) > 0 ? `-Bs. ${formatBs(b.outflowsBs || 0)}` : 'Bs. 0,00'}
+                          </td>
+                          <td className="py-2 px-3 text-right font-bold text-[#1D4ED8]">
+                            Bs. {formatBs(b.expectedBalanceBs ?? b.initialBalanceBs)}
+                          </td>
+                          <td className="py-2 px-3 text-right font-bold text-slate-900">
+                            Bs. {formatBs(b.countedBalanceBs ?? b.expectedBalanceBs ?? b.initialBalanceBs)}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2573,10 +2711,74 @@ export const ContabilidadView: React.FC = () => {
               </div>
             )}
 
+            {/* Opening Audit vs Previous Shift (Internal Cash Control Only) */}
+            {(Math.abs(selectedShiftForDetail.openingDifferenceUSD || 0) >= 0.01 ||
+              Math.abs(selectedShiftForDetail.openingDifferenceBs || 0) >= 0.01 ||
+              selectedShiftForDetail.openingDifferenceReason ||
+              selectedShiftForDetail.openingDifferenceNotes ||
+              selectedShiftForDetail.notes) && (
+              <div className="p-3.5 bg-amber-50/90 border border-amber-300 rounded-2xl text-xs text-amber-950 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="font-extrabold uppercase tracking-wider text-[11px] text-amber-900">
+                    Auditoría de Apertura vs Cierre Anterior
+                  </span>
+                  {selectedShiftForDetail.previousCloseDateFormatted && (
+                    <span className="text-[10px] font-semibold text-amber-800">
+                      Ref. cierre: {selectedShiftForDetail.previousCloseDateFormatted}
+                    </span>
+                  )}
+                </div>
+
+                {(typeof selectedShiftForDetail.openingDifferenceUSD === 'number' ||
+                  typeof selectedShiftForDetail.openingDifferenceBs === 'number') && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="px-2.5 py-1.5 rounded-xl bg-white/80 border border-amber-200 flex items-center justify-between">
+                      <span className="text-[11px] text-slate-600">Variación apertura USD:</span>
+                      <span className="font-mono-numbers font-extrabold text-slate-900">
+                        {(selectedShiftForDetail.openingDifferenceUSD || 0) > 0 ? '+' : (selectedShiftForDetail.openingDifferenceUSD || 0) < 0 ? '-' : ''}
+                        ${formatUSD(Math.abs(selectedShiftForDetail.openingDifferenceUSD || 0))}
+                      </span>
+                    </div>
+                    <div className="px-2.5 py-1.5 rounded-xl bg-white/80 border border-amber-200 flex items-center justify-between">
+                      <span className="text-[11px] text-slate-600">Variación apertura Bs:</span>
+                      <span className="font-mono-numbers font-extrabold text-slate-900">
+                        {(selectedShiftForDetail.openingDifferenceBs || 0) > 0 ? '+' : (selectedShiftForDetail.openingDifferenceBs || 0) < 0 ? '-' : ''}
+                        Bs. {formatBs(Math.abs(selectedShiftForDetail.openingDifferenceBs || 0))}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {selectedShiftForDetail.openingDifferenceReason && (
+                  <div>
+                    <strong>Motivo de apertura:</strong> {selectedShiftForDetail.openingDifferenceReason}
+                  </div>
+                )}
+                {(selectedShiftForDetail.openingMatchedMovementsCount || 0) > 0 && (
+                  <div className="text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-xl px-2.5 py-1.5">
+                    <strong>Respaldo por retiros/egresos entre turnos ({selectedShiftForDetail.openingMatchedMovementsCount}):</strong>{' '}
+                    {(selectedShiftForDetail.openingMatchedOutflowsUSD || 0) > 0 ? `$${formatUSD(selectedShiftForDetail.openingMatchedOutflowsUSD || 0)}` : ''}
+                    {(selectedShiftForDetail.openingMatchedOutflowsUSD || 0) > 0 && (selectedShiftForDetail.openingMatchedOutflowsBs || 0) > 0 ? ' • ' : ''}
+                    {(selectedShiftForDetail.openingMatchedOutflowsBs || 0) > 0 ? `Bs. ${formatBs(selectedShiftForDetail.openingMatchedOutflowsBs || 0)}` : ''}
+                  </div>
+                )}
+                {selectedShiftForDetail.openingDifferenceNotes && (
+                  <div>
+                    <strong>Justificación:</strong> {selectedShiftForDetail.openingDifferenceNotes}
+                  </div>
+                )}
+                {selectedShiftForDetail.notes && (
+                  <div>
+                    <strong>Notas de apertura:</strong> {selectedShiftForDetail.notes}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Notes */}
             {selectedShiftForDetail.closedNotes && (
               <div className="p-3 bg-[#FFF3E8] border border-[#F5D3B3] rounded-xl text-xs text-[#7C3A0B]">
-                <strong>Observaciones de Caja:</strong> {selectedShiftForDetail.closedNotes}
+                <strong>Observaciones de Cierre:</strong> {selectedShiftForDetail.closedNotes}
               </div>
             )}
 
@@ -3371,6 +3573,8 @@ export const ContabilidadView: React.FC = () => {
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Categoría</label>
                   <select value={editGastoCategory} onChange={e => setEditGastoCategory(e.target.value as GastoOperativoCategory)} className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl font-semibold">
+                    <option value={OWNER_SALARY_CATEGORY}>Sueldo Propietario / Nómina</option>
+                    <option value={OWNER_WITHDRAWAL_CATEGORY}>Retiro Personal / Adelanto Dueño</option>
                     <option value="Insumos / Papelería">Insumos / Papelería</option>
                     <option value="Alquiler">Alquiler</option>
                     <option value="Servicios">Servicios</option>
@@ -3485,6 +3689,27 @@ export const ContabilidadView: React.FC = () => {
                     <option value="transferencia">Transferencia Bancaria</option>
                   </select>
                 </div>
+
+                {isBankPaymentMethod(gastoAbonoMethod) && ((businessInfo.bankAccounts || []).length > 0 || businessInfo.pagoMovilBank) && (
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Cuenta Bancaria de Origen</label>
+                    <select
+                      value={gastoAbonoBankAccountId}
+                      onChange={e => setGastoAbonoBankAccountId(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl font-semibold"
+                    >
+                      {(businessInfo.bankAccounts || []).length > 0 ? (
+                        (businessInfo.bankAccounts || []).map(bk => (
+                          <option key={bk.id} value={bk.id}>
+                            {bk.bank} (••••{bk.accountNumber.slice(-4)})
+                          </option>
+                        ))
+                      ) : (
+                        <option value="default-pm">{businessInfo.pagoMovilBank} (Pago Móvil)</option>
+                      )}
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Nº Referencia</label>

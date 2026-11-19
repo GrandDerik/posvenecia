@@ -10,13 +10,74 @@ export default defineConfig(() => {
       react(), 
       tailwindcss(),
       VitePWA({
-        registerType: 'prompt',
+        registerType: 'autoUpdate',
+        injectRegister: null,
+        manifest: false,
         devOptions: {
           enabled: false
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024
+          skipWaiting: true,
+          clientsClaim: true,
+          cleanupOutdatedCaches: true,
+          navigateFallback: null,
+          // Exclude HTML from precache so index.html is always resolved NetworkFirst
+          globPatterns: ['**/*.{js,css,ico,png,svg,woff,woff2}'],
+          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          runtimeCaching: [
+            {
+              urlPattern: ({ request }) => request.mode === 'navigate',
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'posvenecia-pages-v1',
+                networkTimeoutSeconds: 4,
+                cacheableResponse: {
+                  statuses: [200]
+                }
+              }
+            },
+            {
+              urlPattern: ({ url }) =>
+                url.origin === self.location.origin &&
+                (url.pathname === '/' || url.pathname.endsWith('/index.html')),
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'posvenecia-html-v1',
+                networkTimeoutSeconds: 4,
+                cacheableResponse: {
+                  statuses: [200]
+                }
+              }
+            },
+            {
+              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'google-fonts-stylesheets',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 30
+                },
+                cacheableResponse: {
+                  statuses: [0, 200]
+                }
+              }
+            },
+            {
+              urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'google-fonts-webfonts',
+                expiration: {
+                  maxEntries: 20,
+                  maxAgeSeconds: 60 * 60 * 24 * 365
+                },
+                cacheableResponse: {
+                  statuses: [0, 200]
+                }
+              }
+            }
+          ]
         }
       })
     ],

@@ -260,7 +260,15 @@ export interface Expense {
   supplierRIF: string;
   supplierPhone?: string;
   description: string;
-  category: 'Mercancía' | 'Servicios' | 'Alquiler' | 'Nómina' | 'Mantenimiento' | 'Otros';
+  category:
+    | 'Mercancía'
+    | 'Servicios'
+    | 'Alquiler'
+    | 'Nómina'
+    | 'Sueldo Propietario / Nómina'
+    | 'Retiro Personal / Adelanto Dueño'
+    | 'Mantenimiento'
+    | 'Otros';
   amountUSD: number;
   amountBs: number;
   baseImponibleBs: number;
@@ -270,6 +278,10 @@ export interface Expense {
   bcvRate: number;
   enteredCurrency?: 'USD' | 'Bs';
   paymentMethod: 'efectivo_usd' | 'efectivo_bs' | 'pago_movil' | 'debito' | 'transferencia' | 'credito';
+  bankAccountId?: string;
+  bankAccountLabel?: string;
+  excludeFromLibroCompras?: boolean;
+  accountingType?: 'operating_expense' | 'owner_salary' | 'owner_withdrawal';
   dueDate?: string;
   reference?: string;
   items?: ExpenseItem[];
@@ -302,7 +314,10 @@ export interface Abono {
   amountUSD: number;
   amountBs: number;
   bcvRate: number;
+  enteredCurrency?: 'USD' | 'Bs';
   paymentMethod: PaymentMethod;
+  bankAccountId?: string;
+  bankAccountLabel?: string;
   reference?: string;
   notes?: string;
 }
@@ -412,6 +427,8 @@ export interface CuentaPorPagar {
 }
 
 export type GastoOperativoCategory = 
+  | 'Sueldo Propietario / Nómina'
+  | 'Retiro Personal / Adelanto Dueño'
   | 'Alquiler' 
   | 'Servicios' 
   | 'Nómina' 
@@ -441,12 +458,15 @@ export interface GastoOperativo {
   amountUSD: number;
   amountBs: number;
   bcvRate: number;
+  enteredCurrency?: 'USD' | 'Bs';
   status: 'pendiente' | 'parcial' | 'pagado';
   paidAmountUSD?: number;
   remainingUSD?: number;
   abonos?: Abono[];
   paymentDate?: string;
   paymentMethod?: PaymentMethod;
+  bankAccountId?: string;
+  bankAccountLabel?: string;
   reference?: string;
   notes?: string;
 }
@@ -470,8 +490,36 @@ export interface BankInitialBalance {
   accountNumber: string;
   initialBalanceBs: number;
   initialBalanceUSD?: number;
+  outflowsBs?: number;
+  outflowsUSD?: number;
+  expectedBalanceBs?: number;
+  expectedBalanceUSD?: number;
   countedBalanceBs?: number;
   countedBalanceUSD?: number;
+}
+
+export type CashOpeningDifferenceReason =
+  | 'Retiro / Adelanto al Socio'
+  | 'Sueldo / Nómina'
+  | 'Resguardo / Caja Fuerte'
+  | 'Diferencia de Conteo / Faltante'
+  | 'Pago/gasto fuera de turno'
+  | 'Observación de apertura'
+  | 'Resguardo / Caja fuerte'
+  | 'Ajuste de conteo';
+
+export interface CashOpeningAuditMeta {
+  previousShiftId?: string;
+  previousCloseDateFormatted?: string;
+  previousCloseCashUSD?: number;
+  previousCloseCashBs?: number;
+  openingDifferenceUSD?: number;
+  openingDifferenceBs?: number;
+  openingMatchedOutflowsUSD?: number;
+  openingMatchedOutflowsBs?: number;
+  openingMatchedMovementsCount?: number;
+  openingDifferenceReason?: CashOpeningDifferenceReason | string;
+  openingDifferenceNotes?: string;
 }
 
 export interface CashShift {
@@ -486,6 +534,18 @@ export interface CashShift {
   initialBanks?: BankInitialBalance[];
   notes?: string;
   openedBy?: string;
+  // Auditoría interna de diferencia al abrir caja vs cierre anterior (no altera libros fiscales)
+  previousShiftId?: string;
+  previousCloseDateFormatted?: string;
+  previousCloseCashUSD?: number;
+  previousCloseCashBs?: number;
+  openingDifferenceUSD?: number;
+  openingDifferenceBs?: number;
+  openingMatchedOutflowsUSD?: number;
+  openingMatchedOutflowsBs?: number;
+  openingMatchedMovementsCount?: number;
+  openingDifferenceReason?: CashOpeningDifferenceReason | string;
+  openingDifferenceNotes?: string;
   expectedCashUSD?: number;
   expectedCashBs?: number;
   countedCashUSD?: number;
@@ -499,6 +559,10 @@ export interface CashShift {
   transactionsCount?: number;
   totalExpensesUSD?: number;
   totalExpensesBs?: number;
+  totalOwnerSalaryUSD?: number;
+  totalOwnerSalaryBs?: number;
+  totalOwnerWithdrawalsUSD?: number;
+  totalOwnerWithdrawalsBs?: number;
   totalCreditNotesUSD?: number;
   totalCreditNotesBs?: number;
   totalFiadoAbonosUSD?: number;

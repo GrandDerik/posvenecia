@@ -28,11 +28,22 @@ import {
   UserCheck,
   Briefcase,
   MapPin,
-  Mail
+  Mail,
+  Wallet,
+  Landmark,
+  ShieldCheck
 } from 'lucide-react';
-import { formatUSD, formatBs, getLocalDateStr, round2 } from '../utils/exportUtils';
+import { formatUSD, formatBs, getLocalDateStr, round2, safeDiv } from '../utils/exportUtils';
 import { CuentaPorPagar, PaymentMethod, GastoOperativo, GastoOperativoCategory, Supplier } from '../types';
 import { LoansSubTab } from './LoansSubTab';
+import {
+  OWNER_SALARY_CATEGORY,
+  OWNER_WITHDRAWAL_CATEGORY,
+  isBankPaymentMethod,
+  isNonFiscalPersonalOrSalaryCategory,
+  isOwnerSalaryCategory,
+  isOwnerWithdrawalCategory
+} from '../utils/accountingUtils';
 
 export const CuentasPorPagarView: React.FC = () => {
   const { 
@@ -52,6 +63,7 @@ export const CuentasPorPagarView: React.FC = () => {
     deleteSupplier,
     loans,
     bcvRate,
+    businessInfo,
     isCashRegisterOpen,
     setIsAperturaModalOpen
   } = useApp();
@@ -63,7 +75,7 @@ export const CuentasPorPagarView: React.FC = () => {
   // Search & Filter State
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'todos' | 'pendiente' | 'parcial' | 'pagado' | 'pagada' | 'vencida'>('todos');
-  const [gastoTypeFilter, setGastoTypeFilter] = useState<'todos' | 'mensual_fijo' | 'eventual'>('todos');
+  const [gastoTypeFilter, setGastoTypeFilter] = useState<'todos' | 'operativos' | 'retiros_dueno' | 'mensual_fijo' | 'eventual'>('todos');
   const [selectedCuenta, setSelectedCuenta] = useState<CuentaPorPagar | null>(null);
   const [expandedGastoAbonosId, setExpandedGastoAbonosId] = useState<string | null>(null);
 
@@ -155,17 +167,50 @@ export const CuentasPorPagarView: React.FC = () => {
   const [gastoCurrencyInput, setGastoCurrencyInput] = useState<'USD' | 'Bs'>('USD');
   const [gastoInitialStatus, setGastoInitialStatus] = useState<'pendiente' | 'pagado'>('pendiente');
   const [gastoPayMethod, setGastoPayMethod] = useState<PaymentMethod>('pago_movil');
+  const [gastoBankAccountId, setGastoBankAccountId] = useState('');
   const [gastoPayRef, setGastoPayRef] = useState('');
   const [gastoNotes, setGastoNotes] = useState('');
 
-  // Pagar / Abonar Gasto Form (Partial Payment Support)
+  // Pagar / Abonar Gasto Form (Partial Payment Support, exact USD or Bs)
+  const [pagarCurrencyInput, setPagarCurrencyInput] = useState<'USD' | 'Bs'>('USD');
   const [pagarAmountUSD, setPagarAmountUSD] = useState('');
+  const [pagarAmountBs, setPagarAmountBs] = useState('');
   const [pagarMethod, setPagarMethod] = useState<PaymentMethod>('pago_movil');
+  const [pagarBankAccountId, setPagarBankAccountId] = useState('');
   const [pagarRef, setPagarRef] = useState('');
   const [pagarNotes, setPagarNotes] = useState('');
 
+  // Configured bank accounts from business profile for exact bank traceability
+  const availableBankOptions = (() => {
+    const accounts = businessInfo.bankAccounts || [];
+    if (accounts.length > 0) {
+      return accounts.map((bk) => ({
+        id: bk.id,
+        label: `${bk.bank} (••••${bk.accountNumber.slice(-4)})`
+      }));
+    }
+    if (businessInfo.pagoMovilBank) {
+      return [
+        {
+          id: 'default-pm',
+          label: `${businessInfo.pagoMovilBank} (Pago Móvil)`
+        }
+      ];
+    }
+    return [] as { id: string; label: string }[];
+  })();
+
+  const defaultBankId = availableBankOptions[0]?.id || '';
+
+  const getBankLabelById = (bankId?: string): string | undefined => {
+    if (!bankId) return undefined;
+    return availableBankOptions.find((b) => b.id === bankId)?.label;
+  };
+
   const getCategoryIcon = (cat: GastoOperativoCategory) => {
     switch (cat) {
+      case OWNER_SALARY_CATEGORY: return <UserCheck className="w-4 h-4 text-indigo-600" />;
+      case OWNER_WITHDRAWAL_CATEGORY: return <Wallet className="w-4 h-4 text-purple-600" />;
       case 'Alquiler': return <Home className="w-4 h-4 text-blue-600" />;
       case 'Servicios': return <Zap className="w-4 h-4 text-amber-500" />;
       case 'Nómina': return <Users className="w-4 h-4 text-emerald-600" />;
@@ -196,16 +241,25 @@ export const CuentasPorPagarView: React.FC = () => {
     new Date(c.dueDate) < new Date() && c.status !== 'pagada'
   ).length;
 
-  // Metrics for Gastos Operativos del Mes
-  const totalGastosMesUSD = gastosOperativos.reduce((sum, g) => sum + g.amountUSD, 0);
-  const totalGastosPendientesUSD = gastosOperativos
-    .filter(g => g.status !== 'pagado')
-    .reduce((sum, g) => sum + getGastoRemainingUSD(g), 0);
-  const totalGastosPagadosUSD = gastosOperativos
-    .reduce((sum, g) => sum + getGastoPaidUSD(g), 0);
-  const totalGastosEventualesUSD = gastosOperativos
-    .filter(g => g.type === 'eventual')
-    .reduce((sum, g) => sum + g.amountUSD, 0);
+  // Metrics for Gastos Operativos del Mes — Personal withdrawals separated from true business costs
+  const operatingGastosOnly = gastosOperativos.filter(g => !isOwnerWithdrawalCategory(g.category));
+  const ownerWithdrawalGastos = gastosOperativos.filter(g => isOwnerWithdrawalCategory(g.category));
+  const ownerSalaryGastos = gastosOperativos.filter(g => isOwnerSalaryCategory(g.category));
+
+  const totalGastosOperativosUSD = round2(operatingGastosOnly.reduce((sum, g) => sum + g.amountUSD, 0));
+  const totalGastosOperativosBs = round2(operatingGastosOnly.reduce((sum, g) => sum + g.amountBs, 0));
+  const totalOwnerSalaryGastosUSD = round2(ownerSalaryGastos.reduce((sum, g) => sum + g.amountUSD, 0));
+  const totalRetirosDuenoUSD = round2(ownerWithdrawalGastos.reduce((sum, g) => sum + g.amountUSD, 0));
+  const totalRetirosDuenoBs = round2(ownerWithdrawalGastos.reduce((sum, g) => sum + g.amountBs, 0));
+
+  const totalGastosPendientesUSD = round2(
+    operatingGastosOnly
+      .filter(g => g.status !== 'pagado')
+      .reduce((sum, g) => sum + getGastoRemainingUSD(g), 0)
+  );
+  const totalGastosPagadosUSD = round2(
+    operatingGastosOnly.reduce((sum, g) => sum + getGastoPaidUSD(g), 0)
+  );
 
   // Filtered Cuentas por Pagar
   const filteredCuentas = cuentasPorPagar.filter(cuenta => {
@@ -233,10 +287,18 @@ export const CuentasPorPagarView: React.FC = () => {
       (g.supplierRIF && g.supplierRIF.toLowerCase().includes(q)) ||
       (g.supplierPhone && g.supplierPhone.toLowerCase().includes(q)) ||
       (g.invoiceNumber && g.invoiceNumber.toLowerCase().includes(q)) ||
+      (g.bankAccountLabel && g.bankAccountLabel.toLowerCase().includes(q)) ||
       (g.notes && g.notes.toLowerCase().includes(q)) ||
       (g.reference && g.reference.toLowerCase().includes(q));
 
-    const matchesType = gastoTypeFilter === 'todos' || g.type === gastoTypeFilter;
+    const matchesType =
+      gastoTypeFilter === 'todos'
+        ? true
+        : gastoTypeFilter === 'retiros_dueno'
+          ? isOwnerWithdrawalCategory(g.category)
+          : gastoTypeFilter === 'operativos'
+            ? !isOwnerWithdrawalCategory(g.category)
+            : g.type === gastoTypeFilter;
     const matchesStatus = statusFilter === 'todos' || g.status === statusFilter;
 
     return matchesSearch && matchesType && matchesStatus;
@@ -351,26 +413,35 @@ export const CuentasPorPagarView: React.FC = () => {
     }
   };
 
-  const openNewGastoModal = () => {
+  const openNewGastoModal = (presetCategory?: GastoOperativoCategory) => {
+    const chosenCat: GastoOperativoCategory = presetCategory || 'Insumos / Papelería';
+    const isOwnerDisbursement = isNonFiscalPersonalOrSalaryCategory(chosenCat);
     setEditingGasto(null);
-    setGastoConcept('');
-    setGastoCategory('Insumos / Papelería');
-    setGastoType('eventual');
+    setGastoConcept(
+      chosenCat === OWNER_SALARY_CATEGORY
+        ? `Sueldo Propietario - ${capitalizedMonth}`
+        : chosenCat === OWNER_WITHDRAWAL_CATEGORY
+          ? 'Retiro Personal / Adelanto Dueño'
+          : ''
+    );
+    setGastoCategory(chosenCat);
+    setGastoType(chosenCat === OWNER_SALARY_CATEGORY ? 'mensual_fijo' : 'eventual');
     setGastoSupplierId('');
-    setGastoSupplierName('');
+    setGastoSupplierName(isOwnerDisbursement ? 'Propietario / Socio' : '');
     setGastoSupplierRIF('');
     setGastoSupplierPhone('');
     setGastoInvoiceNumber('');
     setGastoMonth(capitalizedMonth);
     setGastoDate(getLocalDateStr());
     const d = new Date();
-    d.setDate(d.getDate() + 5);
+    d.setDate(d.getDate() + (isOwnerDisbursement ? 0 : 5));
     setGastoDueDate(getLocalDateStr(d));
     setGastoAmountUSD('');
     setGastoAmountBs('');
     setGastoCurrencyInput('USD');
-    setGastoInitialStatus('pendiente');
-    setGastoPayMethod('pago_movil');
+    setGastoInitialStatus(isOwnerDisbursement ? 'pagado' : 'pendiente');
+    setGastoPayMethod(isOwnerDisbursement ? 'efectivo_usd' : 'pago_movil');
+    setGastoBankAccountId(defaultBankId);
     setGastoPayRef('');
     setGastoNotes('');
     setIsAddGastoModalOpen(true);
@@ -389,11 +460,13 @@ export const CuentasPorPagarView: React.FC = () => {
     setGastoMonth(g.month);
     setGastoDate(g.date ? getLocalDateStr(new Date(g.date)) : getLocalDateStr());
     setGastoDueDate(g.dueDate ? getLocalDateStr(new Date(g.dueDate)) : getLocalDateStr());
-    setGastoCurrencyInput('USD');
+    const initialCurr = g.enteredCurrency || 'USD';
+    setGastoCurrencyInput(initialCurr);
     setGastoAmountUSD(g.amountUSD.toFixed(2));
-    setGastoAmountBs((g.amountUSD * bcvRate).toFixed(2));
+    setGastoAmountBs((g.amountBs > 0 ? g.amountBs : g.amountUSD * bcvRate).toFixed(2));
     setGastoInitialStatus(g.status === 'pagado' ? 'pagado' : 'pendiente');
     setGastoPayMethod(g.paymentMethod || 'pago_movil');
+    setGastoBankAccountId(g.bankAccountId || defaultBankId);
     setGastoPayRef(g.reference || '');
     setGastoNotes(g.notes || '');
     setIsAddGastoModalOpen(true);
@@ -548,14 +621,18 @@ export const CuentasPorPagarView: React.FC = () => {
     let finalBs = 0;
 
     if (gastoCurrencyInput === 'USD') {
-      finalUSD = parseFloat(gastoAmountUSD);
-      finalBs = finalUSD * bcvRate;
+      finalUSD = round2(parseFloat(gastoAmountUSD));
+      finalBs = round2(finalUSD * bcvRate);
     } else {
-      finalBs = parseFloat(gastoAmountBs);
-      finalUSD = bcvRate > 0 ? finalBs / bcvRate : 0;
+      finalBs = round2(parseFloat(gastoAmountBs));
+      finalUSD = round2(safeDiv(finalBs, bcvRate, 0));
     }
 
-    if (!gastoConcept.trim() || isNaN(finalUSD) || finalUSD <= 0) return;
+    if (!gastoConcept.trim() || isNaN(finalUSD) || (finalUSD <= 0 && finalBs <= 0)) return;
+
+    const usesBank = gastoInitialStatus === 'pagado' && isBankPaymentMethod(gastoPayMethod);
+    const chosenBankId = usesBank ? (gastoBankAccountId || defaultBankId || undefined) : undefined;
+    const chosenBankLabel = usesBank ? getBankLabelById(chosenBankId) : undefined;
 
     if (editingGasto) {
       updateGastoOperativo({
@@ -571,13 +648,22 @@ export const CuentasPorPagarView: React.FC = () => {
         month: gastoMonth.trim() || capitalizedMonth,
         date: new Date(gastoDate).toISOString(),
         dueDate: new Date(gastoDueDate).toISOString(),
-        amountUSD: Number(finalUSD.toFixed(2)),
-        amountBs: Number(finalBs.toFixed(2)),
+        amountUSD: finalUSD,
+        amountBs: finalBs,
+        enteredCurrency: gastoCurrencyInput,
         bcvRate,
+        bankAccountId: chosenBankId ?? editingGasto.bankAccountId,
+        bankAccountLabel: chosenBankLabel ?? editingGasto.bankAccountLabel,
         notes: gastoNotes.trim() || undefined
       });
     } else {
-      if (gastoInitialStatus === 'pagado' && !isCashRegisterOpen && (gastoPayMethod === 'efectivo_usd' || gastoPayMethod === 'efectivo_bs')) {
+      const allowClosedCashDisbursement = isNonFiscalPersonalOrSalaryCategory(gastoCategory);
+      if (
+        gastoInitialStatus === 'pagado' &&
+        !isCashRegisterOpen &&
+        !allowClosedCashDisbursement &&
+        (gastoPayMethod === 'efectivo_usd' || gastoPayMethod === 'efectivo_bs')
+      ) {
         setIsAperturaModalOpen(true);
         return;
       }
@@ -594,12 +680,15 @@ export const CuentasPorPagarView: React.FC = () => {
         month: gastoMonth.trim() || capitalizedMonth,
         date: new Date(gastoDate).toISOString(),
         dueDate: new Date(gastoDueDate).toISOString(),
-        amountUSD: Number(finalUSD.toFixed(2)),
-        amountBs: Number(finalBs.toFixed(2)),
+        amountUSD: finalUSD,
+        amountBs: finalBs,
+        enteredCurrency: gastoCurrencyInput,
         bcvRate,
         status: gastoInitialStatus,
         paymentDate: gastoInitialStatus === 'pagado' ? new Date().toISOString() : undefined,
         paymentMethod: gastoInitialStatus === 'pagado' ? gastoPayMethod : undefined,
+        bankAccountId: chosenBankId,
+        bankAccountLabel: chosenBankLabel,
         reference: gastoInitialStatus === 'pagado' ? gastoPayRef.trim() || undefined : undefined,
         notes: gastoNotes.trim() || undefined
       });
@@ -611,9 +700,13 @@ export const CuentasPorPagarView: React.FC = () => {
 
   const openPagarGastoModal = (gasto: GastoOperativo) => {
     const remaining = getGastoRemainingUSD(gasto);
+    const defaultCurr = gasto.enteredCurrency || 'USD';
     setGastoForPagar(gasto);
+    setPagarCurrencyInput(defaultCurr);
     setPagarAmountUSD(remaining.toFixed(2));
-    setPagarMethod('pago_movil');
+    setPagarAmountBs(round2(remaining * bcvRate).toFixed(2));
+    setPagarMethod(defaultCurr === 'Bs' ? 'pago_movil' : 'efectivo_usd');
+    setPagarBankAccountId(gasto.bankAccountId || defaultBankId);
     setPagarRef('');
     setPagarNotes('');
     setPagarGastoError(null);
@@ -625,13 +718,27 @@ export const CuentasPorPagarView: React.FC = () => {
     e.preventDefault();
     if (!gastoForPagar || isSubmittingPagarGasto) return;
 
-    const amountToPay = parseFloat(pagarAmountUSD);
+    const exactBs = pagarCurrencyInput === 'Bs' ? round2(parseFloat(pagarAmountBs) || 0) : undefined;
+    const amountToPay =
+      pagarCurrencyInput === 'Bs'
+        ? round2(safeDiv(exactBs || 0, bcvRate, 0))
+        : round2(parseFloat(pagarAmountUSD) || 0);
+
     if (isNaN(amountToPay) || amountToPay <= 0) return;
 
-    if (!isCashRegisterOpen && (pagarMethod === 'efectivo_usd' || pagarMethod === 'efectivo_bs')) {
+    const allowClosedCashDisbursement = isNonFiscalPersonalOrSalaryCategory(gastoForPagar.category);
+    if (
+      !isCashRegisterOpen &&
+      !allowClosedCashDisbursement &&
+      (pagarMethod === 'efectivo_usd' || pagarMethod === 'efectivo_bs')
+    ) {
       setIsAperturaModalOpen(true);
       return;
     }
+
+    const usesBank = isBankPaymentMethod(pagarMethod);
+    const chosenBankId = usesBank ? (pagarBankAccountId || defaultBankId || undefined) : undefined;
+    const chosenBankLabel = usesBank ? getBankLabelById(chosenBankId) : undefined;
 
     setIsSubmittingPagarGasto(true);
     setPagarGastoError(null);
@@ -641,12 +748,19 @@ export const CuentasPorPagarView: React.FC = () => {
         pagarMethod,
         pagarRef.trim() || undefined,
         amountToPay,
-        pagarNotes.trim() || undefined
+        pagarNotes.trim() || undefined,
+        {
+          bankAccountId: chosenBankId,
+          bankAccountLabel: chosenBankLabel,
+          enteredCurrency: pagarCurrencyInput,
+          exactAmountBs: exactBs
+        }
       );
 
       setIsPagarGastoModalOpen(false);
       setGastoForPagar(null);
       setPagarAmountUSD('');
+      setPagarAmountBs('');
       setPagarRef('');
       setPagarNotes('');
     } catch (err: any) {
@@ -676,16 +790,34 @@ export const CuentasPorPagarView: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto shrink-0">
             {activeSubTab === 'gastos_mes' ? (
-              <button
-                type="button"
-                onClick={openNewGastoModal}
-                className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Registrar Gasto del Mes</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => openNewGastoModal(OWNER_SALARY_CATEGORY)}
+                  className="flex-1 md:flex-none px-3 py-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  <span>Sueldo Propietario</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openNewGastoModal(OWNER_WITHDRAWAL_CATEGORY)}
+                  className="flex-1 md:flex-none px-3 py-2.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  <Wallet className="w-3.5 h-3.5" />
+                  <span>Retiro Personal</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openNewGastoModal()}
+                  className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Registrar Gasto del Mes</span>
+                </button>
+              </>
             ) : activeSubTab === 'proveedores' ? (
               <button
                 type="button"
@@ -811,14 +943,28 @@ export const CuentasPorPagarView: React.FC = () => {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-gradient-to-b from-white to-[#F4F8FF] rounded-2xl p-4 border border-[#93C5FD] shadow-[0_2px_12px_-4px_rgba(37,99,235,0.1)]">
             <div className="flex items-center justify-between text-[#1D4ED8] mb-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider">Total Gastos Mes</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider">Gastos Operativos</span>
               <DollarSign className="w-4 h-4" />
             </div>
             <div className="text-lg font-black text-[#0B1528] font-mono-numbers">
-              ${formatUSD(totalGastosMesUSD)}
+              ${formatUSD(totalGastosOperativosUSD)}
             </div>
             <div className="text-[11px] text-slate-500 font-mono-numbers">
-              Bs {formatBs(totalGastosMesUSD * bcvRate)}
+              Bs {formatBs(totalGastosOperativosBs)}
+              {totalOwnerSalaryGastosUSD > 0 ? ` • Incl. Sueldo $${formatUSD(totalOwnerSalaryGastosUSD)}` : ''}
+            </div>
+          </div>
+
+          <div className="bg-purple-50/70 rounded-2xl p-4 border border-purple-200 shadow-[0_2px_12px_-4px_rgba(126,34,206,0.08)]">
+            <div className="flex items-center justify-between text-purple-700 mb-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider">Retiros Personales</span>
+              <Wallet className="w-4 h-4" />
+            </div>
+            <div className="text-lg font-black text-purple-950 font-mono-numbers">
+              ${formatUSD(totalRetirosDuenoUSD)}
+            </div>
+            <div className="text-[11px] text-purple-700 font-mono-numbers">
+              Bs {formatBs(totalRetirosDuenoBs)} • Separado de costos
             </div>
           </div>
 
@@ -837,7 +983,7 @@ export const CuentasPorPagarView: React.FC = () => {
 
           <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
             <div className="flex items-center justify-between text-[#065F46] mb-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider">Abonado / Pagado</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider">Operativos Pagados</span>
               <CheckCircle2 className="w-4 h-4" />
             </div>
             <div className="text-lg font-black text-[#065F46] font-mono-numbers">
@@ -845,19 +991,6 @@ export const CuentasPorPagarView: React.FC = () => {
             </div>
             <div className="text-[11px] text-slate-500 font-mono-numbers">
               Bs {formatBs(totalGastosPagadosUSD * bcvRate)}
-            </div>
-          </div>
-
-          <div className="bg-white/95 rounded-2xl p-4 border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)]">
-            <div className="flex items-center justify-between text-[#1D4ED8] mb-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider">Gastos Eventuales</span>
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <div className="text-lg font-black text-[#0B1528] font-mono-numbers">
-              ${formatUSD(totalGastosEventualesUSD)}
-            </div>
-            <div className="text-[11px] text-slate-500 font-mono-numbers">
-              {gastosOperativos.filter(g => g.type === 'eventual').length} registro(s)
             </div>
           </div>
         </div>
@@ -946,7 +1079,9 @@ export const CuentasPorPagarView: React.FC = () => {
                   onChange={(e) => setGastoTypeFilter(e.target.value as any)}
                   className="px-2.5 py-1.5 bg-[#F8FAFC] text-[#0B1528] rounded-xl text-xs font-bold border border-[#DCE4F0] focus:outline-none focus:border-blue-500"
                 >
-                  <option value="todos">Todos los Tipos</option>
+                  <option value="todos">Todos los Movimientos</option>
+                  <option value="operativos">Solo Gastos Operativos (incl. Sueldo)</option>
+                  <option value="retiros_dueno">Solo Retiros Personales / Dueño</option>
                   <option value="mensual_fijo">Mensuales Fijos</option>
                   <option value="eventual">Eventuales / Insumos</option>
                 </select>
@@ -1010,7 +1145,7 @@ export const CuentasPorPagarView: React.FC = () => {
               </p>
               <button
                 type="button"
-                onClick={openNewGastoModal}
+                onClick={() => openNewGastoModal()}
                 className="mt-2 px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 font-bold text-xs rounded-xl transition-colors cursor-pointer"
               >
                 + Registrar Primer Gasto del Mes
@@ -1040,9 +1175,27 @@ export const CuentasPorPagarView: React.FC = () => {
                             {gasto.concept}
                           </span>
                           
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#F8FAFC] text-slate-700 border border-[#DCE4F0]">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            isOwnerWithdrawalCategory(gasto.category)
+                              ? 'bg-purple-50 text-purple-800 border-purple-200'
+                              : isOwnerSalaryCategory(gasto.category)
+                                ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                : 'bg-[#F8FAFC] text-slate-700 border-[#DCE4F0]'
+                          }`}>
                             {gasto.category}
                           </span>
+
+                          {isOwnerWithdrawalCategory(gasto.category) && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-300">
+                              FUERA DE COSTOS • SIN SENIAT
+                            </span>
+                          )}
+
+                          {isOwnerSalaryCategory(gasto.category) && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 border border-indigo-300">
+                              GASTO OPERATIVO • SIN SENIAT
+                            </span>
+                          )}
 
                           {gasto.type === 'eventual' ? (
                             <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#EBF3FE] text-[#1D4ED8] border border-[#C5DCFC] flex items-center gap-1">
@@ -1109,6 +1262,11 @@ export const CuentasPorPagarView: React.FC = () => {
                           <span>Mes: <strong>{gasto.month}</strong></span>
                           <span>Emisión: {new Date(gasto.date).toLocaleDateString('es-VE')}</span>
                           <span>Vence: <strong className={isOverdue ? 'text-[#BE123C]' : ''}>{new Date(gasto.dueDate).toLocaleDateString('es-VE')}</strong></span>
+                          {gasto.bankAccountLabel && (
+                            <span className="text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded flex items-center gap-1">
+                              <Landmark className="w-3 h-3" /> {gasto.bankAccountLabel}
+                            </span>
+                          )}
                           {gasto.reference && (
                             <span className="font-mono text-slate-600">Últ. Ref: {gasto.reference}</span>
                           )}
@@ -1637,10 +1795,12 @@ export const CuentasPorPagarView: React.FC = () => {
                     onChange={(e) => setGastoCategory(e.target.value as any)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:bg-white focus:border-blue-500 focus:outline-none"
                   >
+                    <option value={OWNER_SALARY_CATEGORY}>Sueldo Propietario / Nómina</option>
+                    <option value={OWNER_WITHDRAWAL_CATEGORY}>Retiro Personal / Adelanto Dueño</option>
                     <option value="Insumos / Papelería">Insumos (Hojas, Tinta, Papelería)</option>
                     <option value="Alquiler">Alquiler de Local</option>
                     <option value="Servicios">Servicios (Luz / Agua / Internet)</option>
-                    <option value="Nómina">Sueldos y Nómina</option>
+                    <option value="Nómina">Sueldos y Nómina (Personal)</option>
                     <option value="Mantenimiento">Mantenimiento y Reparación</option>
                     <option value="Transporte">Transporte / Fletes</option>
                     <option value="Eventual">Gasto Eventual / Imprevisto</option>
@@ -1661,6 +1821,35 @@ export const CuentasPorPagarView: React.FC = () => {
                   </select>
                 </div>
               </div>
+
+              {/* Accounting & SENIAT Isolation Notice for Owner Salary / Personal Withdrawal */}
+              {isNonFiscalPersonalOrSalaryCategory(gastoCategory) && (
+                <div
+                  className={`p-3 rounded-2xl border text-[11px] leading-snug flex items-start gap-2 ${
+                    isOwnerWithdrawalCategory(gastoCategory)
+                      ? 'bg-purple-50 border-purple-200 text-purple-950'
+                      : 'bg-indigo-50 border-indigo-200 text-indigo-950'
+                  }`}
+                >
+                  <ShieldCheck className={`w-4 h-4 shrink-0 mt-0.5 ${isOwnerWithdrawalCategory(gastoCategory) ? 'text-purple-600' : 'text-indigo-600'}`} />
+                  <div>
+                    {isOwnerWithdrawalCategory(gastoCategory) ? (
+                      <>
+                        <strong>Retiro Personal / Adelanto Dueño:</strong> Se descuenta exactamente de la cuenta de efectivo o banco seleccionada y aparece en el cierre de caja, pero se muestra <strong>separado de los gastos operativos</strong> para no distorsionar costos. <strong>Excluido 100% del Libro de Compras SENIAT (sin IVA ni retenciones).</strong>
+                      </>
+                    ) : (
+                      <>
+                        <strong>Sueldo Propietario / Nómina:</strong> Se incluye dentro de los <strong>gastos operativos</strong> para reflejar la rentabilidad real del negocio y se descuenta de la caja o banco elegido. <strong>Excluido 100% del Libro de Compras SENIAT (sin IVA ni retenciones).</strong>
+                      </>
+                    )}
+                    {!isCashRegisterOpen && gastoInitialStatus === 'pagado' && (gastoPayMethod === 'efectivo_usd' || gastoPayMethod === 'efectivo_bs') && (
+                      <div className="mt-1 font-bold text-emerald-800">
+                        Caja cerrada: este movimiento en efectivo quedará registrado y se cruzará automáticamente en la próxima Apertura de Caja.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Amount with USD / Bs Switcher */}
               <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
@@ -1791,17 +1980,17 @@ export const CuentasPorPagarView: React.FC = () => {
                     <div className="bg-emerald-50/60 p-3 rounded-2xl border border-emerald-200 space-y-2 animate-in fade-in">
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-[11px] font-bold text-emerald-900 mb-0.5">Método de Pago</label>
+                          <label className="block text-[11px] font-bold text-emerald-900 mb-0.5">Cuenta / Método de Pago</label>
                           <select
                             value={gastoPayMethod}
                             onChange={(e) => setGastoPayMethod(e.target.value as any)}
                             className="w-full px-2 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-semibold focus:outline-none"
                           >
-                            <option value="pago_movil">Pago Móvil</option>
+                            <option value="efectivo_usd">Caja Efectivo USD ($)</option>
+                            <option value="efectivo_bs">Caja Efectivo Bs</option>
+                            <option value="pago_movil">Pago Móvil (Banco)</option>
                             <option value="transferencia">Transferencia Bancaria</option>
-                            <option value="efectivo_usd">Efectivo USD ($)</option>
-                            <option value="efectivo_bs">Efectivo Bs</option>
-                            <option value="debito">Tarjeta de Débito</option>
+                            <option value="debito">Tarjeta de Débito (Banco)</option>
                           </select>
                         </div>
                         <div>
@@ -1815,6 +2004,25 @@ export const CuentasPorPagarView: React.FC = () => {
                           />
                         </div>
                       </div>
+
+                      {isBankPaymentMethod(gastoPayMethod) && availableBankOptions.length > 0 && (
+                        <div>
+                          <label className="block text-[11px] font-bold text-emerald-900 mb-0.5">
+                            Cuenta Bancaria de Origen (se descuenta al cierre)
+                          </label>
+                          <select
+                            value={gastoBankAccountId}
+                            onChange={(e) => setGastoBankAccountId(e.target.value)}
+                            className="w-full px-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-semibold focus:outline-none"
+                          >
+                            {availableBankOptions.map((bk) => (
+                              <option key={bk.id} value={bk.id}>
+                                {bk.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
                   )}
                 </>
@@ -1857,10 +2065,18 @@ export const CuentasPorPagarView: React.FC = () => {
       {/* MODAL: REGISTRAR PAGO / ABONO PARCIAL DE GASTO */}
       {isPagarGastoModalOpen && gastoForPagar && (() => {
         const remaining = getGastoRemainingUSD(gastoForPagar);
+        const remainingBs = round2(remaining * bcvRate);
         const paidSoFar = getGastoPaidUSD(gastoForPagar);
-        const enteredAmount = parseFloat(pagarAmountUSD) || 0;
-        const clampedAmount = Math.min(remaining, Math.max(0, enteredAmount));
-        const afterRemaining = Math.max(0, Number((remaining - clampedAmount).toFixed(2)));
+        const enteredAmountUSD =
+          pagarCurrencyInput === 'Bs'
+            ? round2(safeDiv(parseFloat(pagarAmountBs) || 0, bcvRate, 0))
+            : round2(parseFloat(pagarAmountUSD) || 0);
+        const enteredAmountBs =
+          pagarCurrencyInput === 'Bs'
+            ? round2(parseFloat(pagarAmountBs) || 0)
+            : round2(enteredAmountUSD * bcvRate);
+        const clampedAmount = Math.min(remaining, Math.max(0, enteredAmountUSD));
+        const afterRemaining = Math.max(0, round2(remaining - clampedAmount));
         const willBeFull = afterRemaining <= 0.009;
 
         return (
@@ -1911,7 +2127,7 @@ export const CuentasPorPagarView: React.FC = () => {
                   <div className="text-right">
                     <span className="text-slate-500">Equivalente BCV:</span>
                     <div className="font-mono-numbers font-bold text-[#0B1528]">
-                      Bs {formatBs(remaining * bcvRate)}
+                      Bs {formatBs(remainingBs)}
                     </div>
                   </div>
                 </div>
@@ -1919,32 +2135,74 @@ export const CuentasPorPagarView: React.FC = () => {
 
               <form onSubmit={handleConfirmPagarGasto} className="space-y-3">
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-bold text-slate-700">Monto a Cancelar / Abonar ($ USD) *</label>
-                    <button
-                      type="button"
-                      onClick={() => setPagarAmountUSD(remaining.toFixed(2))}
-                      className="text-[11px] font-bold text-[#1D4ED8] hover:underline cursor-pointer"
-                    >
-                      Pagar Total (${formatUSD(remaining)})
-                    </button>
+                  <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+                    <label className="text-xs font-bold text-slate-700">Monto a Cancelar / Abonar *</label>
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex items-center bg-slate-200 p-0.5 rounded-lg text-[10px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() => setPagarCurrencyInput('USD')}
+                          className={`px-2 py-0.5 rounded-md cursor-pointer ${
+                            pagarCurrencyInput === 'USD' ? 'bg-blue-600 text-white' : 'text-slate-600'
+                          }`}
+                        >
+                          $ USD
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPagarCurrencyInput('Bs')}
+                          className={`px-2 py-0.5 rounded-md cursor-pointer ${
+                            pagarCurrencyInput === 'Bs' ? 'bg-blue-600 text-white' : 'text-slate-600'
+                          }`}
+                        >
+                          Bs
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPagarAmountUSD(remaining.toFixed(2));
+                          setPagarAmountBs(remainingBs.toFixed(2));
+                        }}
+                        className="text-[11px] font-bold text-[#1D4ED8] hover:underline cursor-pointer"
+                      >
+                        Total
+                      </button>
+                    </div>
                   </div>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">
+                      {pagarCurrencyInput === 'USD' ? '$' : 'Bs'}
+                    </span>
                     <input
                       type="number"
                       step="0.01"
                       min="0.01"
-                      max={remaining}
+                      max={pagarCurrencyInput === 'USD' ? remaining + 0.01 : remainingBs + 0.5}
                       required
-                      value={pagarAmountUSD}
-                      onChange={(e) => setPagarAmountUSD(e.target.value)}
-                      className="w-full pl-7 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-sm font-mono-numbers font-black text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
+                      value={pagarCurrencyInput === 'USD' ? pagarAmountUSD : pagarAmountBs}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (pagarCurrencyInput === 'USD') {
+                          setPagarAmountUSD(val);
+                          const num = parseFloat(val);
+                          setPagarAmountBs(!isNaN(num) ? round2(num * bcvRate).toFixed(2) : '');
+                        } else {
+                          setPagarAmountBs(val);
+                          const num = parseFloat(val);
+                          setPagarAmountUSD(!isNaN(num) && bcvRate > 0 ? round2(num / bcvRate).toFixed(2) : '');
+                        }
+                      }}
+                      className="w-full pl-8 pr-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-sm font-mono-numbers font-black text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
                     />
                   </div>
-                  {enteredAmount > 0 && (
+                  {enteredAmountUSD > 0 && (
                     <div className="mt-1.5 flex items-center justify-between text-[11px] font-mono-numbers">
-                      <span className="text-slate-500">Salida en Bs: Bs {formatBs(clampedAmount * bcvRate)}</span>
+                      <span className="text-slate-500">
+                        {pagarCurrencyInput === 'USD'
+                          ? `Salida en Bs: Bs ${formatBs(enteredAmountBs)}`
+                          : `Equivalente USD: $${formatUSD(enteredAmountUSD)}`}
+                      </span>
                       <span className={`font-bold ${willBeFull ? 'text-[#065F46]' : 'text-[#1D4ED8]'}`}>
                         {willBeFull ? '✓ Saldará por completo' : `Restará: $${formatUSD(afterRemaining)} (Parcial)`}
                       </span>
@@ -1953,19 +2211,38 @@ export const CuentasPorPagarView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Método de Pago Empleado *</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Cuenta / Método de Pago Empleado *</label>
                   <select
                     value={pagarMethod}
                     onChange={(e) => setPagarMethod(e.target.value as any)}
                     className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-semibold text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
                   >
-                    <option value="pago_movil">Pago Móvil</option>
+                    <option value="efectivo_usd">Caja Efectivo USD ($)</option>
+                    <option value="efectivo_bs">Caja Efectivo Bolívares (Bs)</option>
+                    <option value="pago_movil">Pago Móvil (Banco)</option>
                     <option value="transferencia">Transferencia Bancaria</option>
-                    <option value="efectivo_usd">Efectivo USD ($)</option>
-                    <option value="efectivo_bs">Efectivo Bolívares (Bs)</option>
-                    <option value="debito">Tarjeta de Débito</option>
+                    <option value="debito">Tarjeta de Débito (Banco)</option>
                   </select>
                 </div>
+
+                {isBankPaymentMethod(pagarMethod) && availableBankOptions.length > 0 && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Cuenta Bancaria de Origen *
+                    </label>
+                    <select
+                      value={pagarBankAccountId}
+                      onChange={(e) => setPagarBankAccountId(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#DCE4F0] rounded-xl text-xs font-semibold text-[#0B1528] focus:bg-white focus:border-blue-500 focus:outline-none"
+                    >
+                      {availableBankOptions.map((bk) => (
+                        <option key={bk.id} value={bk.id}>
+                          {bk.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Número de Referencia / Comprobante</label>
@@ -2007,7 +2284,7 @@ export const CuentasPorPagarView: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={enteredAmount <= 0 || enteredAmount > remaining + 0.01 || isSubmittingPagarGasto}
+                    disabled={enteredAmountUSD <= 0 || enteredAmountUSD > remaining + 0.02 || isSubmittingPagarGasto}
                     className="px-5 py-2 rounded-xl bg-gradient-to-b from-blue-600 to-blue-700 hover:from-blue-600 hover:to-blue-800 disabled:opacity-50 text-white font-bold text-xs shadow-[0_6px_14px_-4px_rgba(37,99,235,0.45)] cursor-pointer"
                   >
                     {isSubmittingPagarGasto

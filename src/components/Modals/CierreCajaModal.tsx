@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   Lock, 
@@ -11,10 +11,16 @@ import {
   Calculator,
   Receipt,
   Download,
-  Landmark
+  Landmark,
+  Wallet
 } from 'lucide-react';
 import { formatBs, formatUSD, round2 } from '../../utils/exportUtils';
 import { generateReporteZPDF, generateComprobanteCierrePDF } from '../../utils/pdfReceiptUtils';
+import {
+  computeShiftBankSummaries,
+  isExpenseOwnerSalary,
+  isExpenseOwnerWithdrawal
+} from '../../utils/accountingUtils';
 
 export const CierreCajaModal: React.FC = () => {
   const { 
@@ -40,27 +46,65 @@ export const CierreCajaModal: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Bank closing balance capture
-  const [countedBanks, setCountedBanks] = useState<Record<string, { countedBs: string; countedUSD: string }>>(() => {
-    const map: Record<string, { countedBs: string; countedUSD: string }> = {};
-    if (cashShift?.initialBanks) {
+  const [countedBanks, setCountedBanks] = useState<Record<string, { countedBs: string; countedUSD: string }>>({});
+
+  const openedAtIso = cashShift?.openedAt || '';
+  const shiftSales = useMemo(
+    () => (cashShift ? sales.filter(s => s.status !== 'anulada' && s.date >= openedAtIso) : []),
+    [cashShift, sales, openedAtIso]
+  );
+  const shiftExpenses = useMemo(
+    () => (cashShift ? expenses.filter(e => e.date >= openedAtIso && e.paymentMethod !== 'credito') : []),
+    [cashShift, expenses, openedAtIso]
+  );
+  const shiftCreditNotes = useMemo(
+    () => (cashShift ? creditNotes.filter(cn => cn.date >= openedAtIso) : []),
+    [cashShift, creditNotes, openedAtIso]
+  );
+  const shiftFiadoAbonos = useMemo(
+    () => (cashShift ? fiados.flatMap(f => f.abonos || []).filter(a => a.date >= openedAtIso) : []),
+    [cashShift, fiados, openedAtIso]
+  );
+  const shiftLoans = useMemo(
+    () => (cashShift ? loans.filter(l => (l.grantDate || l.createdAt) >= openedAtIso) : []),
+    [cashShift, loans, openedAtIso]
+  );
+
+  // Per-bank traceability (initial + inflows - outflows including owner salary/withdrawals)
+  const bankSummaries = useMemo(
+    () =>
+      computeShiftBankSummaries(
+        cashShift?.initialBanks,
+        shiftSales,
+        shiftExpenses,
+        shiftCreditNotes,
+        shiftFiadoAbonos,
+        shiftLoans
+      ),
+    [cashShift?.initialBanks, shiftSales, shiftExpenses, shiftCreditNotes, shiftFiadoAbonos, shiftLoans]
+  );
+
+  useEffect(() => {
+    if (isCierreModalOpen && cashShift?.initialBanks) {
+      const map: Record<string, { countedBs: string; countedUSD: string }> = {};
       cashShift.initialBanks.forEach(b => {
+        const summary = bankSummaries.find(s => s.bankId === b.bankId);
+        const defaultBs = b.countedBalanceBs !== undefined
+          ? b.countedBalanceBs
+          : (summary ? summary.expectedBalanceBs : b.initialBalanceBs);
+        const defaultUSD = b.countedBalanceUSD !== undefined
+          ? b.countedBalanceUSD
+          : (summary ? summary.expectedBalanceUSD : (b.initialBalanceUSD || 0));
         map[b.bankId] = {
-          countedBs: b.countedBalanceBs !== undefined ? b.countedBalanceBs.toString() : b.initialBalanceBs.toString(),
-          countedUSD: b.countedBalanceUSD !== undefined ? b.countedBalanceUSD.toString() : (b.initialBalanceUSD ? b.initialBalanceUSD.toString() : '')
+          countedBs: round2(defaultBs).toFixed(2),
+          countedUSD: defaultUSD > 0 ? round2(defaultUSD).toFixed(2) : ''
         };
       });
+      setCountedBanks(map);
     }
-    return map;
-  });
+  }, [isCierreModalOpen, cashShift?.id]);
 
   if (!isCierreModalOpen || !cashShift) return null;
-
-  const openedAtIso = cashShift.openedAt;
-  const shiftSales = sales.filter(s => s.status !== 'anulada' && s.date >= openedAtIso);
-  const shiftExpenses = expenses.filter(e => e.date >= openedAtIso && e.paymentMethod !== 'credito');
-  const shiftCreditNotes = creditNotes.filter(cn => cn.date >= openedAtIso);
-  const shiftFiadoAbonos = fiados.flatMap(f => f.abonos || []).filter(a => a.date >= openedAtIso);
-  const shiftLoans = loans.filter(l => (l.grantDate || l.createdAt) >= openedAtIso);
 
   // Inflow in cash (sales + fiado abonos + loan inflows in cash)
   let cashUsdInflow = 0;
@@ -96,6 +140,43 @@ export const CierreCajaModal: React.FC = () => {
     }
   });
 
+  // Owner salary & personal withdrawals breakdown (cash vs bank)
+  const shiftOwnerSalaryExpenses = shiftExpenses.filter(isExpenseOwnerSalary);
+  const shiftOwnerWithdrawalExpenses = shiftExpenses.filter(isExpenseOwnerWithdrawal);
+
+  const ownerSalaryCashUSD = round2(
+    shiftOwnerSalaryExpenses.filter(e => e.paymentMethod === 'efectivo_usd').reduce((acc, e) => acc + e.amountUSD, 0)
+  );
+  const ownerSalaryCashBs = round2(
+    shiftOwnerSalaryExpenses.filter(e => e.paymentMethod === 'efectivo_bs').reduce((acc, e) => acc + e.amountBs, 0)
+  );
+  const ownerSalaryBankBs = round2(
+    shiftOwnerSalaryExpenses
+      .filter(e => e.paymentMethod !== 'efectivo_usd' && e.paymentMethod !== 'efectivo_bs')
+      .reduce((acc, e) => acc + e.amountBs, 0)
+  );
+  const totalOwnerSalaryUSD = round2(shiftOwnerSalaryExpenses.reduce((acc, e) => acc + e.amountUSD, 0));
+  const totalOwnerSalaryBs = round2(shiftOwnerSalaryExpenses.reduce((acc, e) => acc + e.amountBs, 0));
+
+  const ownerWithdrawalsCashUSD = round2(
+    shiftOwnerWithdrawalExpenses.filter(e => e.paymentMethod === 'efectivo_usd').reduce((acc, e) => acc + e.amountUSD, 0)
+  );
+  const ownerWithdrawalsCashBs = round2(
+    shiftOwnerWithdrawalExpenses.filter(e => e.paymentMethod === 'efectivo_bs').reduce((acc, e) => acc + e.amountBs, 0)
+  );
+  const ownerWithdrawalsBankBs = round2(
+    shiftOwnerWithdrawalExpenses
+      .filter(e => e.paymentMethod !== 'efectivo_usd' && e.paymentMethod !== 'efectivo_bs')
+      .reduce((acc, e) => acc + e.amountBs, 0)
+  );
+  const totalOwnerWithdrawalsUSD = round2(shiftOwnerWithdrawalExpenses.reduce((acc, e) => acc + e.amountUSD, 0));
+  const totalOwnerWithdrawalsBs = round2(shiftOwnerWithdrawalExpenses.reduce((acc, e) => acc + e.amountBs, 0));
+  const hasOwnerDisbursements =
+    totalOwnerSalaryUSD > 0 ||
+    totalOwnerSalaryBs > 0 ||
+    totalOwnerWithdrawalsUSD > 0 ||
+    totalOwnerWithdrawalsBs > 0;
+
   // Outflow in cash (expenses + credit note refunds in cash)
   const cashUsdOutflow = round2(
     shiftExpenses.filter(e => e.paymentMethod === 'efectivo_usd').reduce((acc, e) => acc + e.amountUSD, 0) +
@@ -105,6 +186,9 @@ export const CierreCajaModal: React.FC = () => {
     shiftExpenses.filter(e => e.paymentMethod === 'efectivo_bs').reduce((acc, e) => acc + e.amountBs, 0) +
     shiftCreditNotes.filter(cn => cn.refundMethod === 'efectivo_bs').reduce((acc, cn) => acc + cn.totalBs, 0)
   );
+
+  const regularCashUsdOutflow = round2(Math.max(0, cashUsdOutflow - ownerSalaryCashUSD - ownerWithdrawalsCashUSD));
+  const regularCashBsOutflow = round2(Math.max(0, cashBsOutflow - ownerSalaryCashBs - ownerWithdrawalsCashBs));
 
   const initialUSD = cashShift.initialCashUSD || 0;
   const initialBs = cashShift.initialCashBs || 0;
@@ -128,14 +212,21 @@ export const CierreCajaModal: React.FC = () => {
     if (!cashShift.initialBanks) return undefined;
     return cashShift.initialBanks.map(b => {
       const entry = countedBanks[b.bankId];
+      const summary = bankSummaries.find(s => s.bankId === b.bankId);
+      const expectedBsVal = summary ? summary.expectedBalanceBs : b.initialBalanceBs;
+      const expectedUsdVal = summary ? summary.expectedBalanceUSD : (b.initialBalanceUSD || 0);
       return {
         ...b,
+        outflowsBs: summary ? summary.outflowsBs : 0,
+        outflowsUSD: summary ? summary.outflowsUSD : 0,
+        expectedBalanceBs: expectedBsVal,
+        expectedBalanceUSD: expectedUsdVal,
         countedBalanceBs: entry?.countedBs !== '' && entry?.countedBs !== undefined 
-          ? parseFloat(entry.countedBs) || 0 
-          : b.initialBalanceBs,
+          ? round2(parseFloat(entry.countedBs) || 0) 
+          : expectedBsVal,
         countedBalanceUSD: entry?.countedUSD !== '' && entry?.countedUSD !== undefined 
-          ? parseFloat(entry.countedUSD) || 0 
-          : (b.initialBalanceUSD || 0)
+          ? round2(parseFloat(entry.countedUSD) || 0) 
+          : expectedUsdVal
       };
     });
   };
@@ -155,6 +246,10 @@ export const CierreCajaModal: React.FC = () => {
       countedCashBs: parsedCountedBs,
       differenceUSD: diffUSD,
       differenceBs: diffBs,
+      totalOwnerSalaryUSD,
+      totalOwnerSalaryBs,
+      totalOwnerWithdrawalsUSD,
+      totalOwnerWithdrawalsBs,
       closedNotes: closedNotes.trim(),
       initialBanks: buildCountedBanksList()
     };
@@ -172,6 +267,10 @@ export const CierreCajaModal: React.FC = () => {
       countedCashBs: parsedCountedBs,
       differenceUSD: diffUSD,
       differenceBs: diffBs,
+      totalOwnerSalaryUSD,
+      totalOwnerSalaryBs,
+      totalOwnerWithdrawalsUSD,
+      totalOwnerWithdrawalsBs,
       closedNotes: closedNotes.trim(),
       initialBanks: buildCountedBanksList()
     };
@@ -195,11 +294,11 @@ export const CierreCajaModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
-      <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full overflow-hidden border border-slate-200">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+      <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-200">
         
         {/* Header */}
-        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 flex items-start justify-between">
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 flex items-start justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white shrink-0 shadow-xs">
               <Lock className="w-6 h-6 text-indigo-300" />
@@ -272,7 +371,7 @@ export const CierreCajaModal: React.FC = () => {
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4">
+          <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
             
             {/* Shift Info Banner */}
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 flex items-center justify-between text-xs text-slate-600 flex-wrap gap-2">
@@ -317,7 +416,13 @@ export const CierreCajaModal: React.FC = () => {
                       Ingresos: +${formatUSD(cashUsdInflow)}
                       {loansCashUsd > 0 ? ` (Prést: +$${formatUSD(loansCashUsd)})` : ''}
                     </div>
-                    <div className="text-rose-600">Egresos/NC: -${formatUSD(cashUsdOutflow)}</div>
+                    <div className="text-rose-600">Egresos/NC: -${formatUSD(regularCashUsdOutflow)}</div>
+                    {ownerSalaryCashUSD > 0 && (
+                      <div className="text-indigo-700 font-semibold">Sueldo Prop.: -${formatUSD(ownerSalaryCashUSD)}</div>
+                    )}
+                    {ownerWithdrawalsCashUSD > 0 && (
+                      <div className="text-purple-700 font-semibold">Retiro Pers.: -${formatUSD(ownerWithdrawalsCashUSD)}</div>
+                    )}
                   </div>
                 </div>
 
@@ -333,11 +438,67 @@ export const CierreCajaModal: React.FC = () => {
                       Ingresos: +Bs {formatBs(cashBsInflow)}
                       {loansCashBs > 0 ? ` (Prést: +Bs ${formatBs(loansCashBs)})` : ''}
                     </div>
-                    <div className="text-rose-600">Egresos/NC: -Bs {formatBs(cashBsOutflow)}</div>
+                    <div className="text-rose-600">Egresos/NC: -Bs {formatBs(regularCashBsOutflow)}</div>
+                    {ownerSalaryCashBs > 0 && (
+                      <div className="text-indigo-700 font-semibold">Sueldo Prop.: -Bs {formatBs(ownerSalaryCashBs)}</div>
+                    )}
+                    {ownerWithdrawalsCashBs > 0 && (
+                      <div className="text-purple-700 font-semibold">Retiro Pers.: -Bs {formatBs(ownerWithdrawalsCashBs)}</div>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
+
+            {/* Dedicated Traceability Card: Sueldo Propietario & Retiros Personales del Turno */}
+            {hasOwnerDisbursements && (
+              <div className="bg-purple-50/70 rounded-2xl p-3.5 border border-purple-200 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-purple-950 flex items-center gap-1.5">
+                    <Wallet className="w-3.5 h-3.5 text-purple-600" />
+                    Sueldo Propietario y Retiros Personales del Turno
+                  </span>
+                  <span className="text-[10px] font-bold text-purple-700 bg-white border border-purple-200 px-2 py-0.5 rounded-md">
+                    Excluidos de Libro de Compras SENIAT
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {(totalOwnerSalaryUSD > 0 || totalOwnerSalaryBs > 0) && (
+                    <div className="bg-white rounded-xl p-2.5 border border-indigo-200 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-extrabold text-indigo-900">Sueldo Propietario / Nómina</span>
+                        <span className="text-[9px] font-bold uppercase text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">Gasto Operativo</span>
+                      </div>
+                      <div className="font-mono font-black text-slate-900">
+                        ${formatUSD(totalOwnerSalaryUSD)} <span className="text-xs font-semibold text-slate-500">(Bs {formatBs(totalOwnerSalaryBs)})</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        {ownerSalaryCashUSD > 0 ? `Gaveta USD: $${formatUSD(ownerSalaryCashUSD)} ` : ''}
+                        {ownerSalaryCashBs > 0 ? `Gaveta Bs: ${formatBs(ownerSalaryCashBs)} ` : ''}
+                        {ownerSalaryBankBs > 0 ? `Banco: Bs ${formatBs(ownerSalaryBankBs)}` : ''}
+                      </div>
+                    </div>
+                  )}
+
+                  {(totalOwnerWithdrawalsUSD > 0 || totalOwnerWithdrawalsBs > 0) && (
+                    <div className="bg-white rounded-xl p-2.5 border border-purple-200 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-extrabold text-purple-900">Retiro Personal / Dueño</span>
+                        <span className="text-[9px] font-bold uppercase text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded">Fuera de Costos</span>
+                      </div>
+                      <div className="font-mono font-black text-slate-900">
+                        ${formatUSD(totalOwnerWithdrawalsUSD)} <span className="text-xs font-semibold text-slate-500">(Bs {formatBs(totalOwnerWithdrawalsBs)})</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        {ownerWithdrawalsCashUSD > 0 ? `Gaveta USD: $${formatUSD(ownerWithdrawalsCashUSD)} ` : ''}
+                        {ownerWithdrawalsCashBs > 0 ? `Gaveta Bs: ${formatBs(ownerWithdrawalsCashBs)} ` : ''}
+                        {ownerWithdrawalsBankBs > 0 ? `Banco: Bs ${formatBs(ownerWithdrawalsBankBs)}` : ''}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Breakdown Card: Cuentas Bancarias Registradas & Arqueo Bancario */}
             {cashShift.initialBanks && cashShift.initialBanks.length > 0 && (
@@ -352,35 +513,59 @@ export const CierreCajaModal: React.FC = () => {
                     onClick={() => {
                       const updated: Record<string, { countedBs: string; countedUSD: string }> = {};
                       cashShift.initialBanks?.forEach(b => {
+                        const summary = bankSummaries.find(s => s.bankId === b.bankId);
+                        const expBs = summary ? summary.expectedBalanceBs : b.initialBalanceBs;
+                        const expUsd = summary ? summary.expectedBalanceUSD : (b.initialBalanceUSD || 0);
                         updated[b.bankId] = {
-                          countedBs: b.initialBalanceBs.toString(),
-                          countedUSD: b.initialBalanceUSD ? b.initialBalanceUSD.toString() : ''
+                          countedBs: round2(expBs).toFixed(2),
+                          countedUSD: expUsd > 0 ? round2(expUsd).toFixed(2) : ''
                         };
                       });
                       setCountedBanks(updated);
                     }}
                     className="text-[11px] font-bold text-blue-600 hover:text-blue-800 underline cursor-pointer"
                   >
-                    Mantener saldos iniciales
+                    Usar saldos esperados
                   </button>
                 </div>
 
                 <div className="space-y-2.5">
                   {cashShift.initialBanks.map(bk => {
                     const currentEntry = countedBanks[bk.bankId] || { countedBs: '', countedUSD: '' };
-                    const parsedBs = parseFloat(currentEntry.countedBs) || 0;
-                    const diffBankBs = Number((parsedBs - bk.initialBalanceBs).toFixed(2));
+                    const summary = bankSummaries.find(s => s.bankId === bk.bankId);
+                    const expectedBankBs = summary ? summary.expectedBalanceBs : bk.initialBalanceBs;
+                    const parsedBs = round2(parseFloat(currentEntry.countedBs) || 0);
+                    const diffBankBs = round2(parsedBs - expectedBankBs);
 
                     return (
                       <div key={bk.bankId} className="bg-white p-3 rounded-xl border border-slate-200 text-xs space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-bold text-slate-900">{bk.bankName}</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="font-bold text-slate-900 truncate">{bk.bankName}</div>
                             <div className="text-[10px] text-slate-400 font-mono">{bk.accountNumber}</div>
                           </div>
-                          <div className="text-right text-[11px] font-mono text-slate-500">
-                            <span>Inicial: </span>
-                            <span className="font-bold text-slate-800">Bs {formatBs(bk.initialBalanceBs)}</span>
+                          <div className="text-right text-[10px] font-mono text-slate-600 shrink-0 space-y-0.5">
+                            <div>Inicial: <span className="font-bold text-slate-800">Bs {formatBs(bk.initialBalanceBs)}</span></div>
+                            {summary && summary.inflowsBs > 0 && (
+                              <div className="text-emerald-700">+Ingresos: Bs {formatBs(summary.inflowsBs)}</div>
+                            )}
+                            {summary && summary.outflowsBs > 0 && (
+                              <div className="text-rose-600">
+                                -Egresos: Bs {formatBs(summary.outflowsBs)}
+                                {(summary.ownerSalaryBs > 0 || summary.ownerWithdrawalsBs > 0) && (
+                                  <span className="text-purple-700 font-semibold">
+                                    {' '}(
+                                    {summary.ownerSalaryBs > 0 ? `Sueldo Bs ${formatBs(summary.ownerSalaryBs)}` : ''}
+                                    {summary.ownerSalaryBs > 0 && summary.ownerWithdrawalsBs > 0 ? ' · ' : ''}
+                                    {summary.ownerWithdrawalsBs > 0 ? `Retiro Bs ${formatBs(summary.ownerWithdrawalsBs)}` : ''}
+                                    )
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            <div className="text-blue-800 font-extrabold">
+                              Esperado: Bs {formatBs(expectedBankBs)}
+                            </div>
                           </div>
                         </div>
 
@@ -392,7 +577,7 @@ export const CierreCajaModal: React.FC = () => {
                             <input
                               type="number"
                               step="0.01"
-                              placeholder={bk.initialBalanceBs.toFixed(2)}
+                              placeholder={expectedBankBs.toFixed(2)}
                               value={currentEntry.countedBs}
                               onChange={(e) => {
                                 const val = e.target.value;
@@ -407,8 +592,8 @@ export const CierreCajaModal: React.FC = () => {
                               className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-blue-600"
                             />
                             {currentEntry.countedBs !== '' && (
-                              <div className={`text-[10px] font-mono mt-0.5 ${diffBankBs >= 0 ? 'text-emerald-700 font-semibold' : 'text-rose-600 font-semibold'}`}>
-                                {diffBankBs === 0 ? '✓ Mismo saldo inicial' : diffBankBs > 0 ? `+ Bs ${formatBs(diffBankBs)}` : `- Bs ${formatBs(Math.abs(diffBankBs))}`}
+                              <div className={`text-[10px] font-mono mt-0.5 ${diffBankBs === 0 ? 'text-emerald-700 font-semibold' : diffBankBs > 0 ? 'text-blue-700 font-semibold' : 'text-rose-600 font-semibold'}`}>
+                                {diffBankBs === 0 ? '✓ Coincide con saldo esperado' : diffBankBs > 0 ? `+ Bs ${formatBs(diffBankBs)} vs esperado` : `- Bs ${formatBs(Math.abs(diffBankBs))} vs esperado`}
                               </div>
                             )}
                           </div>
@@ -421,7 +606,7 @@ export const CierreCajaModal: React.FC = () => {
                               <input
                                 type="number"
                                 step="0.01"
-                                placeholder={bk.initialBalanceUSD.toFixed(2)}
+                                placeholder={(summary ? summary.expectedBalanceUSD : bk.initialBalanceUSD).toFixed(2)}
                                 value={currentEntry.countedUSD}
                                 onChange={(e) => {
                                   const val = e.target.value;

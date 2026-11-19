@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { formatBs, formatUSD, round2, round6, safeDiv, getLocalDateStr } from '../utils/exportUtils';
 import { Expense, ExpenseItem, PurchaseCostStrategy } from '../types';
+import { getExpenseAccountingType, isNonFiscalPersonalOrSalaryCategory } from '../utils/accountingUtils';
 
 interface RegistrarGastoModalProps {
   isOpen: boolean;
@@ -35,7 +36,7 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [controlNumber, setControlNumber] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState<'Mercancía' | 'Servicios' | 'Alquiler' | 'Nómina' | 'Mantenimiento' | 'Otros'>('Mercancía');
+  const [category, setCategory] = useState<Expense['category']>('Mercancía');
   const [currency, setCurrency] = useState<'USD' | 'Bs'>('USD');
   const [amountInput, setAmountInput] = useState('');
   const [hasIVA, setHasIVA] = useState(true);
@@ -387,11 +388,12 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
   const amountBs = currency === 'Bs' ? round2(rawAmount) : round2(rawAmount * effectiveBcvRate);
   const amountUSD = currency === 'USD' ? round2(rawAmount) : round2(safeDiv(amountBs, effectiveBcvRate, 0));
 
-  // SENIAT calculations for purchases (derived cleanly from exact amountBs)
-  const baseImponibleBs = round2(hasIVA ? (amountBs / 1.16) : amountBs);
-  const ivaBs = round2(hasIVA ? (amountBs - baseImponibleBs) : 0);
-  const retencionIVABs = round2(applyRetencionIVA ? (ivaBs * 0.75) : 0); // 75% retention standard SENIAT
-  const retencionISLRBs = round2(baseImponibleBs * 0.02); // 2% ISLR retention
+  // SENIAT calculations for purchases (zeroed and excluded for non-fiscal owner salary / personal withdrawal)
+  const isNonFiscalCategory = isNonFiscalPersonalOrSalaryCategory(category);
+  const baseImponibleBs = isNonFiscalCategory ? 0 : round2(hasIVA ? (amountBs / 1.16) : amountBs);
+  const ivaBs = isNonFiscalCategory ? 0 : round2(hasIVA ? (amountBs - baseImponibleBs) : 0);
+  const retencionIVABs = isNonFiscalCategory ? 0 : round2(applyRetencionIVA ? (ivaBs * 0.75) : 0); // 75% retention standard SENIAT
+  const retencionISLRBs = isNonFiscalCategory ? 0 : round2(baseImponibleBs * 0.02); // 2% ISLR retention
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -444,7 +446,9 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
           dueDate: normalizedDueDate ?? editingExpense.dueDate,
           reference,
           items: purchasedItems.length > 0 ? purchasedItems : undefined,
-          costStrategy: defaultStrategy
+          costStrategy: defaultStrategy,
+          excludeFromLibroCompras: isNonFiscalCategory ? true : editingExpense.excludeFromLibroCompras,
+          accountingType: getExpenseAccountingType(category)
         });
       } else {
         await addExpense({
@@ -469,7 +473,9 @@ export const RegistrarGastoModal: React.FC<RegistrarGastoModalProps> = ({ isOpen
           dueDate: normalizedDueDate,
           reference: paymentMethod === 'credito' ? (reference.trim() || 'CRÉDITO') : reference,
           items: purchasedItems.length > 0 ? purchasedItems : undefined,
-          costStrategy: defaultStrategy
+          costStrategy: defaultStrategy,
+          excludeFromLibroCompras: isNonFiscalCategory ? true : undefined,
+          accountingType: getExpenseAccountingType(category)
         });
       }
 

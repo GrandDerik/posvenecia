@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { isExpenseExcludedFromLibroCompras } from './accountingUtils';
 import {
   Sale,
   Expense,
@@ -660,9 +661,10 @@ export const exportLibroVentasPDF = (sales: Sale[], businessInfo: { name: string
   doc.save(`Libro_de_Ventas_SENIAT_${getLocalDateStr()}.pdf`);
 };
 
-// 3. Export Libro de Compras to Excel (.xlsx)
+// 3. Export Libro de Compras to Excel (.xlsx) — Strictly excludes Sueldo Propietario & Retiros Personales (SENIAT)
 export const exportLibroComprasExcel = (expenses: Expense[], businessInfo: { name: string; rif: string }) => {
-  const data = expenses.map((exp, index) => ({
+  const fiscalExpenses = expenses.filter((exp) => !isExpenseExcludedFromLibroCompras(exp));
+  const data = fiscalExpenses.map((exp, index) => ({
     'N° Operación': index + 1,
     'Fecha': new Date(exp.date).toLocaleDateString('es-VE'),
     'N° Factura': exp.invoiceNumber,
@@ -686,8 +688,9 @@ export const exportLibroComprasExcel = (expenses: Expense[], businessInfo: { nam
   XLSX.writeFile(workbook, `Libro_de_Compras_SENIAT_${getLocalDateStr()}.xlsx`);
 };
 
-// 4. Export Libro de Compras to PDF
+// 4. Export Libro de Compras to PDF — Strictly excludes Sueldo Propietario & Retiros Personales (SENIAT)
 export const exportLibroComprasPDF = (expenses: Expense[], businessInfo: { name: string; rif: string }) => {
+  const fiscalExpenses = expenses.filter((exp) => !isExpenseExcludedFromLibroCompras(exp));
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
 
   doc.setFontSize(13);
@@ -700,7 +703,7 @@ export const exportLibroComprasPDF = (expenses: Expense[], businessInfo: { name:
   doc.text(`Contribuyente: ${businessInfo.name} | RIF: ${businessInfo.rif}`, 14, 23);
   doc.text(`Período: ${new Date().toLocaleDateString('es-VE', { month: 'long', year: 'numeric' })}`, 14, 28);
 
-  const tableData = expenses.map((exp, index) => [
+  const tableData = fiscalExpenses.map((exp, index) => [
     (index + 1).toString(),
     new Date(exp.date).toLocaleDateString('es-VE'),
     exp.invoiceNumber,
@@ -716,12 +719,12 @@ export const exportLibroComprasPDF = (expenses: Expense[], businessInfo: { name:
     formatUSD(exp.amountUSD)
   ]);
 
-  const totalBase = expenses.reduce((acc, e) => acc + e.baseImponibleBs, 0);
-  const totalIva = expenses.reduce((acc, e) => acc + e.ivaBs, 0);
-  const totalRetIva = expenses.reduce((acc, e) => acc + e.retencionIVABs, 0);
-  const totalRetIslr = expenses.reduce((acc, e) => acc + e.retencionISLRBs, 0);
-  const totalBs = expenses.reduce((acc, e) => acc + e.amountBs, 0);
-  const totalUSD = expenses.reduce((acc, e) => acc + e.amountUSD, 0);
+  const totalBase = fiscalExpenses.reduce((acc, e) => acc + e.baseImponibleBs, 0);
+  const totalIva = fiscalExpenses.reduce((acc, e) => acc + e.ivaBs, 0);
+  const totalRetIva = fiscalExpenses.reduce((acc, e) => acc + e.retencionIVABs, 0);
+  const totalRetIslr = fiscalExpenses.reduce((acc, e) => acc + e.retencionISLRBs, 0);
+  const totalBs = fiscalExpenses.reduce((acc, e) => acc + e.amountBs, 0);
+  const totalUSD = fiscalExpenses.reduce((acc, e) => acc + e.amountUSD, 0);
 
   autoTable(doc, {
     startY: 32,
@@ -761,8 +764,14 @@ export const exportEstadoCuentaExcel = (
     ventasTotalUSD: number;
     gastosTotalBs: number;
     gastosTotalUSD: number;
+    sueldoPropietarioUSD?: number;
+    sueldoPropietarioBs?: number;
+    retirosPersonalesUSD?: number;
+    retirosPersonalesBs?: number;
     netoBs: number;
     netoUSD: number;
+    flujoTrasRetirosUSD?: number;
+    flujoTrasRetirosBs?: number;
     igtfBs: number;
     igtfUSD: number;
     metodosVentas: Record<string, { usd: number; bs: number }>;
@@ -778,10 +787,24 @@ export const exportEstadoCuentaExcel = (
     { Concepto: '---', Valor: '---' },
     { Concepto: 'Total Ingresos por Ventas (USD)', Valor: summary.ventasTotalUSD },
     { Concepto: 'Total Ingresos por Ventas (Bs)', Valor: summary.ventasTotalBs },
-    { Concepto: 'Total Egresos / Compras (USD)', Valor: summary.gastosTotalUSD },
-    { Concepto: 'Total Egresos / Compras (Bs)', Valor: summary.gastosTotalBs },
-    { Concepto: 'BALANCE NETO (USD)', Valor: summary.netoUSD },
-    { Concepto: 'BALANCE NETO (Bs)', Valor: summary.netoBs },
+    { Concepto: 'Gastos Operativos y Compras - incl. Sueldo Propietario (USD)', Valor: summary.gastosTotalUSD },
+    { Concepto: 'Gastos Operativos y Compras - incl. Sueldo Propietario (Bs)', Valor: summary.gastosTotalBs },
+    ...((summary.sueldoPropietarioUSD || 0) > 0 || (summary.sueldoPropietarioBs || 0) > 0
+      ? [
+          { Concepto: '  └ De los cuales: Sueldo Propietario / Nómina (USD)', Valor: summary.sueldoPropietarioUSD || 0 },
+          { Concepto: '  └ De los cuales: Sueldo Propietario / Nómina (Bs)', Valor: summary.sueldoPropietarioBs || 0 }
+        ]
+      : []),
+    { Concepto: 'RENTABILIDAD OPERATIVA REAL (USD)', Valor: summary.netoUSD },
+    { Concepto: 'RENTABILIDAD OPERATIVA REAL (Bs)', Valor: summary.netoBs },
+    ...((summary.retirosPersonalesUSD || 0) > 0 || (summary.retirosPersonalesBs || 0) > 0
+      ? [
+          { Concepto: 'Retiros Personales / Adelanto Dueño - fuera de costos (USD)', Valor: summary.retirosPersonalesUSD || 0 },
+          { Concepto: 'Retiros Personales / Adelanto Dueño - fuera de costos (Bs)', Valor: summary.retirosPersonalesBs || 0 },
+          { Concepto: 'FLUJO NETO TRAS RETIROS PERSONALES (USD)', Valor: summary.flujoTrasRetirosUSD ?? round2(summary.netoUSD - (summary.retirosPersonalesUSD || 0)) },
+          { Concepto: 'FLUJO NETO TRAS RETIROS PERSONALES (Bs)', Valor: summary.flujoTrasRetirosBs ?? round2(summary.netoBs - (summary.retirosPersonalesBs || 0)) }
+        ]
+      : []),
     { Concepto: 'IGTF 3% Percibido en Divisas (USD)', Valor: summary.igtfUSD },
     { Concepto: 'IGTF 3% Percibido en Divisas (Bs)', Valor: summary.igtfBs },
   ];
@@ -799,8 +822,14 @@ export const exportEstadoCuentaPDF = (
     ventasTotalUSD: number;
     gastosTotalBs: number;
     gastosTotalUSD: number;
+    sueldoPropietarioUSD?: number;
+    sueldoPropietarioBs?: number;
+    retirosPersonalesUSD?: number;
+    retirosPersonalesBs?: number;
     netoBs: number;
     netoUSD: number;
+    flujoTrasRetirosUSD?: number;
+    flujoTrasRetirosBs?: number;
     igtfBs: number;
     igtfUSD: number;
     metodosVentas: Record<string, { usd: number; bs: number }>;
@@ -820,10 +849,19 @@ export const exportEstadoCuentaPDF = (
   doc.text(`Fecha de Emisión: ${new Date().toLocaleString('es-VE')}`, 14, 31);
 
   // Table with balances
-  const tableData = [
+  const tableData: string[][] = [
     ['Ingresos Totales por Ventas', `$ ${formatUSD(summary.ventasTotalUSD)}`, `Bs. ${formatBs(summary.ventasTotalBs)}`],
-    ['Egresos / Gastos y Compras', `$ ${formatUSD(summary.gastosTotalUSD)}`, `Bs. ${formatBs(summary.gastosTotalBs)}`],
-    ['Saldo Neto en Operaciones', `$ ${formatUSD(summary.netoUSD)}`, `Bs. ${formatBs(summary.netoBs)}`],
+    ['Gastos Operativos y Compras (incl. Sueldo Propietario)', `$ ${formatUSD(summary.gastosTotalUSD)}`, `Bs. ${formatBs(summary.gastosTotalBs)}`],
+    ...((summary.sueldoPropietarioUSD || 0) > 0 || (summary.sueldoPropietarioBs || 0) > 0
+      ? [['   • Sueldo Propietario / Nómina (sin SENIAT)', `$ ${formatUSD(summary.sueldoPropietarioUSD || 0)}`, `Bs. ${formatBs(summary.sueldoPropietarioBs || 0)}`]]
+      : []),
+    ['Rentabilidad Operativa Real', `$ ${formatUSD(summary.netoUSD)}`, `Bs. ${formatBs(summary.netoBs)}`],
+    ...((summary.retirosPersonalesUSD || 0) > 0 || (summary.retirosPersonalesBs || 0) > 0
+      ? [
+          ['Retiros Personales / Adelanto Dueño (fuera de costos)', `$ ${formatUSD(summary.retirosPersonalesUSD || 0)}`, `Bs. ${formatBs(summary.retirosPersonalesBs || 0)}`],
+          ['Flujo Neto Disponible tras Retiros Personales', `$ ${formatUSD(summary.flujoTrasRetirosUSD ?? round2(summary.netoUSD - (summary.retirosPersonalesUSD || 0)))}`, `Bs. ${formatBs(summary.flujoTrasRetirosBs ?? round2(summary.netoBs - (summary.retirosPersonalesBs || 0)))}`]
+        ]
+      : []),
     ['Retención IGTF 3% (Divisas Cobradas)', `$ ${formatUSD(summary.igtfUSD)}`, `Bs. ${formatBs(summary.igtfBs)}`]
   ];
 
@@ -832,7 +870,7 @@ export const exportEstadoCuentaPDF = (
     head: [['Flujo de Caja Principal', 'Monto en Divisas (USD)', 'Equivalente Oficial (Bs)']],
     body: tableData,
     headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold' },
-    styles: { fontSize: 10, cellPadding: 3 },
+    styles: { fontSize: 9.5, cellPadding: 2.8 },
   });
 
   // Table by payment methods
@@ -872,12 +910,43 @@ export const exportCierreCajaExcel = (
     { Concepto: 'Transacciones Completadas', Detalle: shift.transactionsCount || 0 },
     { Concepto: 'Total Gastos del Turno (USD)', Detalle: Number((shift.totalExpensesUSD || 0).toFixed(2)) },
     { Concepto: 'Total Gastos del Turno (Bs)', Detalle: Number((shift.totalExpensesBs || 0).toFixed(2)) },
+    ...((shift.totalOwnerSalaryUSD || 0) > 0 || (shift.totalOwnerSalaryBs || 0) > 0
+      ? [
+          { Concepto: 'Sueldo Propietario / Nómina en Turno (USD)', Detalle: Number((shift.totalOwnerSalaryUSD || 0).toFixed(2)) },
+          { Concepto: 'Sueldo Propietario / Nómina en Turno (Bs)', Detalle: Number((shift.totalOwnerSalaryBs || 0).toFixed(2)) }
+        ]
+      : []),
+    ...((shift.totalOwnerWithdrawalsUSD || 0) > 0 || (shift.totalOwnerWithdrawalsBs || 0) > 0
+      ? [
+          { Concepto: 'Retiros Personales / Dueño en Turno (USD)', Detalle: Number((shift.totalOwnerWithdrawalsUSD || 0).toFixed(2)) },
+          { Concepto: 'Retiros Personales / Dueño en Turno (Bs)', Detalle: Number((shift.totalOwnerWithdrawalsBs || 0).toFixed(2)) }
+        ]
+      : []),
     { Concepto: 'Efectivo Esperado en Caja (USD)', Detalle: Number((shift.expectedCashUSD || 0).toFixed(2)) },
     { Concepto: 'Efectivo Esperado en Caja (Bs)', Detalle: Number((shift.expectedCashBs || 0).toFixed(2)) },
     { Concepto: 'Efectivo Físico Contado (USD)', Detalle: Number((shift.countedCashUSD || 0).toFixed(2)) },
     { Concepto: 'Efectivo Físico Contado (Bs)', Detalle: Number((shift.countedCashBs || 0).toFixed(2)) },
     { Concepto: 'Diferencia / Descuadre (USD)', Detalle: Number((shift.differenceUSD || 0).toFixed(2)) },
     { Concepto: 'Diferencia / Descuadre (Bs)', Detalle: Number((shift.differenceBs || 0).toFixed(2)) },
+    ...(typeof shift.previousCloseCashUSD === 'number' || typeof shift.previousCloseCashBs === 'number'
+      ? [
+          { Concepto: 'Cierre Anterior Referencia (USD)', Detalle: Number((shift.previousCloseCashUSD || 0).toFixed(2)) },
+          { Concepto: 'Cierre Anterior Referencia (Bs)', Detalle: Number((shift.previousCloseCashBs || 0).toFixed(2)) },
+          { Concepto: 'Variación en Apertura vs Cierre Anterior (USD)', Detalle: Number((shift.openingDifferenceUSD || 0).toFixed(2)) },
+          { Concepto: 'Variación en Apertura vs Cierre Anterior (Bs)', Detalle: Number((shift.openingDifferenceBs || 0).toFixed(2)) },
+          ...((shift.openingMatchedMovementsCount || 0) > 0
+            ? [
+                { Concepto: 'Egresos Registrados Entre Turnos Respaldando Apertura (USD)', Detalle: Number((shift.openingMatchedOutflowsUSD || 0).toFixed(2)) },
+                { Concepto: 'Egresos Registrados Entre Turnos Respaldando Apertura (Bs)', Detalle: Number((shift.openingMatchedOutflowsBs || 0).toFixed(2)) }
+              ]
+            : []),
+          {
+            Concepto: 'Motivo / Justificación de Apertura',
+            Detalle: [shift.openingDifferenceReason, shift.openingDifferenceNotes].filter(Boolean).join(' - ') || 'Sin variación'
+          }
+        ]
+      : []),
+    { Concepto: 'Notas de Apertura', Detalle: shift.notes || 'Sin notas' },
     { Concepto: 'Observaciones de Cierre', Detalle: shift.closedNotes || 'Sin observaciones' }
   ];
 
@@ -891,9 +960,11 @@ export const exportCierreCajaExcel = (
       'Banco': b.bankName,
       'N° Cuenta': b.accountNumber,
       'Saldo Apertura (Bs)': Number(b.initialBalanceBs.toFixed(2)),
+      'Egresos Turno (Bs)': Number((b.outflowsBs || 0).toFixed(2)),
+      'Saldo Esperado (Bs)': Number((b.expectedBalanceBs ?? b.initialBalanceBs).toFixed(2)),
+      'Saldo Contado (Bs)': Number((b.countedBalanceBs ?? b.expectedBalanceBs ?? b.initialBalanceBs).toFixed(2)),
       'Saldo Apertura (USD)': Number((b.initialBalanceUSD || 0).toFixed(2)),
-      'Saldo Contado (Bs)': Number((b.countedBalanceBs || b.initialBalanceBs).toFixed(2)),
-      'Saldo Contado (USD)': Number((b.countedBalanceUSD || b.initialBalanceUSD || 0).toFixed(2))
+      'Saldo Contado (USD)': Number((b.countedBalanceUSD ?? b.expectedBalanceUSD ?? b.initialBalanceUSD ?? 0).toFixed(2))
     }));
     const wsBanks = XLSX.utils.json_to_sheet(bankData);
     XLSX.utils.book_append_sheet(wb, wsBanks, 'Cuentas Bancarias');
@@ -946,6 +1017,12 @@ export const exportCierreCajaPDF = (
     ['Fondo Inicial Apertura', `$ ${formatUSD(shift.initialCashUSD)}`, `Bs. ${formatBs(shift.initialCashBs)}`],
     ['Total Ventas Registradas en Turno', `$ ${formatUSD(shift.totalSalesUSD || 0)}`, `Bs. ${formatBs(shift.totalSalesBs || 0)}`],
     ['Total Gastos Pagados en Efectivo', `$ ${formatUSD(shift.totalExpensesUSD || 0)}`, `Bs. ${formatBs(shift.totalExpensesBs || 0)}`],
+    ...((shift.totalOwnerSalaryUSD || 0) > 0 || (shift.totalOwnerSalaryBs || 0) > 0
+      ? [['   • Sueldo Propietario / Nómina (sin SENIAT)', `$ ${formatUSD(shift.totalOwnerSalaryUSD || 0)}`, `Bs. ${formatBs(shift.totalOwnerSalaryBs || 0)}`]]
+      : []),
+    ...((shift.totalOwnerWithdrawalsUSD || 0) > 0 || (shift.totalOwnerWithdrawalsBs || 0) > 0
+      ? [['   • Retiros Personales / Dueño (fuera de costos)', `$ ${formatUSD(shift.totalOwnerWithdrawalsUSD || 0)}`, `Bs. ${formatBs(shift.totalOwnerWithdrawalsBs || 0)}`]]
+      : []),
     ['Efectivo Teórico Esperado en Caja', `$ ${formatUSD(shift.expectedCashUSD || 0)}`, `Bs. ${formatBs(shift.expectedCashBs || 0)}`],
     ['Efectivo Real Físico Contado', `$ ${formatUSD(shift.countedCashUSD || 0)}`, `Bs. ${formatBs(shift.countedCashBs || 0)}`],
     ['Diferencia / Resultado del Cuadre', `$ ${formatUSD(diffUSD)}`, `Bs. ${formatBs(diffBs)} (${diffStatus})`]
@@ -991,8 +1068,9 @@ export const exportCierreCajaPDF = (
       b.bankName,
       b.accountNumber,
       `Bs. ${formatBs(b.initialBalanceBs)}`,
-      `$ ${formatUSD(b.initialBalanceUSD || 0)}`,
-      `Bs. ${formatBs(b.countedBalanceBs || b.initialBalanceBs)}`
+      `Bs. ${formatBs(b.outflowsBs || 0)}`,
+      `Bs. ${formatBs(b.expectedBalanceBs ?? b.initialBalanceBs)}`,
+      `Bs. ${formatBs(b.countedBalanceBs ?? b.expectedBalanceBs ?? b.initialBalanceBs)}`
     ]);
 
     doc.setFont('helvetica', 'bold');
@@ -1002,16 +1080,40 @@ export const exportCierreCajaPDF = (
 
     autoTable(doc, {
       startY: currentY,
-      head: [['Banco', 'Cuenta', 'Saldo Inicial Bs', 'Saldo Inicial $', 'Saldo Cierre Bs']],
+      head: [['Banco', 'Cuenta', 'Inicial Bs', 'Egresos Bs', 'Esperado Bs', 'Cierre Bs']],
       body: bankRows,
       headStyles: { fillColor: [16, 185, 129], textColor: 255, fontStyle: 'bold' },
-      styles: { fontSize: 8.5, cellPadding: 2 },
+      styles: { fontSize: 8.2, cellPadding: 2 },
     });
 
     currentY = (doc as any).lastAutoTable.finalY + 8;
   }
 
-  // Observaciones
+  // Observaciones de Apertura y Cierre (Auditoría Interna)
+  if (
+    Math.abs(shift.openingDifferenceUSD || 0) >= 0.01 ||
+    Math.abs(shift.openingDifferenceBs || 0) >= 0.01 ||
+    shift.openingDifferenceReason ||
+    shift.openingDifferenceNotes
+  ) {
+    const oDiffUsd = shift.openingDifferenceUSD || 0;
+    const oDiffBs = shift.openingDifferenceBs || 0;
+    const reasonText = [shift.openingDifferenceReason, shift.openingDifferenceNotes].filter(Boolean).join(' - ');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text(
+      `Control Apertura vs Cierre Anterior: USD ${oDiffUsd >= 0 ? '+' : '-'}$${formatUSD(Math.abs(oDiffUsd))} | Bs ${oDiffBs >= 0 ? '+' : '-'}Bs. ${formatBs(Math.abs(oDiffBs))}`,
+      14,
+      currentY
+    );
+    currentY += 5;
+    if (reasonText) {
+      doc.setFont('helvetica', 'italic');
+      doc.text(`Motivo Apertura: ${reasonText.substring(0, 110)}`, 14, currentY);
+      currentY += 6;
+    }
+  }
+
   if (shift.closedNotes) {
     doc.setFont('helvetica', 'italic');
     doc.setFontSize(9);
@@ -1052,6 +1154,9 @@ export const exportHistorialCierresExcel = (
     'Contado USD': Number((shift.countedCashUSD || 0).toFixed(2)),
     'Diferencia USD': Number((shift.differenceUSD || 0).toFixed(2)),
     'Diferencia Bs': Number((shift.differenceBs || 0).toFixed(2)),
+    'Variación Apertura USD': Number((shift.openingDifferenceUSD || 0).toFixed(2)),
+    'Variación Apertura Bs': Number((shift.openingDifferenceBs || 0).toFixed(2)),
+    'Justificación Apertura': [shift.openingDifferenceReason, shift.openingDifferenceNotes].filter(Boolean).join(' - '),
     'Observaciones': shift.closedNotes || ''
   }));
 
