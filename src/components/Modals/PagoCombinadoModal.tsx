@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   Layers, 
@@ -79,7 +79,7 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
 
   const [debito, setDebito] = useState<string>('0');
   const [debitoRef, setDebitoRef] = useState<string>('');
-  const [debitoBank] = useState<string>('Banesco');
+  const [debitoBank, setDebitoBank] = useState<string>('Banesco');
   const [debitoBankAccountId, setDebitoBankAccountId] = useState<string>('');
 
   const [fiaoRemaining, setFiaoRemaining] = useState<string>('0');
@@ -90,6 +90,36 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
   const [transferenciaBankAccountId, setTransferenciaBankAccountId] = useState<string>('');
 
   const [notes] = useState<string>('');
+
+  // Reset form cleanly on each open so previous sale amounts/references never leak into a new sale
+  useEffect(() => {
+    if (!isOpen) return;
+    const defBank = getDefaultBankAccount(treasuryAccounts);
+    const defId = defBank?.id || '';
+    const defLabel = defBank ? formatTreasuryAccountLabel(defBank) : 'Banesco';
+    setUseUsdCash(true);
+    setUseBsCash(false);
+    setUsePagoMovil(true);
+    setUseDebito(false);
+    setUseFiado(false);
+    setUseTransferencia(false);
+    setUsdCash('0');
+    setBsCash('0');
+    setPagoMovil('0');
+    setPagoMovilRef('');
+    setPagoMovilBank(defLabel);
+    setPagoMovilBankAccountId(defId);
+    setPagoMovilPhone('');
+    setDebito('0');
+    setDebitoRef('');
+    setDebitoBank(defLabel);
+    setDebitoBankAccountId(defId);
+    setFiaoRemaining('0');
+    setTransferencia('0');
+    setTransferenciaRef('');
+    setTransferenciaBank(defLabel);
+    setTransferenciaBankAccountId(defId);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -178,7 +208,6 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
     '100% Banco (0156)',
     'Bancamiga (0172)',
     'Banplus (0174)',
-    'Bancaribe (0114)',
     'Otros Bancos'
   ];
 
@@ -514,7 +543,11 @@ export const PagoCombinadoModal: React.FC<PagoCombinadoModalProps> = ({
                     <span className="text-[10px] font-semibold text-slate-500 block mb-1">Cuenta Bancaria del Punto (Tesorería):</span>
                     <select
                       value={debitoBankAccountId || defaultLiveBankId}
-                      onChange={(e) => setDebitoBankAccountId(e.target.value)}
+                      onChange={(e) => {
+                        setDebitoBankAccountId(e.target.value);
+                        const found = liveBankAccounts.find((b) => b.id === e.target.value);
+                        if (found) setDebitoBank(formatTreasuryAccountLabel(found));
+                      }}
                       className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl text-xs"
                     >
                       {liveBankAccounts.map((b) => (

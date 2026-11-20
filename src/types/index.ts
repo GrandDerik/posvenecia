@@ -210,6 +210,8 @@ export interface CreditNote {
   bcvRate: number;
   reason: string; // Motivo de la devolución / nota de crédito
   refundMethod: PaymentMethod;
+  bankAccountId?: string;
+  bankAccountLabel?: string;
   cashierName: string;
   syncStatus?: 'synced' | 'pending_sync';
 }

@@ -308,6 +308,7 @@ export const TesoreriaView: React.FC = () => {
     if (!(trfNumericAmt > 0) || !trfSourceAcc || !trfDestAcc) return 0;
     if (trfSourceAcc.currency === trfDestAcc.currency) return round2(trfNumericAmt);
     const rate = trfNumericRate > 0 ? trfNumericRate : safeBcv;
+    if (!(rate > 0)) return 0;
     return trfSourceAcc.currency === 'USD'
       ? round2(trfNumericAmt * rate)
       : round2(trfNumericAmt / rate);

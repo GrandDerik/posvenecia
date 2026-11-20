@@ -561,24 +561,27 @@ export const formatUSD = (val: number) => {
 
 // 1. Export Libro de Ventas to Excel (.xlsx) - SENIAT Standard Format
 export const exportLibroVentasExcel = (sales: Sale[], businessInfo: { name: string; rif: string }) => {
-  const data = sales.map((sale, index) => ({
-    'N° Operación': index + 1,
-    'Fecha': new Date(sale.date).toLocaleDateString('es-VE'),
-    'N° Factura': sale.invoiceNumber,
-    'N° Control': sale.controlNumber,
-    'RIF / Cédula': sale.clientRIF,
-    'Nombre / Razón Social': sale.clientName,
-    'Tasa BCV': sale.bcvRate.toFixed(2),
-    'Total Ventas con IVA (Bs)': Number(sale.totalBs.toFixed(2)),
-    'Ventas Exentas (Bs)': Number(sale.exemptBs.toFixed(2)),
-    'Base Imponible (Bs)': Number(sale.taxableBs.toFixed(2)),
-    '% Alícuota': sale.taxableBs > 0 ? '16%' : '0% (E)',
-    'Impuesto IVA (Bs)': Number(sale.ivaBs.toFixed(2)),
-    'IGTF 3% (Bs)': Number(sale.igtfBs.toFixed(2)),
-    'Total USD': Number(sale.totalUSD.toFixed(2)),
-    'Método Pago': sale.paymentMethod.replace('_', ' ').toUpperCase(),
-    'Estatus': sale.status.toUpperCase()
-  }));
+  const data = sales.map((sale, index) => {
+    const isAnulada = sale.status === 'anulada';
+    return {
+      'N° Operación': index + 1,
+      'Fecha': new Date(sale.date).toLocaleDateString('es-VE'),
+      'N° Factura': sale.invoiceNumber,
+      'N° Control': sale.controlNumber,
+      'RIF / Cédula': sale.clientRIF,
+      'Nombre / Razón Social': isAnulada ? `${sale.clientName} (ANULADA)` : sale.clientName,
+      'Tasa BCV': sale.bcvRate.toFixed(2),
+      'Total Ventas con IVA (Bs)': isAnulada ? 0 : Number(sale.totalBs.toFixed(2)),
+      'Ventas Exentas (Bs)': isAnulada ? 0 : Number(sale.exemptBs.toFixed(2)),
+      'Base Imponible (Bs)': isAnulada ? 0 : Number(sale.taxableBs.toFixed(2)),
+      '% Alícuota': isAnulada ? 'ANULADA' : (sale.taxableBs > 0 ? '16%' : '0% (E)'),
+      'Impuesto IVA (Bs)': isAnulada ? 0 : Number(sale.ivaBs.toFixed(2)),
+      'IGTF 3% (Bs)': isAnulada ? 0 : Number(sale.igtfBs.toFixed(2)),
+      'Total USD': isAnulada ? 0 : Number(sale.totalUSD.toFixed(2)),
+      'Método Pago': sale.paymentMethod.replace('_', ' ').toUpperCase(),
+      'Estatus': sale.status.toUpperCase()
+    };
+  });
 
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();
@@ -603,29 +606,33 @@ export const exportLibroVentasPDF = (sales: Sale[], businessInfo: { name: string
   doc.text(`Razón Social: ${businessInfo.name} | RIF: ${businessInfo.rif}`, 14, 23);
   doc.text(`Período Fiscal: ${new Date().toLocaleDateString('es-VE', { month: 'long', year: 'numeric' })} | Fecha de Emisión: ${new Date().toLocaleDateString('es-VE')}`, 14, 28);
 
-  const tableData = sales.map((sale, index) => [
-    (index + 1).toString(),
-    new Date(sale.date).toLocaleDateString('es-VE'),
-    sale.invoiceNumber,
-    sale.controlNumber,
-    sale.clientRIF,
-    sale.clientName.substring(0, 22),
-    formatBs(sale.totalBs),
-    formatBs(sale.exemptBs),
-    formatBs(sale.taxableBs),
-    sale.taxableBs > 0 ? '16%' : '0% (E)',
-    formatBs(sale.ivaBs),
-    formatBs(sale.igtfBs),
-    formatUSD(sale.totalUSD)
-  ]);
+  const tableData = sales.map((sale, index) => {
+    const isAnulada = sale.status === 'anulada';
+    return [
+      (index + 1).toString(),
+      new Date(sale.date).toLocaleDateString('es-VE'),
+      sale.invoiceNumber,
+      sale.controlNumber,
+      sale.clientRIF,
+      isAnulada ? `${sale.clientName.substring(0, 14)} (ANUL.)` : sale.clientName.substring(0, 22),
+      formatBs(isAnulada ? 0 : sale.totalBs),
+      formatBs(isAnulada ? 0 : sale.exemptBs),
+      formatBs(isAnulada ? 0 : sale.taxableBs),
+      isAnulada ? 'ANUL.' : (sale.taxableBs > 0 ? '16%' : '0% (E)'),
+      formatBs(isAnulada ? 0 : sale.ivaBs),
+      formatBs(isAnulada ? 0 : sale.igtfBs),
+      formatUSD(isAnulada ? 0 : sale.totalUSD)
+    ];
+  });
 
-  // Calculate totals
-  const totalBs = sales.reduce((acc, s) => acc + s.totalBs, 0);
-  const totalExemptBs = sales.reduce((acc, s) => acc + s.exemptBs, 0);
-  const totalTaxableBs = sales.reduce((acc, s) => acc + s.taxableBs, 0);
-  const totalIvaBs = sales.reduce((acc, s) => acc + s.ivaBs, 0);
-  const totalIgtfBs = sales.reduce((acc, s) => acc + s.igtfBs, 0);
-  const totalUSD = sales.reduce((acc, s) => acc + s.totalUSD, 0);
+  // Calculate totals strictly from active (non-anulada) invoices
+  const activeSalesForTotals = sales.filter(s => s.status !== 'anulada');
+  const totalBs = round2(activeSalesForTotals.reduce((acc, s) => acc + s.totalBs, 0));
+  const totalExemptBs = round2(activeSalesForTotals.reduce((acc, s) => acc + s.exemptBs, 0));
+  const totalTaxableBs = round2(activeSalesForTotals.reduce((acc, s) => acc + s.taxableBs, 0));
+  const totalIvaBs = round2(activeSalesForTotals.reduce((acc, s) => acc + s.ivaBs, 0));
+  const totalIgtfBs = round2(activeSalesForTotals.reduce((acc, s) => acc + s.igtfBs, 0));
+  const totalUSD = round2(activeSalesForTotals.reduce((acc, s) => acc + s.totalUSD, 0));
 
   autoTable(doc, {
     startY: 32,

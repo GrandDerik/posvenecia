@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { TransactionsDatePreset } from '../services/firestoreSyncService';
 import { 
@@ -38,6 +38,7 @@ import {
 import { 
   formatBs, 
   formatUSD, 
+  getLocalDateStr,
   round2,
   safeDiv,
   exportLibroVentasExcel, 
@@ -68,7 +69,9 @@ import {
   OWNER_SALARY_CATEGORY,
   OWNER_WITHDRAWAL_CATEGORY,
   isBankPaymentMethod,
+  isExpenseCreditSettlement,
   isExpenseExcludedFromLibroCompras,
+  isExpenseLoanRepayment,
   isExpenseOwnerSalary,
   isExpenseOwnerWithdrawal
 } from '../utils/accountingUtils';
@@ -471,112 +474,281 @@ export const ContabilidadView: React.FC = () => {
   };
 
   // Filter sales
-  const filteredSales = sales.filter(s => 
-    s.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    s.controlNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    s.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    s.clientRIF.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const filteredSales = useMemo(() => {
+    if (!normalizedSearch) return sales;
+    return sales.filter(s =>
+      s.invoiceNumber.toLowerCase().includes(normalizedSearch) ||
+      s.controlNumber.toLowerCase().includes(normalizedSearch) ||
+      s.clientName.toLowerCase().includes(normalizedSearch) ||
+      s.clientRIF.toLowerCase().includes(normalizedSearch)
+    );
+  }, [sales, normalizedSearch]);
 
   // Active (non-anulada) sales for fiscal & balance math
-  const activeSales = sales.filter(s => s.status !== 'anulada');
-  const activeFilteredSales = filteredSales.filter(s => s.status !== 'anulada');
-
-  // Filter expenses (exclude settlement outflow rows that duplicate an original 'credito' purchase invoice)
-  const creditLinkedCuentaIds = new Set(
-    expenses.filter(e => e.paymentMethod === 'credito' && e.linkedCuentaId).map(e => e.linkedCuentaId as string)
-  );
-  const nonDuplicatedExpenses = expenses.filter(
-    e => !(e.linkedCuentaId && e.paymentMethod !== 'credito' && creditLinkedCuentaIds.has(e.linkedCuentaId))
-  );
-  // Strict SENIAT Isolation: Libro de Compras NEVER includes Sueldo Propietario / Nómina or Retiro Personal / Adelanto Dueño
-  const libroComprasExpenses = nonDuplicatedExpenses.filter(e => !isExpenseExcludedFromLibroCompras(e));
-  const filteredExpenses = libroComprasExpenses.filter(e => 
-    e.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    e.supplierName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    e.supplierRIF.toLowerCase().includes(searchTerm.toLowerCase())
+  const activeSales = useMemo(() => sales.filter(s => s.status !== 'anulada'), [sales]);
+  const activeFilteredSales = useMemo(
+    () => filteredSales.filter(s => s.status !== 'anulada'),
+    [filteredSales]
   );
 
-  // Credit Notes deductions (SENIAT)
-  const totalCreditNotesUSD = round2(creditNotes.reduce((a, n) => a + n.totalUSD, 0));
-  const totalCreditNotesBs = round2(creditNotes.reduce((a, n) => a + n.totalBs, 0));
+  // Filter expenses (unconditionally exclude credit-purchase settlement outflows even across months;
+  // bank commissions on those payments are preserved via !isExpenseBankCommission)
+  const nonDuplicatedExpenses = useMemo(
+    () => expenses.filter(e => !isExpenseCreditSettlement(e)),
+    [expenses]
+  );
+  // Strict SENIAT Isolation: Libro de Compras excludes Sueldo Propietario, Retiros, Comisiones, Préstamos, Liquidaciones CPP y recibos sin factura fiscal
+  const libroComprasExpenses = useMemo(
+    () => nonDuplicatedExpenses.filter(e => !isExpenseExcludedFromLibroCompras(e)),
+    [nonDuplicatedExpenses]
+  );
+  const filteredExpenses = useMemo(() => {
+    if (!normalizedSearch) return libroComprasExpenses;
+    return libroComprasExpenses.filter(e =>
+      e.invoiceNumber.toLowerCase().includes(normalizedSearch) ||
+      e.supplierName.toLowerCase().includes(normalizedSearch) ||
+      e.supplierRIF.toLowerCase().includes(normalizedSearch)
+    );
+  }, [libroComprasExpenses, normalizedSearch]);
+
+  // Credit Notes deductions scoped to active transactionsDateRange (SENIAT)
+  const { totalCreditNotesUSD, totalCreditNotesBs } = useMemo(() => {
+    const scoped = transactionsDateRange
+      ? creditNotes.filter(n => {
+          const ymd = getLocalDateStr(n.date);
+          return ymd >= transactionsDateRange.startDate && ymd <= transactionsDateRange.endDate;
+        })
+      : creditNotes;
+    return {
+      totalCreditNotesUSD: round2(scoped.reduce((a, n) => a + n.totalUSD, 0)),
+      totalCreditNotesBs: round2(scoped.reduce((a, n) => a + n.totalBs, 0))
+    };
+  }, [creditNotes, transactionsDateRange]);
 
   // Sales totals (SENIAT - excluding anuladas)
-  const totalSalesBs = round2(activeFilteredSales.reduce((a, s) => a + s.totalBs, 0));
-  const totalSalesUSD = round2(activeFilteredSales.reduce((a, s) => a + s.totalUSD, 0));
-  const totalExemptBs = round2(activeFilteredSales.reduce((a, s) => a + s.exemptBs, 0));
-  const totalTaxableBs = round2(activeFilteredSales.reduce((a, s) => a + s.taxableBs, 0));
-  const totalIvaBs = round2(activeFilteredSales.reduce((a, s) => a + s.ivaBs, 0));
-  const totalIgtfBs = round2(activeFilteredSales.reduce((a, s) => a + s.igtfBs, 0));
-  const totalIgtfUSD = round2(activeFilteredSales.reduce((a, s) => a + s.igtfUSD, 0));
+  const {
+    totalSalesBs,
+    totalSalesUSD,
+    totalExemptBs,
+    totalTaxableBs,
+    totalIvaBs,
+    totalIgtfBs
+  } = useMemo(() => {
+    let salesBs = 0;
+    let salesUSD = 0;
+    let exemptBs = 0;
+    let taxableBs = 0;
+    let ivaBs = 0;
+    let igtfBs = 0;
+    for (const s of activeFilteredSales) {
+      salesBs += s.totalBs;
+      salesUSD += s.totalUSD;
+      exemptBs += s.exemptBs;
+      taxableBs += s.taxableBs;
+      ivaBs += s.ivaBs;
+      igtfBs += s.igtfBs;
+    }
+    return {
+      totalSalesBs: round2(salesBs),
+      totalSalesUSD: round2(salesUSD),
+      totalExemptBs: round2(exemptBs),
+      totalTaxableBs: round2(taxableBs),
+      totalIvaBs: round2(ivaBs),
+      totalIgtfBs: round2(igtfBs)
+    };
+  }, [activeFilteredSales]);
+
+  // IGTF-subject sales (includes both full efectivo_usd and pago_combinado with USD cash portion)
+  const getSaleIgtfBaseUSD = (s: Sale): number => {
+    if (s.paymentMethod === 'pago_combinado') {
+      const usdCash = s.paymentDetails?.combinedBreakdown?.usdCash || 0;
+      if (usdCash > 0) return round2(usdCash);
+      return s.igtfUSD > 0 ? round2(s.igtfUSD / 0.03) : 0;
+    }
+    return round2(s.subtotalUSD + s.ivaUSD);
+  };
+  const { igtfSales, totalIgtfBaseUSD, totalIgtfTabUSD, totalIgtfTabBs } = useMemo(() => {
+    const matched = activeSales.filter(
+      s =>
+        s.paymentMethod === 'efectivo_usd' ||
+        s.igtfUSD > 0 ||
+        s.igtfBs > 0 ||
+        (s.paymentMethod === 'pago_combinado' && (s.paymentDetails?.combinedBreakdown?.usdCash || 0) > 0)
+    );
+    let baseUSD = 0;
+    let tabUSD = 0;
+    let tabBs = 0;
+    for (const s of matched) {
+      baseUSD += getSaleIgtfBaseUSD(s);
+      tabUSD += s.igtfUSD;
+      tabBs += s.igtfBs;
+    }
+    return {
+      igtfSales: matched,
+      totalIgtfBaseUSD: round2(baseUSD),
+      totalIgtfTabUSD: round2(tabUSD),
+      totalIgtfTabBs: round2(tabBs)
+    };
+  }, [activeSales]);
 
   // Purchases totals (SENIAT — strictly fiscal records only)
-  const totalExpBs = round2(filteredExpenses.reduce((a, e) => a + e.amountBs, 0));
-  const totalExpUSD = round2(filteredExpenses.reduce((a, e) => a + e.amountUSD, 0));
-  const totalBaseExpBs = round2(filteredExpenses.reduce((a, e) => a + e.baseImponibleBs, 0));
-  const totalIvaExpBs = round2(filteredExpenses.reduce((a, e) => a + e.ivaBs, 0));
-  const totalRetIvaBs = round2(filteredExpenses.reduce((a, e) => a + e.retencionIVABs, 0));
-  const totalRetIslrBs = round2(filteredExpenses.reduce((a, e) => a + e.retencionISLRBs, 0));
-
-  // Operating Expenses (includes Sueldo Propietario / Nómina for true profitability; EXCLUDES Retiro Personal / Adelanto Dueño)
-  const operatingExpensesOnly = nonDuplicatedExpenses.filter(e => !isExpenseOwnerWithdrawal(e));
-  const ownerSalaryExpensesOnly = nonDuplicatedExpenses.filter(e => isExpenseOwnerSalary(e));
-  const ownerWithdrawalExpensesOnly = nonDuplicatedExpenses.filter(e => isExpenseOwnerWithdrawal(e));
-
-  const sueldoPropietarioUSD = round2(ownerSalaryExpensesOnly.reduce((a, e) => a + e.amountUSD, 0));
-  const sueldoPropietarioBs = round2(ownerSalaryExpensesOnly.reduce((a, e) => a + e.amountBs, 0));
-  const retirosPersonalesUSD = round2(ownerWithdrawalExpensesOnly.reduce((a, e) => a + e.amountUSD, 0));
-  const retirosPersonalesBs = round2(ownerWithdrawalExpensesOnly.reduce((a, e) => a + e.amountBs, 0));
-
-  // Net Balance (Active Sales minus Credit Notes minus True Operating Expenses)
-  const allActiveSalesUSD = round2(activeSales.reduce((a, s) => a + s.totalUSD, 0));
-  const allActiveSalesBs = round2(activeSales.reduce((a, s) => a + s.totalBs, 0));
-  const netIngresosUSD = round2(Math.max(0, allActiveSalesUSD - totalCreditNotesUSD));
-  const netIngresosBs = round2(Math.max(0, allActiveSalesBs - totalCreditNotesBs));
-  const allExpUSD = round2(operatingExpensesOnly.reduce((a, e) => a + e.amountUSD, 0));
-  const allExpBs = round2(operatingExpensesOnly.reduce((a, e) => a + e.amountBs, 0));
-  const netUSD = round2(netIngresosUSD - allExpUSD);
-  const netBs = round2(netIngresosBs - allExpBs);
-  const flujoTrasRetirosUSD = round2(netUSD - retirosPersonalesUSD);
-  const flujoTrasRetirosBs = round2(netBs - retirosPersonalesBs);
-
-  // Breakdown by payment methods for active sales
-  const methodsVentas: Record<string, { usd: number; bs: number }> = {};
-  activeSales.forEach(s => {
-    if (!methodsVentas[s.paymentMethod]) {
-      methodsVentas[s.paymentMethod] = { usd: 0, bs: 0 };
+  const {
+    totalExpBs,
+    totalExpUSD,
+    totalBaseExpBs,
+    totalIvaExpBs,
+    totalRetIvaBs,
+    totalRetIslrBs
+  } = useMemo(() => {
+    let expBs = 0;
+    let expUSD = 0;
+    let baseExpBs = 0;
+    let ivaExpBs = 0;
+    let retIvaBs = 0;
+    let retIslrBs = 0;
+    for (const e of filteredExpenses) {
+      expBs += e.amountBs;
+      expUSD += e.amountUSD;
+      baseExpBs += e.baseImponibleBs;
+      ivaExpBs += e.ivaBs;
+      retIvaBs += e.retencionIVABs;
+      retIslrBs += e.retencionISLRBs;
     }
-    methodsVentas[s.paymentMethod].usd = round2(methodsVentas[s.paymentMethod].usd + s.totalUSD);
-    methodsVentas[s.paymentMethod].bs = round2(methodsVentas[s.paymentMethod].bs + s.totalBs);
-  });
+    return {
+      totalExpBs: round2(expBs),
+      totalExpUSD: round2(expUSD),
+      totalBaseExpBs: round2(baseExpBs),
+      totalIvaExpBs: round2(ivaExpBs),
+      totalRetIvaBs: round2(retIvaBs),
+      totalRetIslrBs: round2(retIslrBs)
+    };
+  }, [filteredExpenses]);
 
-  const estadoCuentaSummary = {
-    ventasTotalBs: netIngresosBs,
-    ventasTotalUSD: netIngresosUSD,
-    gastosTotalBs: allExpBs,
-    gastosTotalUSD: allExpUSD,
+  // Operating Expenses, Owner Salary/Withdrawals, Net Balance & Payment Method Breakdown
+  const {
     sueldoPropietarioUSD,
     sueldoPropietarioBs,
     retirosPersonalesUSD,
     retirosPersonalesBs,
-    netoBs: netBs,
-    netoUSD: netUSD,
+    allActiveSalesUSD,
+    netIngresosUSD,
+    netIngresosBs,
+    allExpUSD,
+    allExpBs,
+    netUSD,
+    netBs,
     flujoTrasRetirosUSD,
     flujoTrasRetirosBs,
-    igtfBs: round2(activeSales.reduce((a, s) => a + s.igtfBs, 0)),
-    igtfUSD: round2(activeSales.reduce((a, s) => a + s.igtfUSD, 0)),
-    metodosVentas: methodsVentas,
-    bcvRate
-  };
+    methodsVentas,
+    estadoCuentaSummary
+  } = useMemo(() => {
+    let salUSD = 0;
+    let salBs = 0;
+    let withUSD = 0;
+    let withBs = 0;
+    let opExpUSD = 0;
+    let opExpBs = 0;
+
+    for (const e of nonDuplicatedExpenses) {
+      const isWith = isExpenseOwnerWithdrawal(e);
+      const isLoanRepay = isExpenseLoanRepayment(e);
+      if (!isWith && !isLoanRepay) {
+        opExpUSD += e.amountUSD;
+        opExpBs += e.amountBs;
+      }
+      if (isExpenseOwnerSalary(e)) {
+        salUSD += e.amountUSD;
+        salBs += e.amountBs;
+      }
+      if (isWith) {
+        withUSD += e.amountUSD;
+        withBs += e.amountBs;
+      }
+    }
+
+    let activeUSD = 0;
+    let activeBs = 0;
+    let sumIgtfBs = 0;
+    let sumIgtfUSD = 0;
+    const methods: Record<string, { usd: number; bs: number }> = {};
+    for (const s of activeSales) {
+      activeUSD += s.totalUSD;
+      activeBs += s.totalBs;
+      sumIgtfBs += s.igtfBs;
+      sumIgtfUSD += s.igtfUSD;
+      if (!methods[s.paymentMethod]) {
+        methods[s.paymentMethod] = { usd: 0, bs: 0 };
+      }
+      methods[s.paymentMethod].usd = round2(methods[s.paymentMethod].usd + s.totalUSD);
+      methods[s.paymentMethod].bs = round2(methods[s.paymentMethod].bs + s.totalBs);
+    }
+
+    const rActiveUSD = round2(activeUSD);
+    const rActiveBs = round2(activeBs);
+    const rNetIngUSD = round2(Math.max(0, rActiveUSD - totalCreditNotesUSD));
+    const rNetIngBs = round2(Math.max(0, rActiveBs - totalCreditNotesBs));
+    const rOpExpUSD = round2(opExpUSD);
+    const rOpExpBs = round2(opExpBs);
+    const rSalUSD = round2(salUSD);
+    const rSalBs = round2(salBs);
+    const rWithUSD = round2(withUSD);
+    const rWithBs = round2(withBs);
+    const rNetUSD = round2(rNetIngUSD - rOpExpUSD);
+    const rNetBs = round2(rNetIngBs - rOpExpBs);
+    const rFlujoUSD = round2(rNetUSD - rWithUSD);
+    const rFlujoBs = round2(rNetBs - rWithBs);
+
+    return {
+      sueldoPropietarioUSD: rSalUSD,
+      sueldoPropietarioBs: rSalBs,
+      retirosPersonalesUSD: rWithUSD,
+      retirosPersonalesBs: rWithBs,
+      allActiveSalesUSD: rActiveUSD,
+      netIngresosUSD: rNetIngUSD,
+      netIngresosBs: rNetIngBs,
+      allExpUSD: rOpExpUSD,
+      allExpBs: rOpExpBs,
+      netUSD: rNetUSD,
+      netBs: rNetBs,
+      flujoTrasRetirosUSD: rFlujoUSD,
+      flujoTrasRetirosBs: rFlujoBs,
+      methodsVentas: methods,
+      estadoCuentaSummary: {
+        ventasTotalBs: rNetIngBs,
+        ventasTotalUSD: rNetIngUSD,
+        gastosTotalBs: rOpExpBs,
+        gastosTotalUSD: rOpExpUSD,
+        sueldoPropietarioUSD: rSalUSD,
+        sueldoPropietarioBs: rSalBs,
+        retirosPersonalesUSD: rWithUSD,
+        retirosPersonalesBs: rWithBs,
+        netoBs: rNetBs,
+        netoUSD: rNetUSD,
+        flujoTrasRetirosUSD: rFlujoUSD,
+        flujoTrasRetirosBs: rFlujoBs,
+        igtfBs: round2(sumIgtfBs),
+        igtfUSD: round2(sumIgtfUSD),
+        metodosVentas: methods,
+        bcvRate
+      }
+    };
+  }, [activeSales, nonDuplicatedExpenses, totalCreditNotesUSD, totalCreditNotesBs, bcvRate]);
 
   // Pagination slices for Ventas & Compras
   const totalSalesPages = Math.max(1, Math.ceil(filteredSales.length / pageSize));
   const safeSalesPage = Math.min(salesPage, totalSalesPages);
-  const paginatedSales = filteredSales.slice((safeSalesPage - 1) * pageSize, safeSalesPage * pageSize);
+  const paginatedSales = useMemo(
+    () => filteredSales.slice((safeSalesPage - 1) * pageSize, safeSalesPage * pageSize),
+    [filteredSales, safeSalesPage, pageSize]
+  );
 
   const totalExpensesPages = Math.max(1, Math.ceil(filteredExpenses.length / pageSize));
   const safeExpensesPage = Math.min(expensesPage, totalExpensesPages);
-  const paginatedExpenses = filteredExpenses.slice((safeExpensesPage - 1) * pageSize, safeExpensesPage * pageSize);
+  const paginatedExpenses = useMemo(
+    () => filteredExpenses.slice((safeExpensesPage - 1) * pageSize, safeExpensesPage * pageSize),
+    [filteredExpenses, safeExpensesPage, pageSize]
+  );
 
   const handleSelectDatePreset = (preset: TransactionsDatePreset) => {
     if (preset === 'custom') {
@@ -2262,7 +2434,7 @@ export const ContabilidadView: React.FC = () => {
 
               <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={() => exportLibroVentasExcel(activeSales.filter(s => s.paymentMethod === 'efectivo_usd'), businessInfo)}
+                  onClick={() => exportLibroVentasExcel(igtfSales, businessInfo)}
                   className="px-3.5 py-2 bg-[#E7F8EE] hover:bg-emerald-100 text-[#065F46] border border-[#A7E6C4] rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <FileSpreadsheet className="w-4 h-4" />
@@ -2278,9 +2450,9 @@ export const ContabilidadView: React.FC = () => {
                   Base Gravable en Efectivo USD
                 </span>
                 <div className="text-2xl font-black text-slate-900 font-mono-numbers mt-1">
-                  ${formatUSD(round2(activeSales.filter(s => s.paymentMethod === 'efectivo_usd').reduce((a, s) => a + (s.subtotalUSD + s.ivaUSD), 0)))}
+                  ${formatUSD(totalIgtfBaseUSD)}
                 </div>
-                <span className="text-[11px] text-[#065F46]">Total cobrado en billetes divisa</span>
+                <span className="text-[11px] text-[#065F46]">Total cobrado en billetes divisa (directo y mixto)</span>
               </div>
 
               <div className="p-4 bg-[#0B1528] text-white rounded-2xl border border-[#0B1528]">
@@ -2288,7 +2460,7 @@ export const ContabilidadView: React.FC = () => {
                   Total IGTF 3% Percibido ($)
                 </span>
                 <div className="text-2xl font-black text-white font-mono-numbers mt-1">
-                  ${formatUSD(totalIgtfUSD)}
+                  ${formatUSD(totalIgtfTabUSD)}
                 </div>
                 <span className="text-[11px] text-slate-300">Fondos retenidos para enterar al SENIAT</span>
               </div>
@@ -2298,7 +2470,7 @@ export const ContabilidadView: React.FC = () => {
                   Equivalente IGTF en Bolívares
                 </span>
                 <div className="text-2xl font-black text-slate-900 font-mono-numbers mt-1">
-                  Bs. {formatBs(totalIgtfBs)}
+                  Bs. {formatBs(totalIgtfTabBs)}
                 </div>
                 <span className="text-[11px] text-slate-500">A tasa BCV de facturación</span>
               </div>
@@ -2308,7 +2480,7 @@ export const ContabilidadView: React.FC = () => {
           {/* IGTF Transactions Table */}
           <div className="bg-white/95 rounded-3xl border border-[#DCE4F0] shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] overflow-hidden">
             <div className="p-4 bg-[#F8FAFC] border-b border-[#DCE4F0] text-xs font-bold text-slate-700">
-              Operaciones Sujetas a Retención de IGTF (Pagos en Efectivo USD)
+              Operaciones Sujetas a Retención de IGTF (Efectivo USD y Pagos Combinados con Divisa)
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs font-mono-numbers">
@@ -2326,7 +2498,7 @@ export const ContabilidadView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#DCE4F0]/60">
-                  {activeSales.filter(s => s.paymentMethod === 'efectivo_usd').map(sale => (
+                  {igtfSales.map(sale => (
                     <tr key={sale.id} className="hover:bg-[#EEF2F7]/60">
                       <td className="py-2 px-2 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">
@@ -2357,10 +2529,17 @@ export const ContabilidadView: React.FC = () => {
                         </div>
                       </td>
                       <td className="py-2 px-3 text-slate-700">{new Date(sale.date).toLocaleDateString('es-VE')}</td>
-                      <td className="py-2 px-3 font-bold text-slate-900">{sale.invoiceNumber}</td>
+                      <td className="py-2 px-3 font-bold text-slate-900">
+                        {sale.invoiceNumber}
+                        {sale.paymentMethod === 'pago_combinado' && (
+                          <span className="ml-1.5 text-[9px] font-sans font-bold uppercase px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            Mixto
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 px-3 font-sans text-slate-800">{sale.clientName}</td>
                       <td className="py-2 px-3 text-slate-600">{sale.clientRIF}</td>
-                      <td className="py-2 px-3 text-right font-bold text-slate-900">${formatUSD(sale.subtotalUSD + sale.ivaUSD)}</td>
+                      <td className="py-2 px-3 text-right font-bold text-slate-900">${formatUSD(getSaleIgtfBaseUSD(sale))}</td>
                       <td className="py-2 px-3 text-right font-bold text-[#065F46]">${formatUSD(sale.igtfUSD)}</td>
                       <td className="py-2 px-3 text-right font-bold text-[#065F46]">Bs. {formatBs(sale.igtfBs)}</td>
                       <td className="py-2 px-3 text-right font-black text-slate-900">${formatUSD(sale.totalUSD)}</td>

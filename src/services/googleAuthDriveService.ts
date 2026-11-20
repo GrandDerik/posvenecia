@@ -43,7 +43,7 @@ let cachedAccessToken: string | null = null;
 let tokenAcquiredTimestamp: number = 0;
 let isSigningIn = false;
 
-export const persistAccessTokenForUser = (uid: string, token: string | null) => {
+const persistAccessTokenForUser = (uid: string, token: string | null) => {
   cachedAccessToken = token;
   tokenAcquiredTimestamp = token ? Date.now() : 0;
   try {
@@ -70,7 +70,7 @@ export const persistAccessTokenForUser = (uid: string, token: string | null) => 
   }
 };
 
-export const getPersistedAccessTokenForUser = (uid: string): { token: string | null; isExpired: boolean } => {
+const getPersistedAccessTokenForUser = (uid: string): { token: string | null; isExpired: boolean } => {
   try {
     const token = sessionStorage.getItem(`${TOKEN_KEY_PREFIX}${uid}`) || sessionStorage.getItem('posvenecia_active_google_token');
     const timeStr = sessionStorage.getItem(`${TOKEN_TIME_PREFIX}${uid}`) || sessionStorage.getItem('posvenecia_active_google_token_time');
@@ -260,17 +260,6 @@ export const getGoogleAccessToken = (): string | null => {
 };
 
 /**
- * Set or refresh in-memory access token
- */
-export const setGoogleAccessToken = (token: string | null, uid?: string) => {
-  cachedAccessToken = token;
-  tokenAcquiredTimestamp = token ? Date.now() : 0;
-  if (uid) {
-    persistAccessTokenForUser(uid, token);
-  }
-};
-
-/**
  * Log out from Firebase and clear tokens
  */
 export const logOutGoogle = async (): Promise<void> => {
@@ -309,7 +298,7 @@ const DB_FILE_NAME = 'posvenecia_database.json';
  * Search for posvenecia_database.json in user's Drive (appDataFolder or standard drive space)
  * Sorts by modifiedTime desc to always select the latest file version across devices.
  */
-export const findDriveDatabaseFile = async (accessToken: string): Promise<string | null> => {
+const findDriveDatabaseFile = async (accessToken: string): Promise<string | null> => {
   const candidates: Array<{ id: string; modifiedTime: string }> = [];
 
   // 1. Search in appDataFolder (private per-user application storage)

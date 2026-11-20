@@ -70,18 +70,60 @@ export const isExpenseOwnerSalary = (
   return exp.accountingType === 'owner_salary' || isOwnerSalaryCategory(exp.category);
 };
 
+export const isExpenseBankCommission = (
+  exp: Pick<Expense, 'category'>
+): boolean => {
+  return isBankCommissionCategory(exp.category);
+};
+
+export const isExpenseLoanRepayment = (
+  exp: Pick<Expense, 'category'> & Partial<Pick<Expense, 'linkedLoanId'>>
+): boolean => {
+  return Boolean(exp.linkedLoanId) && !isExpenseBankCommission(exp);
+};
+
+export const isExpenseCreditSettlement = (
+  exp: Pick<Expense, 'category'> & Partial<Pick<Expense, 'linkedCuentaId' | 'paymentMethod'>>
+): boolean => {
+  return Boolean(exp.linkedCuentaId && exp.paymentMethod !== 'credito') && !isExpenseBankCommission(exp);
+};
+
+export const isExpenseInformalNonFiscal = (
+  exp: Pick<Expense, 'category'> & Partial<Pick<Expense, 'linkedGastoId' | 'supplierRIF' | 'controlNumber' | 'invoiceNumber' | 'ivaBs'>>
+): boolean => {
+  if (!exp.linkedGastoId || isExpenseBankCommission(exp)) return false;
+  const rifNorm = (exp.supplierRIF || '').trim().toUpperCase();
+  const ctrlNorm = (exp.controlNumber || '').trim();
+  const invNorm = (exp.invoiceNumber || '').trim().toUpperCase();
+  const hasNoFiscalRif = !rifNorm || rifNorm === 'N/A';
+  const hasNoControl = !ctrlNorm || ctrlNorm === '00-00000';
+  const hasNoFiscalInvoice = !invNorm || invNorm === 'REC-GASTO' || invNorm === 'INT-CAJA';
+  return (hasNoFiscalRif && (hasNoControl || hasNoFiscalInvoice)) && (exp.ivaBs || 0) === 0;
+};
+
 /**
  * Aislamiento Fiscal SENIAT:
- * Garantiza que Sueldo Propietario / Nómina, Retiro Personal / Adelanto Dueño
- * y Comisión Bancaria jamás entren en el Libro de Compras ni generen IVA o retenciones.
+ * Garantiza que Sueldo Propietario / Nómina, Retiro Personal / Adelanto Dueño,
+ * Comisiones Bancarias, abonos de capital a préstamos, liquidaciones de cuentas por pagar
+ * y recibos operativos informales sin factura fiscal jamás entren en el Libro de Compras.
  */
 export const isExpenseExcludedFromLibroCompras = (
-  exp: Pick<Expense, 'category' | 'excludeFromLibroCompras' | 'accountingType'>
+  exp: Pick<Expense, 'category' | 'excludeFromLibroCompras' | 'accountingType'> &
+    Partial<
+      Pick<
+        Expense,
+        'linkedLoanId' | 'linkedCuentaId' | 'linkedGastoId' | 'paymentMethod' | 'supplierRIF' | 'controlNumber' | 'invoiceNumber' | 'ivaBs'
+      >
+    >
 ): boolean => {
   if (exp.excludeFromLibroCompras === true) return true;
   if (exp.accountingType === 'owner_withdrawal' || exp.accountingType === 'owner_salary') return true;
-  if (isBankCommissionCategory(exp.category)) return true;
-  return isNonFiscalPersonalOrSalaryCategory(exp.category);
+  if (isExpenseBankCommission(exp)) return true;
+  if (isNonFiscalPersonalOrSalaryCategory(exp.category)) return true;
+  if (isExpenseLoanRepayment(exp)) return true;
+  if (isExpenseCreditSettlement(exp)) return true;
+  if (isExpenseInformalNonFiscal(exp)) return true;
+  return false;
 };
 
 export const mapGastoCategoryToExpenseCategory = (
@@ -253,7 +295,7 @@ export const computeShiftBankSummaries = (
   // 5. Bank refunds from credit notes
   shiftCreditNotes.forEach((cn) => {
     if (isBankPaymentMethod(cn.refundMethod)) {
-      const idx = matchBankAccountIndex(initialBanks);
+      const idx = matchBankAccountIndex(initialBanks, cn.bankAccountId, cn.bankAccountLabel);
       if (idx >= 0) summaries[idx].outflowsBs = round2(summaries[idx].outflowsBs + cn.totalBs);
     }
   });

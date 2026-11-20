@@ -63,79 +63,94 @@ export const DashboardView: React.FC = () => {
 
   // Calculations for today (local timezone) & active cash shift
   const todayStr = getLocalDateStr();
-  const todaySales = sales.filter((s) => isSameLocalDate(s.date, todayStr) && s.status !== 'anulada');
-  const todayCreditNotes = creditNotes.filter((cn) => isSameLocalDate(cn.date, todayStr));
-
-  // Cash-in-register metrics match active shift window when open (or today if closed)
-  const shiftSales = isCashRegisterOpen && cashShift?.openedAt
-    ? sales.filter((s) => s.date >= cashShift.openedAt && s.status !== 'anulada')
-    : todaySales;
-  const shiftExpenses = isCashRegisterOpen && cashShift?.openedAt
-    ? expenses.filter((e) => e.date >= cashShift.openedAt && e.paymentMethod !== 'credito')
-    : expenses.filter((e) => isSameLocalDate(e.date, todayStr) && e.paymentMethod !== 'credito');
-  const shiftCreditNotes = isCashRegisterOpen && cashShift?.openedAt
-    ? creditNotes.filter((cn) => cn.date >= cashShift.openedAt)
-    : todayCreditNotes;
-  const shiftFiadoAbonos = isCashRegisterOpen && cashShift?.openedAt
-    ? fiados.flatMap((f) => f.abonos || []).filter((a) => a.date >= cashShift.openedAt)
-    : fiados.flatMap((f) => f.abonos || []).filter((a) => isSameLocalDate(a.date, todayStr));
-  const shiftLoans = isCashRegisterOpen && cashShift?.openedAt
-    ? loans.filter((l) => (l.grantDate || l.createdAt) >= cashShift.openedAt)
-    : loans.filter((l) => isSameLocalDate(l.grantDate || l.createdAt, todayStr));
-
-  // 1. Efectivo en caja (Neto de efectivo USD + efectivo Bs convertido a USD, incluyendo pagos combinados, abonos de fiados, préstamos y reembolsos NC)
-  let cashUsdSales = 0;
-  let cashBsSales = 0;
-  shiftSales.forEach((s) => {
-    if (s.paymentMethod === 'efectivo_usd') {
-      cashUsdSales += s.totalUSD;
-    } else if (s.paymentMethod === 'efectivo_bs') {
-      cashBsSales += s.totalBs;
-    } else if (s.paymentMethod === 'pago_combinado' && s.paymentDetails?.combinedBreakdown) {
-      cashUsdSales += s.paymentDetails.combinedBreakdown.usdCash || 0;
-      cashBsSales += s.paymentDetails.combinedBreakdown.bsCash || 0;
-    }
-  });
-
-  shiftFiadoAbonos.forEach((a) => {
-    if (a.paymentMethod === 'efectivo_usd') {
-      cashUsdSales += a.amountUSD;
-    } else if (a.paymentMethod === 'efectivo_bs') {
-      cashBsSales += a.amountBs;
-    }
-  });
-
-  shiftLoans.forEach((l) => {
-    if (l.cashDestination === 'efectivo_usd') {
-      cashUsdSales += l.originalAmountUSD;
-    } else if (l.cashDestination === 'efectivo_bs') {
-      cashBsSales += l.originalAmountBs;
-    }
-  });
-
-  const cashUsdExp = shiftExpenses
-    .filter((e) => e.paymentMethod === 'efectivo_usd')
-    .reduce((a, e) => a + e.amountUSD, 0);
-  const cashBsExp = shiftExpenses
-    .filter((e) => e.paymentMethod === 'efectivo_bs')
-    .reduce((a, e) => a + e.amountBs, 0);
-
-  const cashUsdRefund = shiftCreditNotes
-    .filter((cn) => cn.refundMethod === 'efectivo_usd')
-    .reduce((a, cn) => a + cn.totalUSD, 0);
-  const cashBsRefund = shiftCreditNotes
-    .filter((cn) => cn.refundMethod === 'efectivo_bs')
-    .reduce((a, cn) => a + cn.totalBs, 0);
-
-  const cashNetUSD = round2(
-    cashUsdSales - cashUsdExp - cashUsdRefund + (bcvRate > 0 ? (cashBsSales - cashBsExp - cashBsRefund) / bcvRate : 0)
+  const todaySales = useMemo(
+    () => sales.filter((s) => isSameLocalDate(s.date, todayStr) && s.status !== 'anulada'),
+    [sales, todayStr]
   );
-  const cashNetBs = round2(cashNetUSD * bcvRate);
+  const todayCreditNotes = useMemo(
+    () => creditNotes.filter((cn) => isSameLocalDate(cn.date, todayStr)),
+    [creditNotes, todayStr]
+  );
 
-  // 2. Ventas Brutas (Netas de devoluciones/notas de crédito del día)
-  const todayRefundedUSD = todayCreditNotes.reduce((a, cn) => a + cn.totalUSD, 0);
-  const grossSalesUSD = round2(todaySales.reduce((a, s) => a + s.totalUSD, 0) - todayRefundedUSD);
-  const grossSalesBs = round2(grossSalesUSD * bcvRate);
+  // 1 & 2. Efectivo en caja (turno activo o día) y Ventas Brutas Netas del día
+  const { cashNetUSD, cashNetBs, grossSalesUSD, grossSalesBs } = useMemo(() => {
+    const openedAt = isCashRegisterOpen && cashShift?.openedAt ? cashShift.openedAt : null;
+
+    const shiftSales = openedAt
+      ? sales.filter((s) => s.date >= openedAt && s.status !== 'anulada')
+      : todaySales;
+    const shiftExpenses = openedAt
+      ? expenses.filter((e) => e.date >= openedAt && e.paymentMethod !== 'credito')
+      : expenses.filter((e) => isSameLocalDate(e.date, todayStr) && e.paymentMethod !== 'credito');
+    const shiftCreditNotes = openedAt
+      ? creditNotes.filter((cn) => cn.date >= openedAt)
+      : todayCreditNotes;
+    const shiftFiadoAbonos = openedAt
+      ? fiados.flatMap((f) => f.abonos || []).filter((a) => a.date >= openedAt)
+      : fiados.flatMap((f) => f.abonos || []).filter((a) => isSameLocalDate(a.date, todayStr));
+    const shiftLoans = openedAt
+      ? loans.filter((l) => (l.grantDate || l.createdAt) >= openedAt)
+      : loans.filter((l) => isSameLocalDate(l.grantDate || l.createdAt, todayStr));
+
+    let cashUsdSales = 0;
+    let cashBsSales = 0;
+    shiftSales.forEach((s) => {
+      if (s.paymentMethod === 'efectivo_usd') {
+        cashUsdSales += s.totalUSD;
+      } else if (s.paymentMethod === 'efectivo_bs') {
+        cashBsSales += s.totalBs;
+      } else if (s.paymentMethod === 'pago_combinado' && s.paymentDetails?.combinedBreakdown) {
+        cashUsdSales += s.paymentDetails.combinedBreakdown.usdCash || 0;
+        cashBsSales += s.paymentDetails.combinedBreakdown.bsCash || 0;
+      }
+    });
+
+    shiftFiadoAbonos.forEach((a) => {
+      if (a.paymentMethod === 'efectivo_usd') {
+        cashUsdSales += a.amountUSD;
+      } else if (a.paymentMethod === 'efectivo_bs') {
+        cashBsSales += a.amountBs;
+      }
+    });
+
+    shiftLoans.forEach((l) => {
+      if (l.cashDestination === 'efectivo_usd') {
+        cashUsdSales += l.originalAmountUSD;
+      } else if (l.cashDestination === 'efectivo_bs') {
+        cashBsSales += l.originalAmountBs;
+      }
+    });
+
+    let cashUsdExp = 0;
+    let cashBsExp = 0;
+    for (const e of shiftExpenses) {
+      if (e.paymentMethod === 'efectivo_usd') cashUsdExp += e.amountUSD;
+      else if (e.paymentMethod === 'efectivo_bs') cashBsExp += e.amountBs;
+    }
+
+    let cashUsdRefund = 0;
+    let cashBsRefund = 0;
+    for (const cn of shiftCreditNotes) {
+      if (cn.refundMethod === 'efectivo_usd') cashUsdRefund += cn.totalUSD;
+      else if (cn.refundMethod === 'efectivo_bs') cashBsRefund += cn.totalBs;
+    }
+
+    const netUSD = round2(
+      cashUsdSales - cashUsdExp - cashUsdRefund + (bcvRate > 0 ? (cashBsSales - cashBsExp - cashBsRefund) / bcvRate : 0)
+    );
+    const netBs = round2(netUSD * bcvRate);
+
+    const todayRefundedUSD = todayCreditNotes.reduce((a, cn) => a + cn.totalUSD, 0);
+    const grossUSD = round2(todaySales.reduce((a, s) => a + s.totalUSD, 0) - todayRefundedUSD);
+    const grossBs = round2(grossUSD * bcvRate);
+
+    return {
+      cashNetUSD: netUSD,
+      cashNetBs: netBs,
+      grossSalesUSD: grossUSD,
+      grossSalesBs: grossBs
+    };
+  }, [isCashRegisterOpen, cashShift?.openedAt, sales, expenses, creditNotes, fiados, loans, todaySales, todayCreditNotes, todayStr, bcvRate]);
 
   // Mini sparkline points from today's hourly totals
   const sparklinePath = useMemo(() => {
@@ -155,15 +170,32 @@ export const DashboardView: React.FC = () => {
   }, [todaySales]);
 
   // 3. Valor Inventario (Solo mercancía física)
-  const physicalProducts = products.filter((p) => !p.isService && p.itemType !== 'servicio');
-  const inventoryUSD = physicalProducts.reduce((a, p) => a + p.stock * p.priceUSD, 0);
-  const inventoryBs = inventoryUSD * bcvRate;
-  const lowStockCount = physicalProducts.filter((p) => p.stock <= p.minStock).length;
+  const { physicalProducts, inventoryUSD, inventoryBs, lowStockCount } = useMemo(() => {
+    const physical = products.filter((p) => !p.isService && p.itemType !== 'servicio');
+    let invUSD = 0;
+    let lowStock = 0;
+    for (const p of physical) {
+      invUSD += p.stock * p.priceUSD;
+      if (p.stock <= p.minStock) lowStock += 1;
+    }
+    return {
+      physicalProducts: physical,
+      inventoryUSD: invUSD,
+      inventoryBs: invUSD * bcvRate,
+      lowStockCount: lowStock
+    };
+  }, [products, bcvRate]);
 
   // 4. Deuda Fiados & Antigüedad real (Corriente / 30 Días / 60+ Días)
-  const activeFiados = fiados.filter((f) => f.status !== 'saldado');
-  const totalFiadosUSD = activeFiados.reduce((a, f) => a + f.remainingDebtUSD, 0);
-  const totalFiadosBs = totalFiadosUSD * bcvRate;
+  const { activeFiados, totalFiadosUSD, totalFiadosBs } = useMemo(() => {
+    const active = fiados.filter((f) => f.status !== 'saldado');
+    const usd = active.reduce((a, f) => a + f.remainingDebtUSD, 0);
+    return {
+      activeFiados: active,
+      totalFiadosUSD: usd,
+      totalFiadosBs: usd * bcvRate
+    };
+  }, [fiados, bcvRate]);
 
   const fiadoAging = useMemo(() => {
     const now = Date.now();
@@ -192,17 +224,34 @@ export const DashboardView: React.FC = () => {
   }, [activeFiados]);
 
   // 5. Cuentas por Pagar (Proveedores), Gastos del Mes & Préstamos por Pagar
-  const activeCPP = cuentasPorPagar.filter((c) => c.status !== 'pagada');
-  const pendingGastos = gastosOperativos.filter((g) => g.status !== 'pagado');
-  const activeLoans = loans.filter((l) => l.status !== 'pagado' && (l.remainingUSD > 0.009 || l.remainingBs > 0.01));
-  const totalCPPUSD = activeCPP.reduce((a, c) => a + c.remainingUSD, 0);
-  const totalPendingGastosUSD = pendingGastos.reduce((a, g) => a + (g.remainingUSD ?? g.amountUSD), 0);
-  const totalLoansPendingUSD = activeLoans.reduce((a, l) => a + l.remainingUSD, 0);
-  const totalCombinedDebtUSD = totalCPPUSD + totalPendingGastosUSD + totalLoansPendingUSD;
-  const totalCombinedDebtBs = totalCombinedDebtUSD * bcvRate;
-  const overdueCPPCount =
-    activeCPP.filter((c) => new Date(c.dueDate) < new Date()).length +
-    activeLoans.filter((l) => l.dueDate && new Date(l.dueDate) < new Date()).length;
+  const {
+    activeCPP,
+    pendingGastos,
+    activeLoans,
+    totalCombinedDebtUSD,
+    totalCombinedDebtBs,
+    overdueCPPCount
+  } = useMemo(() => {
+    const cpp = cuentasPorPagar.filter((c) => c.status !== 'pagada');
+    const gastos = gastosOperativos.filter((g) => g.status !== 'pagado');
+    const openLoans = loans.filter((l) => l.status !== 'pagado' && (l.remainingUSD > 0.009 || l.remainingBs > 0.01));
+    const cppUSD = cpp.reduce((a, c) => a + c.remainingUSD, 0);
+    const gastosUSD = gastos.reduce((a, g) => a + (g.remainingUSD ?? g.amountUSD), 0);
+    const loansUSD = openLoans.reduce((a, l) => a + l.remainingUSD, 0);
+    const combinedUSD = cppUSD + gastosUSD + loansUSD;
+    const now = new Date();
+    const overdueCount =
+      cpp.filter((c) => new Date(c.dueDate) < now).length +
+      openLoans.filter((l) => l.dueDate && new Date(l.dueDate) < now).length;
+    return {
+      activeCPP: cpp,
+      pendingGastos: gastos,
+      activeLoans: openLoans,
+      totalCombinedDebtUSD: combinedUSD,
+      totalCombinedDebtBs: combinedUSD * bcvRate,
+      overdueCPPCount: overdueCount
+    };
+  }, [cuentasPorPagar, gastosOperativos, loans, bcvRate]);
 
   // 6. Phase 2: Alertas Activas y Reposición
   const upcomingOrOverduePayables = useMemo(() => {

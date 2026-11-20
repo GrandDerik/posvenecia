@@ -77,6 +77,7 @@ import {
   deleteProductFromFirestore,
   adjustProductStockInFirestore,
   saveExpenseToFirestore,
+  updateExpenseInFirestore,
   deleteExpenseFromFirestore,
   saveFiadoToFirestore,
   saveClientToFirestore,
@@ -457,6 +458,8 @@ interface AppContextType {
     controlNumber: string;
     originalInvoiceNumber?: string;
     originalControlNumber?: string;
+    treasuryBankAccountId?: string;
+    treasuryBankAccountName?: string;
   }) => Promise<CreditNote>;
   deleteCreditNote: (id: string) => void;
   isCreditNoteModalOpen: boolean;
@@ -2851,6 +2854,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     controlNumber: string;
     originalInvoiceNumber?: string;
     originalControlNumber?: string;
+    treasuryBankAccountId?: string;
+    treasuryBankAccountName?: string;
   }): Promise<CreditNote> => {
     const uid = getActiveUid();
     if (!uid) {
@@ -2909,8 +2914,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         originalControlNumber: cleanAffectedControl,
         fallbackBcvRate: bcvRate,
         cashierName: googleUser?.name || 'Cajero',
-        treasuryBankAccountId: originalSale.paymentDetails?.treasuryBankAccountId || defaultBank.id,
-        treasuryBankAccountName: defaultBank.name
+        treasuryBankAccountId: data.treasuryBankAccountId || originalSale.paymentDetails?.treasuryBankAccountId || defaultBank.id,
+        treasuryBankAccountName: data.treasuryBankAccountName || defaultBank.name
       });
 
       setCreditNotes(prev => [createdNC, ...prev.filter(n => n.id !== createdNC.id)]);
@@ -3117,7 +3122,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw err;
     }
     try {
-      await saveExpenseToFirestore(uid, updated);
+      await updateExpenseInFirestore(uid, updated);
       setExpenses(prev => prev.map(e => e.id === updated.id ? updated : e));
       notifyUser('success', 'Factura actualizada', `Comprobante ${updated.invoiceNumber} actualizado en la nube.`);
     } catch (e) {
@@ -3439,6 +3444,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let cashOutflowExpense: Expense | undefined = undefined;
     if (isPaidNow && (paidUSD > 0 || exactPaidBs > 0)) {
+      const hasFiscalInvoice = Boolean(
+        data.invoiceNumber &&
+        data.invoiceNumber.trim() !== '' &&
+        data.invoiceNumber.trim().toUpperCase() !== 'REC-GASTO' &&
+        data.invoiceNumber.trim().toUpperCase() !== 'INT-CAJA' &&
+        data.supplierRIF &&
+        data.supplierRIF.trim() !== '' &&
+        data.supplierRIF.trim().toUpperCase() !== 'N/A'
+      );
+      const excludeFromFiscalBook = isNonFiscal || !hasFiscalInvoice;
+
       cashOutflowExpense = {
         id: 'exp-gasto-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
         date: data.paymentDate || nowIso,
@@ -3451,7 +3467,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         category: mapGastoCategoryToExpenseCategory(data.category),
         amountUSD: paidUSD,
         amountBs: exactPaidBs,
-        baseImponibleBs: isNonFiscal ? 0 : exactPaidBs,
+        baseImponibleBs: excludeFromFiscalBook ? 0 : exactPaidBs,
         ivaBs: 0,
         retencionIVABs: 0,
         retencionISLRBs: 0,
@@ -3463,7 +3479,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         treasuryAccountId: data.treasuryAccountId || data.bankAccountId,
         bankFeeAmount,
         bankFeeCurrency,
-        excludeFromLibroCompras: isNonFiscal,
+        excludeFromLibroCompras: excludeFromFiscalBook,
         accountingType,
         reference: data.reference,
         linkedGastoId: newGasto.id
@@ -3899,6 +3915,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setInventoryDischarges([]);
     setKardex([]);
     setLoans([]);
+    setTreasuryAccounts([]);
+    setTreasuryMovements([]);
     setCashShift(null);
     setCashShiftHistory([]);
     setSelectedClientForPOS(null);

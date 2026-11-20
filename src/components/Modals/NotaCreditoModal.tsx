@@ -11,6 +11,12 @@ import {
 import { useApp } from '../../context/AppContext';
 import { Sale, PaymentMethod } from '../../types';
 import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { isBankPaymentMethod } from '../../utils/accountingUtils';
+import {
+  TreasuryAccountSelector,
+  getDefaultBankAccount,
+  formatTreasuryAccountLabel
+} from '../TreasuryAccountSelector';
 
 interface NotaCreditoModalProps {
   isOpen: boolean;
@@ -26,6 +32,7 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
   const { 
     sales, 
     creditNotes,
+    treasuryAccounts,
     bcvRate, 
     createCreditNote
   } = useApp();
@@ -40,6 +47,7 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
   const [reason, setReason] = useState('Devolución de mercancía por cliente');
   const [customReason, setCustomReason] = useState('');
   const [refundMethod, setRefundMethod] = useState<PaymentMethod>('efectivo_usd');
+  const [refundBankAccountId, setRefundBankAccountId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -79,7 +87,26 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
       setAffectedControlNumber(selectedSale.controlNumber || '');
       setNcNumber('');
       setNcControlNumber('');
-      setRefundMethod(selectedSale.paymentMethod || 'efectivo_usd');
+      const validRefundMethods: PaymentMethod[] = [
+        'efectivo_usd',
+        'efectivo_bs',
+        'pago_movil',
+        'transferencia',
+        'debito'
+      ];
+      const normalizedRefund: PaymentMethod = validRefundMethods.includes(selectedSale.paymentMethod)
+        ? selectedSale.paymentMethod
+        : 'efectivo_usd';
+      setRefundMethod(normalizedRefund);
+      const defaultBank = getDefaultBankAccount(treasuryAccounts);
+      const preferredBankId =
+        selectedSale.paymentDetails?.treasuryBankAccountId ||
+        selectedSale.paymentDetails?.combinedBreakdown?.pagoMovilBankAccountId ||
+        selectedSale.paymentDetails?.combinedBreakdown?.debitoBankAccountId ||
+        selectedSale.paymentDetails?.combinedBreakdown?.transferenciaBankAccountId ||
+        defaultBank?.id ||
+        '';
+      setRefundBankAccountId(preferredBankId);
       setErrorMsg(null);
     } else {
       setReturnItems({});
@@ -87,6 +114,7 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
       setAffectedControlNumber('');
       setNcNumber('');
       setNcControlNumber('');
+      setRefundBankAccountId('');
     }
   }, [selectedSale]);
 
@@ -276,6 +304,10 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
 
     try {
       const finalReason = reason === 'Otro' ? (customReason.trim() || 'Devolución de mercancía') : reason;
+      const isBankRefund = isBankPaymentMethod(refundMethod);
+      const selectedBankObj = isBankRefund
+        ? treasuryAccounts.find((a) => a.id === refundBankAccountId) || getDefaultBankAccount(treasuryAccounts)
+        : undefined;
       await createCreditNote({
         saleId: selectedSale.id,
         reason: finalReason,
@@ -284,7 +316,9 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
         creditNoteNumber: cleanNCNumber,
         controlNumber: cleanNCControl,
         originalInvoiceNumber: cleanAffectedInv,
-        originalControlNumber: cleanAffectedCtrl
+        originalControlNumber: cleanAffectedCtrl,
+        treasuryBankAccountId: selectedBankObj?.id,
+        treasuryBankAccountName: selectedBankObj ? formatTreasuryAccountLabel(selectedBankObj) : undefined
       });
       onClose();
     } catch (err: any) {
@@ -655,6 +689,19 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
                     <option value="transferencia">Transferencia Bancaria</option>
                     <option value="debito">Punto de Venta / Débito</option>
                   </select>
+
+                  <div className="mt-2">
+                    <TreasuryAccountSelector
+                      paymentMethod={refundMethod}
+                      treasuryAccounts={treasuryAccounts}
+                      selectedBankAccountId={refundBankAccountId}
+                      onSelectBankAccount={(accId) => setRefundBankAccountId(accId)}
+                      amountUSD={refundTotals.totalUSD}
+                      amountBs={refundTotals.totalBs}
+                      mode="outflow"
+                      compact
+                    />
+                  </div>
                 </div>
               </div>
 

@@ -61,6 +61,7 @@ export const AperturaCajaModal: React.FC = () => {
     cashShiftHistory,
     expenses,
     gastosOperativos,
+    treasuryMovements,
     bcvRate, 
     bcvEuroRate,
     isBcvRateUpdatedToday,
@@ -182,8 +183,28 @@ export const AperturaCajaModal: React.FC = () => {
       });
     });
 
+    // Also inspect outgoing Treasury transfers/adjustments from cash_usd / cash_bs (e.g. bank deposits / resguardo)
+    treasuryMovements.forEach((tm) => {
+      if (tm.direction !== 'out') return;
+      if (tm.accountId !== 'cash_usd' && tm.accountId !== 'cash_bs') return;
+      if (tm.type !== 'transferencia' && tm.type !== 'ajuste_inicial') return;
+      const ms = new Date(tm.date).getTime();
+      if (Number.isNaN(ms) || ms <= lastCloseMs) return;
+      items.push({
+        id: `tmov_${tm.id}`,
+        date: tm.date,
+        category: tm.type === 'transferencia' ? 'Transferencia / Depósito Bancario' : 'Ajuste de Tesorería',
+        description: tm.concept || (tm.type === 'transferencia' ? 'Transferencia desde caja a banco' : 'Ajuste de saldo en efectivo'),
+        paymentMethod: tm.accountId === 'cash_usd' ? 'efectivo_usd' : 'efectivo_bs',
+        amountUSD: tm.accountId === 'cash_usd' ? round2(tm.amount || 0) : 0,
+        amountBs: tm.accountId === 'cash_bs' ? round2(tm.amount || 0) : 0,
+        isOwnerWithdrawal: false,
+        isOwnerSalary: false
+      });
+    });
+
     return items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [lastClosedShift, expenses, gastosOperativos]);
+  }, [lastClosedShift, expenses, gastosOperativos, treasuryMovements]);
 
   const isUsdLower = Boolean(lastClosedShift && openingDiffUSD <= -0.01);
   const isBsLower = Boolean(lastClosedShift && openingDiffBs <= -0.01);
@@ -280,11 +301,14 @@ export const AperturaCajaModal: React.FC = () => {
     if (recentBetweenShiftCashOutflows.length === 0) return;
     const hasWithdrawal = recentBetweenShiftCashOutflows.some((m) => m.isOwnerWithdrawal);
     const hasSalary = recentBetweenShiftCashOutflows.some((m) => m.isOwnerSalary);
+    const hasVaultOrTransfer = recentBetweenShiftCashOutflows.some((m) => m.id.startsWith('tmov_'));
     const autoReason: CashOpeningDifferenceReason = hasWithdrawal
       ? 'Retiro / Adelanto al Socio'
       : hasSalary
         ? 'Sueldo / Nómina'
-        : 'Pago/gasto fuera de turno';
+        : hasVaultOrTransfer
+          ? 'Resguardo / Caja Fuerte'
+          : 'Pago/gasto fuera de turno';
     setOpeningDiffReason(autoReason);
 
     const summaryParts = recentBetweenShiftCashOutflows.slice(0, 3).map((m) => {

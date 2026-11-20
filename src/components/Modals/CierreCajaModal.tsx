@@ -21,6 +21,7 @@ import {
   isExpenseOwnerSalary,
   isExpenseOwnerWithdrawal
 } from '../../utils/accountingUtils';
+import { CashShift } from '../../types';
 
 export const CierreCajaModal: React.FC = () => {
   const { 
@@ -42,50 +43,60 @@ export const CierreCajaModal: React.FC = () => {
   const [countedBs, setCountedBs] = useState<string>('');
   const [closedNotes, setClosedNotes] = useState<string>('');
   const [isSuccess, setIsSuccess] = useState(false);
+  const [closedShiftResult, setClosedShiftResult] = useState<CashShift | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Bank closing balance capture
   const [countedBanks, setCountedBanks] = useState<Record<string, { countedBs: string; countedUSD: string }>>({});
 
-  const openedAtIso = cashShift?.openedAt || '';
+  // Keep modal mounted on success screen even after Firestore onSnapshot clears active cashShift to null
+  const activeShift = closedShiftResult || cashShift;
+
+  const openedAtIso = activeShift?.openedAt || '';
   const shiftSales = useMemo(
-    () => (cashShift ? sales.filter(s => s.status !== 'anulada' && s.date >= openedAtIso) : []),
-    [cashShift, sales, openedAtIso]
+    () => (activeShift ? sales.filter(s => s.status !== 'anulada' && s.date >= openedAtIso) : []),
+    [activeShift, sales, openedAtIso]
   );
   const shiftExpenses = useMemo(
-    () => (cashShift ? expenses.filter(e => e.date >= openedAtIso && e.paymentMethod !== 'credito') : []),
-    [cashShift, expenses, openedAtIso]
+    () => (activeShift ? expenses.filter(e => e.date >= openedAtIso && e.paymentMethod !== 'credito') : []),
+    [activeShift, expenses, openedAtIso]
   );
   const shiftCreditNotes = useMemo(
-    () => (cashShift ? creditNotes.filter(cn => cn.date >= openedAtIso) : []),
-    [cashShift, creditNotes, openedAtIso]
+    () => (activeShift ? creditNotes.filter(cn => cn.date >= openedAtIso) : []),
+    [activeShift, creditNotes, openedAtIso]
   );
   const shiftFiadoAbonos = useMemo(
-    () => (cashShift ? fiados.flatMap(f => f.abonos || []).filter(a => a.date >= openedAtIso) : []),
-    [cashShift, fiados, openedAtIso]
+    () => (activeShift ? fiados.flatMap(f => f.abonos || []).filter(a => a.date >= openedAtIso) : []),
+    [activeShift, fiados, openedAtIso]
   );
   const shiftLoans = useMemo(
-    () => (cashShift ? loans.filter(l => (l.grantDate || l.createdAt) >= openedAtIso) : []),
-    [cashShift, loans, openedAtIso]
+    () => (activeShift ? loans.filter(l => (l.grantDate || l.createdAt) >= openedAtIso) : []),
+    [activeShift, loans, openedAtIso]
   );
 
   // Per-bank traceability (initial + inflows - outflows including owner salary/withdrawals)
   const bankSummaries = useMemo(
     () =>
       computeShiftBankSummaries(
-        cashShift?.initialBanks,
+        activeShift?.initialBanks,
         shiftSales,
         shiftExpenses,
         shiftCreditNotes,
         shiftFiadoAbonos,
         shiftLoans
       ),
-    [cashShift?.initialBanks, shiftSales, shiftExpenses, shiftCreditNotes, shiftFiadoAbonos, shiftLoans]
+    [activeShift?.initialBanks, shiftSales, shiftExpenses, shiftCreditNotes, shiftFiadoAbonos, shiftLoans]
   );
 
   useEffect(() => {
-    if (isCierreModalOpen && cashShift?.initialBanks) {
+    if (!isCierreModalOpen) {
+      setIsSuccess(false);
+      setClosedShiftResult(null);
+      setErrorMsg(null);
+      return;
+    }
+    if (cashShift?.initialBanks && !closedShiftResult) {
       const map: Record<string, { countedBs: string; countedUSD: string }> = {};
       cashShift.initialBanks.forEach(b => {
         const summary = bankSummaries.find(s => s.bankId === b.bankId);
@@ -104,7 +115,7 @@ export const CierreCajaModal: React.FC = () => {
     }
   }, [isCierreModalOpen, cashShift?.id]);
 
-  if (!isCierreModalOpen || !cashShift) return null;
+  if (!isCierreModalOpen || !activeShift) return null;
 
   // Inflow in cash (sales + fiado abonos + loan inflows in cash)
   let cashUsdInflow = 0;
@@ -190,8 +201,8 @@ export const CierreCajaModal: React.FC = () => {
   const regularCashUsdOutflow = round2(Math.max(0, cashUsdOutflow - ownerSalaryCashUSD - ownerWithdrawalsCashUSD));
   const regularCashBsOutflow = round2(Math.max(0, cashBsOutflow - ownerSalaryCashBs - ownerWithdrawalsCashBs));
 
-  const initialUSD = cashShift.initialCashUSD || 0;
-  const initialBs = cashShift.initialCashBs || 0;
+  const initialUSD = activeShift.initialCashUSD || 0;
+  const initialBs = activeShift.initialCashBs || 0;
 
   const expectedUSD = round2(initialUSD + cashUsdInflow - cashUsdOutflow);
   const expectedBs = round2(initialBs + cashBsInflow - cashBsOutflow);
@@ -203,14 +214,25 @@ export const CierreCajaModal: React.FC = () => {
   const diffUSD = round2(parsedCountedUSD - expectedUSD);
   const diffBs = round2(parsedCountedBs - expectedBs);
 
+  const handleCloseModal = () => {
+    setIsSuccess(false);
+    setClosedShiftResult(null);
+    setCountedUSD('');
+    setCountedBs('');
+    setClosedNotes('');
+    setErrorMsg(null);
+    setIsCierreModalOpen(false);
+  };
+
   const handleCopyExpected = () => {
     setCountedUSD(expectedUSD.toFixed(2));
     setCountedBs(expectedBs.toFixed(2));
+    setErrorMsg(null);
   };
 
   const buildCountedBanksList = () => {
-    if (!cashShift.initialBanks) return undefined;
-    return cashShift.initialBanks.map(b => {
+    if (!activeShift.initialBanks) return undefined;
+    return activeShift.initialBanks.map(b => {
       const entry = countedBanks[b.bankId];
       const summary = bankSummaries.find(s => s.bankId === b.bankId);
       const expectedBsVal = summary ? summary.expectedBalanceBs : b.initialBalanceBs;
@@ -235,9 +257,10 @@ export const CierreCajaModal: React.FC = () => {
     generateReporteZPDF(shiftSales, shiftExpenses, bcvRate, businessInfo);
   };
 
-  const handleSaveClosingPDF = () => {
-    const shiftForReport = {
-      ...cashShift,
+  const buildShiftForReport = (): CashShift => {
+    if (closedShiftResult) return closedShiftResult;
+    return {
+      ...activeShift,
       closedAt: new Date().toISOString(),
       closedDateFormatted: new Date().toLocaleString('es-VE'),
       expectedCashUSD: expectedUSD,
@@ -253,38 +276,33 @@ export const CierreCajaModal: React.FC = () => {
       closedNotes: closedNotes.trim(),
       initialBanks: buildCountedBanksList()
     };
-    generateComprobanteCierrePDF(shiftForReport, shiftSales, shiftExpenses, bcvRate, businessInfo, 'save');
+  };
+
+  const handleSaveClosingPDF = () => {
+    generateComprobanteCierrePDF(buildShiftForReport(), shiftSales, shiftExpenses, bcvRate, businessInfo, 'save');
   };
 
   const handlePrintClosingPDF = () => {
-    const shiftForReport = {
-      ...cashShift,
-      closedAt: new Date().toISOString(),
-      closedDateFormatted: new Date().toLocaleString('es-VE'),
-      expectedCashUSD: expectedUSD,
-      expectedCashBs: expectedBs,
-      countedCashUSD: parsedCountedUSD,
-      countedCashBs: parsedCountedBs,
-      differenceUSD: diffUSD,
-      differenceBs: diffBs,
-      totalOwnerSalaryUSD,
-      totalOwnerSalaryBs,
-      totalOwnerWithdrawalsUSD,
-      totalOwnerWithdrawalsBs,
-      closedNotes: closedNotes.trim(),
-      initialBanks: buildCountedBanksList()
-    };
-    generateComprobanteCierrePDF(shiftForReport, shiftSales, shiftExpenses, bcvRate, businessInfo, 'print');
+    generateComprobanteCierrePDF(buildShiftForReport(), shiftSales, shiftExpenses, bcvRate, businessInfo, 'print');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    const missingUSD = expectedUSD > 0 && countedUSD.trim() === '';
+    const missingBs = expectedBs > 0 && countedBs.trim() === '';
+    if (missingUSD || missingBs) {
+      setErrorMsg('Ingresa el conteo físico de efectivo en gaveta (o presiona "Usar montos calculados") antes de cerrar la caja.');
+      return;
+    }
+
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
       const finalBanks = buildCountedBanksList();
-      await closeCashShift(parsedCountedUSD, parsedCountedBs, closedNotes.trim(), finalBanks);
+      const closed = await closeCashShift(parsedCountedUSD, parsedCountedBs, closedNotes.trim(), finalBanks);
+      setClosedShiftResult(closed);
       setIsSuccess(true);
     } catch (err: any) {
       setErrorMsg(err?.message || 'No se pudo cerrar la caja en Cloud Firestore.');
@@ -319,7 +337,7 @@ export const CierreCajaModal: React.FC = () => {
           </div>
           <button
             type="button"
-            onClick={() => setIsCierreModalOpen(false)}
+            onClick={handleCloseModal}
             className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold flex items-center justify-center cursor-pointer transition-colors"
           >
             ✕
@@ -360,10 +378,7 @@ export const CierreCajaModal: React.FC = () => {
             <div className="pt-3">
               <button
                 type="button"
-                onClick={() => {
-                  setIsSuccess(false);
-                  setIsCierreModalOpen(false);
-                }}
+                onClick={handleCloseModal}
                 className="text-xs text-slate-500 hover:text-slate-800 font-semibold underline cursor-pointer"
               >
                 Finalizar y cerrar ventana
@@ -377,8 +392,8 @@ export const CierreCajaModal: React.FC = () => {
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 flex items-center justify-between text-xs text-slate-600 flex-wrap gap-2">
               <div>
                 <span className="text-slate-400 block text-[10px] font-semibold">APERTURA DE TURNO:</span>
-                <span className="font-extrabold text-slate-900">{cashShift.openedDateFormatted}</span>
-                <span className="text-slate-400 ml-1.5 font-medium">({cashShift.openedBy || 'Admin'})</span>
+                <span className="font-extrabold text-slate-900">{activeShift.openedDateFormatted}</span>
+                <span className="text-slate-400 ml-1.5 font-medium">({activeShift.openedBy || 'Admin'})</span>
               </div>
               <div className="text-right">
                 <span className="text-slate-400 block text-[10px] font-semibold">TASA BCV APLICADA:</span>
@@ -501,7 +516,7 @@ export const CierreCajaModal: React.FC = () => {
             )}
 
             {/* Breakdown Card: Cuentas Bancarias Registradas & Arqueo Bancario */}
-            {cashShift.initialBanks && cashShift.initialBanks.length > 0 && (
+            {activeShift.initialBanks && activeShift.initialBanks.length > 0 && (
               <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
@@ -512,7 +527,7 @@ export const CierreCajaModal: React.FC = () => {
                     type="button"
                     onClick={() => {
                       const updated: Record<string, { countedBs: string; countedUSD: string }> = {};
-                      cashShift.initialBanks?.forEach(b => {
+                      activeShift.initialBanks?.forEach(b => {
                         const summary = bankSummaries.find(s => s.bankId === b.bankId);
                         const expBs = summary ? summary.expectedBalanceBs : b.initialBalanceBs;
                         const expUsd = summary ? summary.expectedBalanceUSD : (b.initialBalanceUSD || 0);
@@ -530,7 +545,7 @@ export const CierreCajaModal: React.FC = () => {
                 </div>
 
                 <div className="space-y-2.5">
-                  {cashShift.initialBanks.map(bk => {
+                  {activeShift.initialBanks.map(bk => {
                     const currentEntry = countedBanks[bk.bankId] || { countedBs: '', countedUSD: '' };
                     const summary = bankSummaries.find(s => s.bankId === bk.bankId);
                     const expectedBankBs = summary ? summary.expectedBalanceBs : bk.initialBalanceBs;
@@ -750,7 +765,7 @@ export const CierreCajaModal: React.FC = () => {
               <button
                 type="button"
                 disabled={isSubmitting}
-                onClick={() => setIsCierreModalOpen(false)}
+                onClick={handleCloseModal}
                 className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer disabled:opacity-50"
               >
                 Volver

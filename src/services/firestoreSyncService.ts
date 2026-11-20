@@ -12,6 +12,7 @@ import {
   query,
   where,
   orderBy,
+  limit,
   deleteField,
   Unsubscribe
 } from 'firebase/firestore';
@@ -25,7 +26,6 @@ import {
   Client,
   CuentaPorPagar,
   GastoOperativo,
-  GastoOperativoCategory,
   CashShift,
   BusinessInfo,
   CreditNote,
@@ -515,11 +515,11 @@ export const subscribeToStoreRealtime = (
     )
   );
 
-  // 8. Cash Shift History (Cierres de Caja)
+  // 8. Cash Shift History (Cierres de Caja — bounded to latest 200 shifts; full backup queries collection directly)
   const historyPath = `users/${userId}/cashShiftHistory`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'users', userId, 'cashShiftHistory'),
+      query(collection(db, 'users', userId, 'cashShiftHistory'), orderBy('openedAt', 'desc'), limit(200)),
       (snapshot) => {
         const history: CashShift[] = [];
         snapshot.forEach((d) => {
@@ -570,11 +570,11 @@ export const subscribeToStoreRealtime = (
     )
   );
 
-  // 11. Credit Notes (Notas de Crédito y Devoluciones)
+  // 11. Credit Notes (Notas de Crédito y Devoluciones — bounded to latest 300)
   const creditNotesPath = `users/${userId}/creditNotes`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'users', userId, 'creditNotes'),
+      query(collection(db, 'users', userId, 'creditNotes'), orderBy('date', 'desc'), limit(300)),
       (snapshot) => {
         const notes: CreditNote[] = [];
         snapshot.forEach((d) => {
@@ -589,11 +589,11 @@ export const subscribeToStoreRealtime = (
     )
   );
 
-  // 12. Inventory Discharges (Salidas por Daño, Vencimiento, Merma, Uso Interno)
+  // 12. Inventory Discharges (Salidas por Daño, Vencimiento, Merma, Uso Interno — bounded to latest 300)
   const dischargesPath = `users/${userId}/inventoryDischarges`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'users', userId, 'inventoryDischarges'),
+      query(collection(db, 'users', userId, 'inventoryDischarges'), orderBy('date', 'desc'), limit(300)),
       (snapshot) => {
         const discharges: InventoryDischarge[] = [];
         snapshot.forEach((d) => {
@@ -608,11 +608,11 @@ export const subscribeToStoreRealtime = (
     )
   );
 
-  // 13. Kardex (Historial inmutable de movimientos de inventario)
+  // 13. Kardex (Historial inmutable de movimientos de inventario — bounded to latest 500 for fast startup/reads)
   const kardexPath = `users/${userId}/kardex`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'users', userId, 'kardex'),
+      query(collection(db, 'users', userId, 'kardex'), orderBy('date', 'desc'), limit(500)),
       (snapshot) => {
         clearOptionalCollectionDenied(userId, 'kardex');
         callbacks.onCollectionPermissionOk?.('kardex');
@@ -727,11 +727,11 @@ export const subscribeToStoreRealtime = (
     )
   );
 
-  // 17. Extracto de Movimientos de Tesorería (Ledger inmutable)
+  // 17. Extracto de Movimientos de Tesorería (Ledger inmutable — bounded to latest 500; live balances live in bankAccounts)
   const treasuryMovementsPath = `users/${userId}/treasuryMovements`;
   unsubscribers.push(
     onSnapshot(
-      collection(db, 'users', userId, 'treasuryMovements'),
+      query(collection(db, 'users', userId, 'treasuryMovements'), orderBy('date', 'desc'), limit(500)),
       (snapshot) => {
         clearOptionalCollectionDenied(userId, 'treasuryMovements');
         callbacks.onCollectionPermissionOk?.('treasuryMovements');
@@ -1420,12 +1420,18 @@ export const transferBetweenTreasuryAccountsTransaction = async (
         const srcAcc = srcSnap.data() as TreasuryAccount;
         const dstAcc = dstSnap.data() as TreasuryAccount;
         const nowIso = new Date().toISOString();
-        const safeBcv = params.bcvRate > 0 ? params.bcvRate : 1;
-        const rateUsed = params.exchangeRate && params.exchangeRate > 0 ? params.exchangeRate : safeBcv;
+        const safeBcv = Number.isFinite(params.bcvRate) && params.bcvRate > 0 ? params.bcvRate : 1;
+        const rateUsed =
+          typeof params.exchangeRate === 'number' && Number.isFinite(params.exchangeRate) && params.exchangeRate > 0
+            ? params.exchangeRate
+            : safeBcv;
 
         const outAmount = round2(params.sourceAmount);
         let inAmount = outAmount;
         if (srcAcc.currency !== dstAcc.currency) {
+          if (!(rateUsed > 0)) {
+            throw new Error('La tasa de cambio debe ser mayor a cero para convertir divisas.');
+          }
           inAmount =
             srcAcc.currency === 'USD' && dstAcc.currency === 'Bs'
               ? round2(outAmount * rateUsed)
@@ -1859,14 +1865,20 @@ export const saveSaleAtomic = async (
       const saleTreasuryPostings = buildSaleTreasuryPostings(syncedSale, 'in', 'venta', treasuryOptions);
 
       await runTransaction(db, async (tx) => {
+        const saleRef = doc(db, 'users', userId, 'sales', syncedSale.id);
         const productIds = Array.from(consolidatedDeductions.keys());
         const prodRefs = productIds.map((pid) => doc(db, 'users', userId, 'products', pid));
 
-        // ALL READS BEFORE ANY WRITES
-        const [prodSnaps, treasuryPlan] = await Promise.all([
+        // ALL READS BEFORE ANY WRITES (including idempotency check on saleRef)
+        const [existingSaleSnap, prodSnaps, treasuryPlan] = await Promise.all([
+          tx.get(saleRef),
           Promise.all(prodRefs.map((ref) => tx.get(ref))),
           prepareTreasuryPostingsInTx(tx, userId, saleTreasuryPostings, syncedSale.bcvRate || bcvRate)
         ]);
+
+        if (existingSaleSnap.exists()) {
+          return;
+        }
 
         const preparedUpdates: Array<{
           ref: ReturnType<typeof doc>;
@@ -1936,7 +1948,6 @@ export const saveSaleAtomic = async (
         }
 
         // ALL WRITES
-        const saleRef = doc(db, 'users', userId, 'sales', syncedSale.id);
         tx.set(saleRef, cleanForFirestore(syncedSale));
 
         for (const item of preparedUpdates) {
@@ -2300,7 +2311,12 @@ export const saveCreditNoteAtomic = async (
             : 0;
 
         const refundedTotalUSD = round2(refundedSubtotalUSD + refundedIvaUSD + refundedIgtfUSD);
-        const bcv = liveSale.bcvRate || params.fallbackBcvRate;
+        const bcv =
+          Number.isFinite(liveSale.bcvRate) && liveSale.bcvRate > 0
+            ? liveSale.bcvRate
+            : Number.isFinite(params.fallbackBcvRate) && params.fallbackBcvRate > 0
+            ? params.fallbackBcvRate
+            : 1;
         const nowIso = new Date().toISOString();
 
         const newCreditNote: CreditNote = {
@@ -2330,6 +2346,12 @@ export const saveCreditNoteAtomic = async (
           totalBs: round2(refundedTotalUSD * bcv),
           bcvRate: bcv,
           refundMethod: params.refundMethod,
+          bankAccountId: isBankPaymentMethod(params.refundMethod) ? (ncTreasuryAccountId || undefined) : undefined,
+          bankAccountLabel: isBankPaymentMethod(params.refundMethod)
+            ? (ncTreasuryAccSnap && ncTreasuryAccSnap.exists()
+                ? (ncTreasuryAccSnap.data() as TreasuryAccount).name
+                : params.treasuryBankAccountName)
+            : undefined,
           reason: params.reason,
           cashierName: params.cashierName,
           syncStatus: 'synced'
@@ -2717,6 +2739,15 @@ export const saveExpenseToFirestore = async (
         : 'gasto_operativo';
 
       await runTransaction(db, async (tx) => {
+        const expRef = doc(db, 'users', userId, 'expenses', expense.id);
+        const existingExpSnap = await tx.get(expRef);
+
+        // Idempotency guard: if this expense already exists, update metadata ONLY without re-debiting Treasury or duplicating bank fees
+        if (existingExpSnap.exists()) {
+          tx.set(expRef, cleanForFirestore(expense), { merge: true });
+          return;
+        }
+
         const postings: TreasuryPostingInput[] = [
           {
             accountId: treasuryAccId,
@@ -2756,7 +2787,7 @@ export const saveExpenseToFirestore = async (
 
         const treasuryPlan = await prepareTreasuryPostingsInTx(tx, userId, postings, expense.bcvRate || 1);
 
-        tx.set(doc(db, 'users', userId, 'expenses', expense.id), cleanForFirestore(expense), { merge: true });
+        tx.set(expRef, cleanForFirestore(expense), { merge: true });
         treasuryPlan.commitWrites();
 
         if (feeAmount > 0) {
@@ -2776,6 +2807,24 @@ export const saveExpenseToFirestore = async (
           tx.set(doc(db, 'users', userId, 'expenses', feeExp.id), cleanForFirestore(feeExp));
         }
       });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+      throw err;
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Updates an existing expense document without re-debiting Treasury or creating duplicate bank fee entries.
+ */
+export const updateExpenseInFirestore = async (uid: string, expense: Expense): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/expenses/${expense.id}`;
+  const op = (async () => {
+    try {
+      const cleaned = cleanForFirestore(expense);
+      await setDoc(doc(db, 'users', userId, 'expenses', expense.id), cleaned, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
       throw err;
@@ -2866,6 +2915,7 @@ export const saveExpenseWithInventoryAtomic = async (
       }
 
       await runTransaction(db, async (tx) => {
+        const expRef = doc(db, 'users', userId, 'expenses', expense.id);
         const items = expense.items || [];
         const uniqueProdIds = Array.from(new Set(items.map((it) => it.productId).filter(Boolean)));
         const prodRefs = uniqueProdIds.map((pid) => doc(db, 'users', userId, 'products', pid));
@@ -2874,12 +2924,18 @@ export const saveExpenseWithInventoryAtomic = async (
             ? doc(db, 'users', userId, 'suppliers', expense.supplierId)
             : null;
 
-        // ALL READS FIRST
-        const [prodSnaps, supSnap, treasuryPlan] = await Promise.all([
+        // ALL READS FIRST (including idempotency check on expRef)
+        const [existingExpSnap, prodSnaps, supSnap, treasuryPlan] = await Promise.all([
+          tx.get(expRef),
           Promise.all(prodRefs.map((ref) => tx.get(ref))),
           supplierRef ? tx.get(supplierRef) : Promise.resolve(null),
           prepareTreasuryPostingsInTx(tx, userId, treasuryPostings, expense.bcvRate || bcvRate)
         ]);
+
+        if (existingExpSnap.exists()) {
+          tx.set(expRef, cleanForFirestore(expense), { merge: true });
+          return;
+        }
 
         const liveProdMap = new Map<string, Product>();
         prodSnaps.forEach((snap, idx) => {
@@ -3334,6 +3390,15 @@ export const saveLoanToFirestore = async (
       }
 
       await runTransaction(db, async (tx) => {
+        const loanRef = doc(db, 'users', userId, 'loans', loan.id);
+        const existingLoanSnap = await tx.get(loanRef);
+
+        // Idempotency guard: if loan already exists, update metadata only without re-crediting Treasury
+        if (existingLoanSnap.exists()) {
+          tx.set(loanRef, cleanForFirestore(loan), { merge: true });
+          return;
+        }
+
         const postings: TreasuryPostingInput[] = [
           {
             accountId: treasuryAccId,
@@ -3355,7 +3420,7 @@ export const saveLoanToFirestore = async (
         ];
 
         const treasuryPlan = await prepareTreasuryPostingsInTx(tx, userId, postings, loan.bcvRate || 1);
-        tx.set(doc(db, 'users', userId, 'loans', loan.id), cleanForFirestore(loan), { merge: true });
+        tx.set(loanRef, cleanForFirestore(loan), { merge: true });
         treasuryPlan.commitWrites();
       });
     } catch (err) {
@@ -3565,7 +3630,7 @@ export const addAbonoToLoanTransaction = async (
             category: 'Otros',
             amountUSD: round2(payUSD),
             amountBs: round2(payBs),
-            baseImponibleBs: round2(payBs),
+            baseImponibleBs: 0,
             ivaBs: 0,
             retencionIVABs: 0,
             retencionISLRBs: 0,
@@ -3577,6 +3642,7 @@ export const addAbonoToLoanTransaction = async (
             treasuryAccountId: treasuryAccId || undefined,
             bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
             bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
+            excludeFromLibroCompras: true,
             reference: params.reference,
             linkedLoanId: liveLoan.id
           };
@@ -3677,37 +3743,6 @@ export const saveCuentaPorPagarToFirestore = async (
       if (updatedSupplier) {
         batch.set(doc(db, 'users', userId, 'suppliers', updatedSupplier.id), cleanForFirestore(updatedSupplier), { merge: true });
       }
-      await batch.commit();
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  })();
-  return trackFirestoreWrite(op);
-};
-
-export const saveCuentaWithCashOutflowAtomic = async (
-  uid: string,
-  cuenta: CuentaPorPagar,
-  cashExpense: Expense,
-  updatedSupplier?: Supplier
-): Promise<void> => {
-  const userId = getCanonicalUserId(uid);
-  const path = `users/${userId}/cuentasPorPagar/${cuenta.id}`;
-  const op = (async () => {
-    try {
-      const batch = writeBatch(db);
-      const cleanedCuenta = cleanForFirestore(cuenta);
-      const cuentaRef = doc(db, 'users', userId, 'cuentasPorPagar', cuenta.id);
-      batch.set(cuentaRef, cleanedCuenta, { merge: true });
-
-      const cleanedExp = cleanForFirestore(cashExpense);
-      const expRef = doc(db, 'users', userId, 'expenses', cashExpense.id);
-      batch.set(expRef, cleanedExp, { merge: true });
-
-      if (updatedSupplier) {
-        batch.set(doc(db, 'users', userId, 'suppliers', updatedSupplier.id), cleanForFirestore(updatedSupplier), { merge: true });
-      }
-
       await batch.commit();
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
@@ -3834,7 +3869,7 @@ export const addAbonoToCuentaPorPagarTransaction = async (
               : 'Otros',
           amountUSD: payAmount,
           amountBs: payBs,
-          baseImponibleBs: payBs,
+          baseImponibleBs: 0,
           ivaBs: 0,
           retencionIVABs: 0,
           retencionISLRBs: 0,
@@ -3846,6 +3881,7 @@ export const addAbonoToCuentaPorPagarTransaction = async (
           treasuryAccountId: treasuryAccId || undefined,
           bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
           bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
+          excludeFromLibroCompras: true,
           reference,
           linkedCuentaId: liveCuenta.id
         };
@@ -4024,6 +4060,15 @@ export const saveGastoWithCashOutflowAtomic = async (
         : 'gasto_operativo';
 
       await runTransaction(db, async (tx) => {
+        const gastoRef = doc(db, 'users', userId, 'gastosOperativos', gasto.id);
+        const existingGastoSnap = await tx.get(gastoRef);
+
+        // Idempotency guard: if gasto already exists, update metadata only without re-debiting Treasury
+        if (existingGastoSnap.exists()) {
+          tx.set(gastoRef, cleanForFirestore(gasto), { merge: true });
+          return;
+        }
+
         const postings: TreasuryPostingInput[] = [
           {
             accountId: treasuryAccId,
@@ -4064,7 +4109,7 @@ export const saveGastoWithCashOutflowAtomic = async (
 
         const treasuryPlan = await prepareTreasuryPostingsInTx(tx, userId, postings, cashExpense.bcvRate || 1);
 
-        tx.set(doc(db, 'users', userId, 'gastosOperativos', gasto.id), cleanForFirestore(gasto), { merge: true });
+        tx.set(gastoRef, cleanForFirestore(gasto), { merge: true });
         tx.set(doc(db, 'users', userId, 'expenses', cashExpense.id), cleanForFirestore(cashExpense), { merge: true });
         treasuryPlan.commitWrites();
 
@@ -4230,6 +4275,17 @@ export const markGastoOperativoPagadoTransaction = async (
               : 'Abono parcial a gasto pendiente')
         };
 
+        const hasFiscalInvoice = Boolean(
+          liveTarget.invoiceNumber &&
+          liveTarget.invoiceNumber.trim() !== '' &&
+          liveTarget.invoiceNumber.trim().toUpperCase() !== 'REC-GASTO' &&
+          liveTarget.invoiceNumber.trim().toUpperCase() !== 'INT-CAJA' &&
+          liveTarget.supplierRIF &&
+          liveTarget.supplierRIF.trim() !== '' &&
+          liveTarget.supplierRIF.trim().toUpperCase() !== 'N/A'
+        );
+        const excludeFromFiscalBook = isNonFiscal || !hasFiscalInvoice;
+
         const cashOutflowExpense: Expense = {
           id: 'exp-gasto-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
           date: nowIso,
@@ -4242,7 +4298,7 @@ export const markGastoOperativoPagadoTransaction = async (
           category: mapGastoCategoryToExpenseCategory(liveTarget.category),
           amountUSD: payAmount,
           amountBs: payAmountBs,
-          baseImponibleBs: isNonFiscal ? 0 : payAmountBs,
+          baseImponibleBs: excludeFromFiscalBook ? 0 : payAmountBs,
           ivaBs: 0,
           retencionIVABs: 0,
           retencionISLRBs: 0,
@@ -4254,7 +4310,7 @@ export const markGastoOperativoPagadoTransaction = async (
           treasuryAccountId: resolvedTreasuryAccId || undefined,
           bankFeeAmount: feeAmount > 0 ? feeAmount : undefined,
           bankFeeCurrency: feeAmount > 0 ? feeCurrency : undefined,
-          excludeFromLibroCompras: isNonFiscal,
+          excludeFromLibroCompras: excludeFromFiscalBook,
           accountingType,
           reference,
           linkedGastoId: liveTarget.id
@@ -4373,10 +4429,6 @@ export const deleteGastoOperativoFromFirestore = async (uid: string, gastoId: st
     }
   })();
   return trackFirestoreWrite(op);
-};
-
-export const saveSaleAtomicLegacyDeleteHelper = async (uid: string, saleId: string): Promise<void> => {
-  return deleteSaleFromFirestore(uid, saleId);
 };
 
 export const deleteSaleFromFirestore = async (uid: string, saleId: string): Promise<void> => {

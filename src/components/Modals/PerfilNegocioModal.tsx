@@ -560,8 +560,9 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
     e.preventDefault();
     if (isSaving) return;
     const pin = pinConfirmation.trim();
-    if (pin !== managerPin && pin.toUpperCase() !== 'REINICIAR' && pin !== '0000') {
-      setResetError(`Clave incorrecta. Ingrese la clave de gerente (${managerPin}) o escriba REINICIAR.`);
+    const expectedPin = (managerPin || '1234').trim();
+    if (!pin || pin !== expectedPin) {
+      setResetError('Clave de gerente incorrecta. Verifique su PIN de autorización.');
       return;
     }
     
@@ -1818,12 +1819,13 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
               <form onSubmit={handleExecuteReset} className="space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Ingrese clave de gerente ({managerPin}) o escriba <strong className="text-rose-600">REINICIAR</strong>:
+                    Ingrese su clave de gerente para confirmar:
                   </label>
                   <input
-                    type="text"
+                    type="password"
                     required
-                    placeholder={`Clave: ${managerPin} o REINICIAR`}
+                    autoComplete="off"
+                    placeholder="Clave de gerente"
                     value={pinConfirmation}
                     onChange={(e) => {
                       setPinConfirmation(e.target.value);
