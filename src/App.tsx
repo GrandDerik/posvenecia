@@ -95,7 +95,6 @@ const AppContent: React.FC = () => {
       <LoginView
         onLoginWithGoogle={loginWithGoogle}
         isOnline={isOnline}
-        bcvRate={bcvRate}
       />
     );
   }

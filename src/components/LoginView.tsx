@@ -14,13 +14,11 @@ import {
 interface LoginViewProps {
   onLoginWithGoogle: () => Promise<void>;
   isOnline: boolean;
-  bcvRate: number;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({
   onLoginWithGoogle,
   isOnline,
-  bcvRate,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -49,7 +47,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       <div className="absolute -top-28 -left-28 w-96 h-96 bg-blue-200/40 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute -bottom-28 -right-28 w-96 h-96 bg-emerald-200/35 rounded-full blur-3xl pointer-events-none" />
 
-      {/* Top Bar: Connection & BCV Info */}
+      {/* Top Bar: Connection Info */}
       <header className="relative z-10 max-w-6xl w-full mx-auto flex items-center justify-between py-2 text-xs">
         <div className="flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-2xl bg-[#0B1528] flex items-center justify-center text-white shadow-sm">
@@ -62,12 +60,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2.5">
-          {/* Rate indicator */}
-          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FFF3E8] border border-[#F5D3B3] text-[11px] text-[#9A4B12]">
-            <span className="font-semibold">Tasa BCV:</span>
-            <span className="font-mono-numbers font-black text-[#7C3A0B]">Bs. {bcvRate.toFixed(2)}</span>
-          </div>
-
           {/* Network status */}
           <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold border ${
             isOnline 
