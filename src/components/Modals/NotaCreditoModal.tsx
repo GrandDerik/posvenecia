@@ -322,7 +322,9 @@ export const NotaCreditoModal: React.FC<NotaCreditoModalProps> = ({
       });
       onClose();
     } catch (err: any) {
-      console.error('Error al emitir nota de crédito:', err);
+      if (import.meta.env.DEV) {
+        console.error('Error al emitir nota de crédito:', err);
+      }
       setErrorMsg(err?.message || 'Error al procesar la nota de crédito');
     } finally {
       setIsSubmitting(false);

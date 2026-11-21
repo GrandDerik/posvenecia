@@ -2,11 +2,10 @@ import React, { useState, Suspense, lazy } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { LoginView } from './components/LoginView';
-import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X, Copy, Check, RefreshCw, ExternalLink } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, AlertCircle, CheckCircle2, Info, X, RefreshCw, ExternalLink } from 'lucide-react';
 import { formatBs } from './utils/exportUtils';
 import { firebaseConfig } from './config/firebaseConfig';
 import { usePWAUpdate } from './hooks/usePWAUpdate';
-import firestoreRulesSource from '../firestore.rules?raw';
 
 // Lazy-loaded tab views for fast initial startup and optimal code splitting
 const DashboardView = lazy(() => import('./components/DashboardView').then(m => ({ default: m.DashboardView })));
@@ -65,18 +64,7 @@ const AppContent: React.FC = () => {
   } = useApp();
 
   const [dismissedRulesBanner, setDismissedRulesBanner] = useState(false);
-  const [copiedRules, setCopiedRules] = useState(false);
   const { updateAvailable, isUpdating, applyUpdate, dismissUpdate } = usePWAUpdate();
-
-  const handleCopyFirestoreRules = async () => {
-    try {
-      await navigator.clipboard.writeText(firestoreRulesSource);
-      setCopiedRules(true);
-      setTimeout(() => setCopiedRules(false), 3000);
-    } catch {
-      setCopiedRules(false);
-    }
-  };
 
   if (isAuthLoading) {
     return (
@@ -123,20 +111,11 @@ const AppContent: React.FC = () => {
                   <p className="text-[11px] text-amber-800 leading-snug">
                     En Firebase Console, asegúrate de seleccionar la base de datos{' '}
                     <code className="font-mono font-bold bg-amber-100 px-1 py-0.5 rounded break-all">{targetDb}</code>{' '}
-                    (no <code className="font-mono">(default)</code> si es diferente) en el proyecto{' '}
-                    <code className="font-mono font-bold bg-amber-100 px-1 py-0.5 rounded">{targetProject}</code>, pega las reglas en <strong>Reglas → Publicar</strong> y luego pulsa <strong>Reintentar</strong>.
+                    en el proyecto <code className="font-mono font-bold bg-amber-100 px-1 py-0.5 rounded">{targetProject}</code>, despliega el archivo <code className="font-mono font-bold bg-amber-100 px-1 py-0.5 rounded">firestore.rules</code> del repositorio (<code className="font-mono">firebase deploy --only firestore:rules</code> o <strong>Reglas → Publicar</strong>) y luego pulsa <strong>Reintentar</strong>.
                   </p>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleCopyFirestoreRules}
-                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
-                >
-                  {copiedRules ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedRules ? 'Reglas copiadas' : 'Copiar firestore.rules'}</span>
-                </button>
                 {rulesConsoleUrl && (
                   <a
                     href={rulesConsoleUrl}

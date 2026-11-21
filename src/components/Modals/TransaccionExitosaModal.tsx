@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { Sale, BusinessInfo } from '../../types';
 import { useApp } from '../../context/AppContext';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs, formatUSD, sanitizeImageUrl } from '../../utils/exportUtils';
 import { generateTicketVentaPDF } from '../../utils/pdfReceiptUtils';
 
 interface TransaccionExitosaModalProps {
@@ -74,9 +74,9 @@ export const TransaccionExitosaModal: React.FC<TransaccionExitosaModalProps> = (
           <div className="absolute -right-8 -top-8 w-32 h-32 bg-white/10 rounded-full blur-xl pointer-events-none"></div>
           
           <div className="flex items-center justify-center gap-2 mb-2">
-            {businessInfo.logoUrl ? (
+            {sanitizeImageUrl(businessInfo.logoUrl) ? (
               <img 
-                src={businessInfo.logoUrl} 
+                src={sanitizeImageUrl(businessInfo.logoUrl)} 
                 alt={businessInfo.name} 
                 className="w-10 h-10 object-contain rounded-xl bg-white/20 p-1 backdrop-blur-xs border border-white/30" 
               />

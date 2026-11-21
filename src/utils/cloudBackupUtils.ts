@@ -19,7 +19,7 @@ import {
   TreasuryAccount,
   TreasuryMovement
 } from '../types';
-import { getLocalDateStr, getProductPriceBs, getProductPriceUSD } from './exportUtils';
+import { getLocalDateStr, getProductPriceBs, getProductPriceUSD, safeJsonToSheet } from './exportUtils';
 
 export interface BackupDataPayload {
   version: string;
@@ -34,7 +34,6 @@ export interface BackupDataPayload {
   bcvLastUpdatedDate?: string | null;
   bcvLastUpdatedAt?: string | null;
   customCategories?: string[];
-  managerPin?: string;
   products: Product[];
   sales: Sale[];
   expenses: Expense[];
@@ -99,7 +98,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
     'Referencia': s.paymentDetails?.pagoMovilRef || s.paymentDetails?.debitoRef || s.paymentDetails?.transferenciaRef || '-',
     'Estado': s.status
   }));
-  const wsSales = XLSX.utils.json_to_sheet(salesSheetData);
+  const wsSales = safeJsonToSheet(salesSheetData);
   XLSX.utils.book_append_sheet(wb, wsSales, 'Historico_Ventas');
 
   // 2. Sheet: Histórico de Compras y Gastos (Libro de Compras)
@@ -122,7 +121,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
     'Método Pago': e.paymentMethod.replace('_', ' ').toUpperCase(),
     'Referencia': e.reference || '-'
   }));
-  const wsExpenses = XLSX.utils.json_to_sheet(expensesSheetData);
+  const wsExpenses = safeJsonToSheet(expensesSheetData);
   XLSX.utils.book_append_sheet(wb, wsExpenses, 'Compras_y_Gastos');
 
   // 3. Sheet: Catálogo de Productos y Servicios
@@ -146,7 +145,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
       : (p.priceIncludesIVA ? 'Gravado 16% (IVA incluido)' : 'Gravado +16%'),
     'Nota de Compra / Factura': p.purchaseNote || '-'
   }));
-  const wsProducts = XLSX.utils.json_to_sheet(productsSheetData);
+  const wsProducts = safeJsonToSheet(productsSheetData);
   XLSX.utils.book_append_sheet(wb, wsProducts, 'Catalogo_Productos');
 
   // 4. Sheet: Cuentas por Cobrar (Fiados)
@@ -164,7 +163,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
     'Total Abonos': f.abonos.length,
     'Notas': f.notes || '-'
   }));
-  const wsFiados = XLSX.utils.json_to_sheet(fiadosSheetData);
+  const wsFiados = safeJsonToSheet(fiadosSheetData);
   XLSX.utils.book_append_sheet(wb, wsFiados, 'Cuentas_Cobrar_Fiados');
 
   // 5. Sheet: Cuentas por Pagar (Proveedores)
@@ -184,7 +183,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
     'Estado': c.status.toUpperCase(),
     'Notas': c.notes || '-'
   }));
-  const wsCPP = XLSX.utils.json_to_sheet(cppSheetData);
+  const wsCPP = safeJsonToSheet(cppSheetData);
   XLSX.utils.book_append_sheet(wb, wsCPP, 'Cuentas_Pagar_Proveedores');
 
   // 6. Sheet: Gastos Operativos del Mes (Alquiler, Servicios, Nómina y Eventuales)
@@ -205,7 +204,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
       'Referencia': g.reference || '-',
       'Notas': g.notes || '-'
     }));
-    const wsGastos = XLSX.utils.json_to_sheet(gastosSheetData);
+    const wsGastos = safeJsonToSheet(gastosSheetData);
     XLSX.utils.book_append_sheet(wb, wsGastos, 'Gastos_Operativos_Mes');
   }
 
@@ -225,7 +224,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
     { 'Concepto': 'CUENTAS POR PAGAR PENDIENTES (PROVEEDORES)', 'USD ($)': totalDeudaProveedoresUSD, 'Bolívares (Bs)': totalDeudaProveedoresUSD * data.bcvRate },
     { 'Concepto': 'TASA OFICIAL BCV UTILIZADA', 'USD ($)': 1, 'Bolívares (Bs)': data.bcvRate }
   ];
-  const wsBalance = XLSX.utils.json_to_sheet(balanceSheetData);
+  const wsBalance = safeJsonToSheet(balanceSheetData);
   XLSX.utils.book_append_sheet(wb, wsBalance, 'Flujo_Caja_Resumen');
 
   // 7. Sheet: Historial de Cierres de Caja
@@ -246,7 +245,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
       'Diferencia (Bs)': s.differenceBs || 0,
       'Observaciones': s.closedNotes || ''
     }));
-    const wsShifts = XLSX.utils.json_to_sheet(shiftData);
+    const wsShifts = safeJsonToSheet(shiftData);
     XLSX.utils.book_append_sheet(wb, wsShifts, 'Cierres_de_Caja');
   }
 
@@ -266,7 +265,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
       'Motivo': cn.reason,
       'Método Reembolso': cn.refundMethod.replace('_', ' ').toUpperCase()
     }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ncData), 'Notas_de_Credito');
+    XLSX.utils.book_append_sheet(wb, safeJsonToSheet(ncData), 'Notas_de_Credito');
   }
 
   // 9. Sheet: Proveedores
@@ -280,7 +279,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
       'Saldo Pendiente USD': sup.accumulatedBalanceUSD,
       'Dirección': sup.address || '-'
     }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(supData), 'Proveedores');
+    XLSX.utils.book_append_sheet(wb, safeJsonToSheet(supData), 'Proveedores');
   }
 
   // 10. Sheet: Kardex de Inventario
@@ -300,7 +299,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
       'Balance FIFO USD': k.fifoBalanceUSD ?? '',
       'Referencia': k.reference || '-'
     }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kardexData), 'Kardex_Inventario');
+    XLSX.utils.book_append_sheet(wb, safeJsonToSheet(kardexData), 'Kardex_Inventario');
   }
 
   // 11. Sheet: Salidas y Mermas
@@ -316,7 +315,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
       'Pérdida Bs': d.totalLossBs,
       'Responsable': d.responsibleName
     }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(discData), 'Mermas_y_Salidas');
+    XLSX.utils.book_append_sheet(wb, safeJsonToSheet(discData), 'Mermas_y_Salidas');
   }
 
   // 12. Sheet: Créditos y Préstamos por Pagar
@@ -338,7 +337,7 @@ export const downloadComprehensiveAccountingExcel = (data: {
       'Referencia': l.reference || '-',
       'Notas': l.notes || '-'
     }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(loansData), 'Prestamos_y_Creditos');
+    XLSX.utils.book_append_sheet(wb, safeJsonToSheet(loansData), 'Prestamos_y_Creditos');
   }
 
   // Save Excel file
@@ -348,12 +347,48 @@ export const downloadComprehensiveAccountingExcel = (data: {
 };
 
 /**
+ * Recursively strips prototype-pollution keys and sensitive PIN credential fields
+ * from an imported JSON backup payload before validation and restore.
+ */
+const stripUnsafeKeys = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(stripUnsafeKeys);
+  }
+  if (value && typeof value === 'object') {
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype' || k === 'managerPin' || k === 'managerPinHash') {
+        continue;
+      }
+      clean[k] = stripUnsafeKeys(v);
+    }
+    return clean;
+  }
+  return value;
+};
+
+export const sanitizeBackupPayload = (raw: unknown): BackupDataPayload => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('El archivo no tiene el formato válido de copia de seguridad de PosVenecia.');
+  }
+  const sanitized = stripUnsafeKeys(raw) as BackupDataPayload;
+  if (!Array.isArray(sanitized.products) || !Array.isArray(sanitized.sales)) {
+    throw new Error('El archivo no tiene el formato válido de copia de seguridad de PosVenecia.');
+  }
+  return sanitized;
+};
+
+/**
  * Downloads full system backup as JSON for local storage and device migration
  */
 export const downloadSystemBackupJSON = (payload: BackupDataPayload) => {
   const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `PosVenecia_Backup_Completo_${dateStr}.json`;
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const { managerPin: _pin, managerPinHash: _hash, ...sanitizedPayload } = payload as BackupDataPayload & {
+    managerPin?: unknown;
+    managerPinHash?: unknown;
+  };
+  const blob = new Blob([JSON.stringify(sanitizedPayload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

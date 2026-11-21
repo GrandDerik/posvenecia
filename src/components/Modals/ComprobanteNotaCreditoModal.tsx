@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Printer, Download, RotateCcw } from 'lucide-react';
 import { CreditNote, BusinessInfo } from '../../types';
-import { formatBs, formatUSD } from '../../utils/exportUtils';
+import { formatBs, formatUSD, sanitizeImageUrl } from '../../utils/exportUtils';
 import { generateTicketNotaCreditoPDF } from '../../utils/pdfReceiptUtils';
 
 interface ComprobanteNotaCreditoModalProps {
@@ -46,10 +46,10 @@ export const ComprobanteNotaCreditoModal: React.FC<ComprobanteNotaCreditoModalPr
             
             {/* Header */}
             <div className="text-center space-y-0.5 border-b border-dashed border-slate-300 pb-3">
-              {businessInfo.logoUrl && (
+              {sanitizeImageUrl(businessInfo.logoUrl) && (
                 <div className="flex justify-center mb-2">
                   <img 
-                    src={businessInfo.logoUrl} 
+                    src={sanitizeImageUrl(businessInfo.logoUrl)} 
                     alt={businessInfo.name} 
                     className="max-h-14 max-w-[140px] object-contain filter contrast-125"
                   />

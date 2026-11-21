@@ -38,7 +38,7 @@ export const DashboardView: React.FC = () => {
     setIsCuadreModalOpen,
     setIsProfileModalOpen,
     businessInfo,
-    managerPin,
+    verifyManagerPin,
     updateManagerPin,
     cashShift,
     isCashRegisterOpen,
@@ -58,6 +58,7 @@ export const DashboardView: React.FC = () => {
   const [newPinInput, setNewPinInput] = useState('');
   const [pinSuccessMsg, setPinSuccessMsg] = useState(false);
   const [pinErrorMsg, setPinErrorMsg] = useState('');
+  const [isSavingPin, setIsSavingPin] = useState(false);
   const [isRefreshingSales, setIsRefreshingSales] = useState(false);
   const [fiadoDaysThreshold, setFiadoDaysThreshold] = useState<15 | 30 | 60>(30);
 
@@ -346,25 +347,35 @@ export const DashboardView: React.FC = () => {
     restockSuggestions.reduce((s, r) => s + r.estTotalUSD, 0)
   );
 
-  const handleSavePin = (e: React.FormEvent) => {
+  const handleSavePin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentPinInput !== managerPin) {
-      setPinErrorMsg('La clave actual es incorrecta.');
-      return;
-    }
-    if (newPinInput.length < 4) {
+    if (isSavingPin) return;
+    if (newPinInput.trim().length < 4) {
       setPinErrorMsg('La nueva clave debe tener al menos 4 dígitos.');
       return;
     }
-    updateManagerPin(newPinInput);
+
+    setIsSavingPin(true);
     setPinErrorMsg('');
-    setPinSuccessMsg(true);
-    setTimeout(() => {
-      setPinSuccessMsg(false);
-      setIsPinModalOpen(false);
-      setCurrentPinInput('');
-      setNewPinInput('');
-    }, 1500);
+    try {
+      const isCurrentValid = await verifyManagerPin(currentPinInput);
+      if (!isCurrentValid) {
+        setPinErrorMsg('La clave actual es incorrecta.');
+        return;
+      }
+      await updateManagerPin(newPinInput.trim());
+      setPinSuccessMsg(true);
+      setTimeout(() => {
+        setPinSuccessMsg(false);
+        setIsPinModalOpen(false);
+        setCurrentPinInput('');
+        setNewPinInput('');
+      }, 1500);
+    } catch (err: any) {
+      setPinErrorMsg(err?.message || 'No se pudo actualizar la clave de gerente.');
+    } finally {
+      setIsSavingPin(false);
+    }
   };
 
   const handleRefreshRecentSales = async () => {
@@ -455,7 +466,9 @@ export const DashboardView: React.FC = () => {
               onClick={async () => {
                 try {
                   await fetchLiveRate();
-                  fetchLiveEuroRate().catch(() => {});
+                  fetchLiveEuroRate().catch((err) => {
+                    if (import.meta.env.DEV) console.warn('[DashboardView] Euro rate background sync skipped:', err);
+                  });
                 } catch {
                   setActiveTab('tasa');
                 }
@@ -1140,9 +1153,10 @@ export const DashboardView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
+                  disabled={isSavingPin}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
                 >
-                  Guardar Clave
+                  {isSavingPin ? 'Guardando...' : 'Guardar Clave'}
                 </button>
               </div>
             </form>

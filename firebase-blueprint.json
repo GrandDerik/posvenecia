@@ -234,6 +234,7 @@
         "lastPromptedBcvRate": { "type": "number" },
         "lastPromptedBcvEuroRate": { "type": "number" },
         "commercialRoundingStep": { "type": "number" },
+        "managerPinHash": { "type": "string", "maxLength": 200 },
         "lastUpdatedBy": { "type": "string", "maxLength": 128 }
       },
       "required": ["updatedAt"]

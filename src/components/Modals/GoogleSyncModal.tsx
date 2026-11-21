@@ -93,7 +93,9 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({ isOpen, onClos
       await logoutGoogle();
       onClose();
     } catch (err: any) {
-      console.error('Error al cerrar sesión:', err);
+      if (import.meta.env.DEV) {
+        console.error('Error al cerrar sesión:', err);
+      }
       onClose();
     }
   };

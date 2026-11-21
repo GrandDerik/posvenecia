@@ -124,6 +124,7 @@ export interface UserBusinessProfileDoc {
   rateHistory?: { date: string; rate: number }[];
   customCategories?: string[];
   managerPin?: string;
+  managerPinHash?: string;
   lastUpdatedBy?: string;
 }
 
@@ -1801,9 +1802,12 @@ export const saveBusinessProfileToFirestore = async (
       const cleaned = cleanForFirestore({
         ...profilePatch,
         updatedAt: new Date().toISOString()
-      });
+      }) as Record<string, unknown>;
+      if (profilePatch.managerPinHash) {
+        cleaned.managerPin = deleteField();
+      }
       try {
-        await updateDoc(profileRef, cleaned as Record<string, any>);
+        await updateDoc(profileRef, cleaned);
       } catch (err: any) {
         if (err?.code === 'not-found') {
           await setDoc(profileRef, cleaned, { merge: true });
@@ -4444,6 +4448,111 @@ export const deleteSaleFromFirestore = async (uid: string, saleId: string): Prom
   return trackFirestoreWrite(op);
 };
 
+/**
+ * Atomic transactional delete for a Sale (`runTransaction`):
+ * Optionally restores live stock & FIFO batches and logs Kardex before deleting the sale document.
+ */
+export const deleteSaleAtomic = async (
+  uid: string,
+  saleId: string,
+  restoreStock: boolean = false,
+  userName?: string
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/sales/${saleId}`;
+  const op = (async () => {
+    try {
+      await runTransaction(db, async (tx) => {
+        const saleRef = doc(db, 'users', userId, 'sales', saleId);
+        const saleSnap = await tx.get(saleRef);
+        if (!saleSnap.exists()) {
+          return;
+        }
+
+        const liveSale = saleSnap.data() as Sale;
+        const prodUpdates: Array<{
+          ref: ReturnType<typeof doc>;
+          patch: Record<string, unknown>;
+          kardex: KardexEntry;
+        }> = [];
+
+        if (restoreStock && liveSale.status === 'completada') {
+          const restorationMap = new Map<string, number>();
+          for (const item of liveSale.items || []) {
+            if (!item.product.isService && item.product.itemType !== 'servicio' && item.product.id) {
+              const pid = item.product.id;
+              const prevReturned = liveSale.returnedQuantities?.[pid] || 0;
+              const restorableQty = Math.max(0, round2(item.quantity - prevReturned));
+              if (restorableQty > 0) {
+                restorationMap.set(pid, round2((restorationMap.get(pid) || 0) + restorableQty));
+              }
+            }
+          }
+
+          const prodIds = Array.from(restorationMap.keys());
+          const prodRefs = prodIds.map((pid) => doc(db, 'users', userId, 'products', pid));
+          const prodSnaps = await Promise.all(prodRefs.map((ref) => tx.get(ref)));
+
+          for (let i = 0; i < prodIds.length; i++) {
+            const snap = prodSnaps[i];
+            if (!snap.exists()) continue;
+            const liveProd = snap.data() as Product;
+            const qty = restorationMap.get(prodIds[i]) || 0;
+            if (qty <= 0) continue;
+
+            const prevStock = round2(Number(liveProd.stock) || 0);
+            const nextStock = round2(prevStock + qty);
+            const restoredBatches = restoreFifoBatchesTx(
+              liveProd.batches,
+              qty,
+              liveProd,
+              `DEL-${liveSale.invoiceNumber}`
+            );
+
+            const patch: Record<string, unknown> = { stock: nextStock };
+            if (restoredBatches !== undefined) {
+              patch.batches = cleanForFirestore(restoredBatches);
+            }
+
+            const updatedProd: Product = {
+              ...liveProd,
+              stock: nextStock,
+              ...(restoredBatches !== undefined ? { batches: restoredBatches } : {})
+            };
+
+            const kardex = buildKardexEntryTx({
+              product: updatedProd,
+              type: 'ajuste_manual',
+              quantityChange: qty,
+              previousStock: prevStock,
+              newStock: nextStock,
+              unitCostUSD: liveProd.costUSD || 0,
+              valuationMethod: updatedProd.batches && updatedProd.batches.length > 0 ? 'fifo' : 'average_cost',
+              reference: `DEL-${liveSale.invoiceNumber}`,
+              notes: `Reintegro al eliminar venta ${liveSale.invoiceNumber}`,
+              userName
+            });
+
+            prodUpdates.push({ ref: prodRefs[i], patch, kardex });
+          }
+        }
+
+        // ALL WRITES
+        for (const u of prodUpdates) {
+          tx.update(u.ref, u.patch);
+          if (!isOptionalCollectionDenied(userId, 'kardex')) {
+            tx.set(doc(db, 'users', userId, 'kardex', u.kardex.id), cleanForFirestore(u.kardex));
+          }
+        }
+        tx.delete(saleRef);
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
 export const saveCashShiftToFirestore = async (uid: string, shift: CashShift): Promise<void> => {
   const userId = getCanonicalUserId(uid);
   const path = `users/${userId}/cashShiftHistory/${shift.id}`;
@@ -4451,6 +4560,40 @@ export const saveCashShiftToFirestore = async (uid: string, shift: CashShift): P
     try {
       const cleaned = cleanForFirestore(shift);
       await setDoc(doc(db, 'users', userId, 'cashShiftHistory', shift.id), cleaned, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  })();
+  return trackFirestoreWrite(op);
+};
+
+/**
+ * Atomic writeBatch for closing cash shift: saves closed shift to cashShiftHistory
+ * AND closes cashRegister/status in a single commit.
+ */
+export const closeCashShiftAtomic = async (
+  uid: string,
+  closedShift: CashShift,
+  statusDoc: CashRegisterStatusDoc
+): Promise<void> => {
+  const userId = getCanonicalUserId(uid);
+  const path = `users/${userId}/cashShiftHistory/${closedShift.id}`;
+  const op = (async () => {
+    try {
+      const batch = writeBatch(db);
+      const shiftRef = doc(db, 'users', userId, 'cashShiftHistory', closedShift.id);
+      const registerRef = doc(db, 'users', userId, 'cashRegister', 'status');
+
+      batch.set(shiftRef, cleanForFirestore(closedShift), { merge: true });
+      batch.set(
+        registerRef,
+        cleanForFirestore({
+          ...statusDoc,
+          updatedAt: new Date().toISOString()
+        }),
+        { merge: true }
+      );
+      await batch.commit();
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -4555,7 +4698,6 @@ export const fetchFullStoreSnapshotForBackup = async (
     bcvLastUpdatedDate: profileData.bcvLastUpdatedDate || null,
     bcvLastUpdatedAt: profileData.bcvLastUpdatedAt || null,
     customCategories: profileData.customCategories || [],
-    managerPin: profileData.managerPin || '1234',
     products: productsSnap.docs.map((d) => d.data() as Product),
     sales,
     expenses,
@@ -4690,8 +4832,7 @@ export const restoreStoreDataToFirestore = async (
     rateHistory: data.rateHistory || [],
     bcvLastUpdatedDate: data.bcvLastUpdatedDate || undefined,
     bcvLastUpdatedAt: data.bcvLastUpdatedAt || undefined,
-    customCategories: data.customCategories || [],
-    managerPin: data.managerPin || '1234'
+    customCategories: data.customCategories || []
   });
 
   await saveCashRegisterStatusToFirestore(userId, {

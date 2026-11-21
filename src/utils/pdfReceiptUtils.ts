@@ -1,7 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Sale, Expense, BusinessInfo, CashShift, CreditNote, Abono, Loan } from '../types';
-import { formatBs, formatUSD, getLocalDateStr, round2, safeDiv, isCartItemExempt } from './exportUtils';
+import { formatBs, formatUSD, getLocalDateStr, round2, safeDiv, isCartItemExempt, sanitizeImageUrl } from './exportUtils';
 import { isExpenseOwnerSalary, isExpenseOwnerWithdrawal } from './accountingUtils';
 
 type JsPDFWithAutoTable = jsPDF & {
@@ -231,7 +231,8 @@ export const generateTicketVentaPDF = (
   sale: Sale,
   businessInfo: BusinessInfo
 ) => {
-  const hasLogo = Boolean(businessInfo.logoUrl && businessInfo.logoUrl.startsWith('data:image'));
+  const safeLogoUrl = sanitizeImageUrl(businessInfo.logoUrl);
+  const hasLogo = Boolean(safeLogoUrl && safeLogoUrl.startsWith('data:image'));
   const hasDiscount = (sale.discountBs ?? 0) > 0 || (sale.discountUSD ?? 0) > 0;
   const dynamicHeight = Math.max(160, 120 + (sale.items.length * 8) + (hasLogo ? 18 : 0) + (hasDiscount ? 10 : 0));
   const doc = new jsPDF({
@@ -243,13 +244,13 @@ export const generateTicketVentaPDF = (
   const pageWidth = 80;
   let y = 8;
 
-  // Header Logo (if provided and valid data URI)
-  if (hasLogo && businessInfo.logoUrl) {
+  // Header Logo (if provided and valid raster data URI)
+  if (hasLogo && safeLogoUrl) {
     try {
-      const format = businessInfo.logoUrl.includes('png') ? 'PNG' : 'JPEG';
-      doc.addImage(businessInfo.logoUrl, format, (pageWidth - 22) / 2, y, 22, 14);
+      const format = safeLogoUrl.toLowerCase().includes('png') ? 'PNG' : 'JPEG';
+      doc.addImage(safeLogoUrl, format, (pageWidth - 22) / 2, y, 22, 14);
       y += 16;
-    } catch (e) {
+    } catch {
       // Ignore if image format cannot be parsed by jsPDF
     }
   }

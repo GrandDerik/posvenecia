@@ -47,7 +47,8 @@ import {
   isProductExempt,
   isProductPriceIncludesIVA,
   isCartItemExempt,
-  calculateCartFiscalTotals
+  calculateCartFiscalTotals,
+  sanitizeImageUrl
 } from '../utils/exportUtils';
 import { PagoMovilModal } from './Modals/PagoMovilModal';
 import { VentaFiadaModal } from './Modals/VentaFiadaModal';
@@ -91,7 +92,7 @@ export const POSView: React.FC = () => {
     baseCurrency,
     isCashRegisterOpen,
     setIsAperturaModalOpen,
-    managerPin,
+    verifyManagerPin,
     setIsCreditNoteModalOpen,
     isBcvRateUpdatedToday,
     fetchLiveRate,
@@ -196,6 +197,25 @@ export const POSView: React.FC = () => {
   const [isManagerPinModalOpen, setIsManagerPinModalOpen] = useState(false);
   const [managerPinInput, setManagerPinInput] = useState('');
   const [managerPinError, setManagerPinError] = useState('');
+  const [isVerifyingManagerPin, setIsVerifyingManagerPin] = useState(false);
+
+  const handleAuthorizeDisableIva = async () => {
+    if (isVerifyingManagerPin) return;
+    setIsVerifyingManagerPin(true);
+    setManagerPinError('');
+    try {
+      const isValid = await verifyManagerPin(managerPinInput);
+      if (isValid) {
+        setApplyIVA(false);
+        setIsManagerPinModalOpen(false);
+        setManagerPinInput('');
+      } else {
+        setManagerPinError('PIN incorrecto');
+      }
+    } finally {
+      setIsVerifyingManagerPin(false);
+    }
+  };
 
   // Active client details
   const [clientName, setClientName] = useState('Consumidor Final');
@@ -464,7 +484,9 @@ export const POSView: React.FC = () => {
       setFiscalError(null);
       setSuccessSale(createdSale);
     } catch (err: any) {
-      console.error('[POSView] Error al procesar venta:', err);
+      if (import.meta.env.DEV) {
+        console.error('[POSView] Error al procesar venta:', err);
+      }
       setFiscalError(err?.message || 'No se pudo procesar la venta. Verifique su conexión o los datos fiscales.');
     } finally {
       // Cooldown timer to prevent accidental double clicks
@@ -534,7 +556,9 @@ export const POSView: React.FC = () => {
               onClick={async () => {
                 try {
                   await fetchLiveRate();
-                  fetchLiveEuroRate().catch(() => {});
+                  fetchLiveEuroRate().catch((err) => {
+                    if (import.meta.env.DEV) console.warn('[POSView] Euro rate background sync skipped:', err);
+                  });
                 } catch {
                   setActiveTab('tasa');
                 }
@@ -875,8 +899,8 @@ export const POSView: React.FC = () => {
                     {/* Image & Category Badges */}
                     <div className="relative mb-2">
                       <div className={`w-full h-24 rounded-xl bg-[#F8FAFC] overflow-hidden flex items-center justify-center border border-[#DCE4F0]/70 ${isOutOfStock ? 'grayscale opacity-75' : ''}`}>
-                        {prod.imageUrl ? (
-                          <img src={prod.imageUrl} alt={prod.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                        {sanitizeImageUrl(prod.imageUrl) ? (
+                          <img src={sanitizeImageUrl(prod.imageUrl)} alt={prod.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                         ) : (
                           <Package className="w-8 h-8 text-slate-300 stroke-1" />
                         )}
@@ -1023,8 +1047,8 @@ export const POSView: React.FC = () => {
                     {/* Thumbnail & Info */}
                     <div className="flex items-center gap-3 min-w-0 flex-1">
                       <div className={`w-12 h-12 rounded-xl bg-[#F8FAFC] overflow-hidden flex items-center justify-center border border-[#DCE4F0] shrink-0 ${isOutOfStock ? 'grayscale opacity-75' : ''}`}>
-                        {prod.imageUrl ? (
-                          <img src={prod.imageUrl} alt={prod.name} className="w-full h-full object-cover" />
+                        {sanitizeImageUrl(prod.imageUrl) ? (
+                          <img src={sanitizeImageUrl(prod.imageUrl)} alt={prod.name} className="w-full h-full object-cover" />
                         ) : (
                           <Package className="w-5 h-5 text-slate-400 stroke-1" />
                         )}
@@ -2369,12 +2393,7 @@ export const POSView: React.FC = () => {
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
-                  if (managerPinInput === managerPin) {
-                    setApplyIVA(false);
-                    setIsManagerPinModalOpen(false);
-                  } else {
-                    setManagerPinError('PIN incorrecto');
-                  }
+                  void handleAuthorizeDisableIva();
                 }
               }}
               className="w-full text-center tracking-widest text-xl font-bold font-mono py-2.5 px-4 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:border-blue-600"
@@ -2388,28 +2407,25 @@ export const POSView: React.FC = () => {
             <div className="grid grid-cols-2 gap-2 pt-1">
               <button
                 type="button"
+                disabled={isVerifyingManagerPin}
                 onClick={() => {
                   setIsManagerPinModalOpen(false);
                   setManagerPinInput('');
                   setManagerPinError('');
                 }}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-60"
               >
                 Cancelar
               </button>
               <button
                 type="button"
+                disabled={isVerifyingManagerPin}
                 onClick={() => {
-                  if (managerPinInput === managerPin) {
-                    setApplyIVA(false);
-                    setIsManagerPinModalOpen(false);
-                  } else {
-                    setManagerPinError('PIN incorrecto');
-                  }
+                  void handleAuthorizeDisableIva();
                 }}
-                className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-bold cursor-pointer transition-colors shadow-xs"
+                className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-black disabled:opacity-60 text-white text-xs font-bold cursor-pointer transition-colors shadow-xs"
               >
-                Autorizar
+                {isVerifyingManagerPin ? 'Verificando...' : 'Autorizar'}
               </button>
             </div>
           </div>

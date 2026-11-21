@@ -29,12 +29,24 @@ service cloud.firestore {
       return request.resource.data;
     }
 
+    function existing() {
+      return resource.data;
+    }
+
     function isOptString(data, key, maxLen) {
       return !(key in data) || data[key] == null || (data[key] is string && data[key].size() <= maxLen);
     }
 
     function isOptNumber(data, key) {
       return !(key in data) || data[key] == null || (data[key] is number);
+    }
+
+    function isOptNonNegNumber(data, key) {
+      return !(key in data) || data[key] == null || (data[key] is number && data[key] >= 0);
+    }
+
+    function isOptPosNumber(data, key) {
+      return !(key in data) || data[key] == null || (data[key] is number && data[key] > 0);
     }
 
     function isOptBool(data, key) {
@@ -53,23 +65,194 @@ service cloud.firestore {
       return !('id' in data) || data.id == null || data.id == docId;
     }
 
-    // Validadores por entidad (compatibles con merge: true e increment() atómicos)
+    // Listas blancas de llaves permitidas por colección
+    function allowedProductKeys() {
+      return [
+        'id', 'code', 'name', 'category', 'costUSD', 'priceUSD', 'priceEUR',
+        'priceBsFixed', 'costBsFixed', 'priceCurrency', 'priceAnchorCurrency',
+        'costCurrency', 'stock', 'minStock', 'isExemptFromIVA', 'priceIncludesIVA',
+        'unit', 'imageUrl', 'itemType', 'isService', 'purchaseNote',
+        'profitMarginPercent', 'batches'
+      ];
+    }
+
+    function allowedSaleKeys() {
+      return [
+        'id', 'date', 'invoiceNumber', 'controlNumber', 'clientName', 'clientRIF',
+        'clientPhone', 'clientAddress', 'items', 'subtotalUSD', 'grossSubtotalUSD',
+        'discountUSD', 'exemptUSD', 'taxableUSD', 'ivaUSD', 'igtfUSD', 'totalUSD',
+        'bcvRate', 'subtotalBs', 'grossSubtotalBs', 'discountBs', 'discountCurrency',
+        'discountReason', 'exemptBs', 'taxableBs', 'ivaBs', 'igtfBs', 'totalBs',
+        'paymentMethod', 'paymentDetails', 'status', 'returnedQuantities',
+        'creditNoteId', 'refundedUSD', 'cashierName', 'syncStatus'
+      ];
+    }
+
+    function allowedExpenseKeys() {
+      return [
+        'id', 'date', 'dueDate', 'invoiceNumber', 'controlNumber', 'supplierId',
+        'supplierName', 'supplierRIF', 'supplierPhone', 'description', 'category',
+        'amountUSD', 'amountBs', 'baseImponibleBs', 'ivaBs', 'retencionIVABs',
+        'retencionISLRBs', 'bcvRate', 'enteredCurrency', 'paymentMethod',
+        'bankAccountId', 'bankAccountLabel', 'treasuryAccountId', 'bankFeeAmount',
+        'bankFeeCurrency', 'excludeFromLibroCompras', 'accountingType', 'reference',
+        'costStrategy', 'linkedGastoId', 'linkedCuentaId', 'linkedLoanId',
+        'syncStatus', 'items'
+      ];
+    }
+
+    function allowedFiadoKeys() {
+      return [
+        'id', 'saleId', 'invoiceNumber', 'clientName', 'clientCI', 'clientPhone',
+        'clientAddress', 'date', 'originalDebtUSD', 'remainingDebtUSD', 'notes',
+        'status', 'abonos'
+      ];
+    }
+
+    function allowedClientKeys() {
+      return [
+        'id', 'name', 'rif', 'phone', 'address', 'email', 'creditLimitUSD',
+        'notes', 'createdAt'
+      ];
+    }
+
+    function allowedCuentaPorPagarKeys() {
+      return [
+        'id', 'supplierId', 'supplierName', 'supplierRIF', 'supplierPhone',
+        'invoiceNumber', 'controlNumber', 'date', 'dueDate', 'category',
+        'description', 'totalAmountUSD', 'paidAmountUSD', 'remainingUSD',
+        'status', 'notes', 'abonos'
+      ];
+    }
+
+    function allowedGastoOperativoKeys() {
+      return [
+        'id', 'concept', 'category', 'type', 'month', 'date', 'dueDate',
+        'supplierId', 'supplierName', 'supplierRIF', 'supplierPhone',
+        'invoiceNumber', 'amountUSD', 'amountBs', 'bcvRate', 'enteredCurrency',
+        'paidAmountUSD', 'remainingUSD', 'status', 'paymentDate', 'paymentMethod',
+        'bankAccountId', 'bankAccountLabel', 'treasuryAccountId', 'bankFeeAmount',
+        'bankFeeCurrency', 'reference', 'notes', 'abonos'
+      ];
+    }
+
+    function allowedCashShiftKeys() {
+      return [
+        'id', 'isOpen', 'openedAt', 'openedDateFormatted', 'closedAt',
+        'closedDateFormatted', 'initialCashUSD', 'initialCashBs', 'expectedCashUSD',
+        'expectedCashBs', 'countedCashUSD', 'countedCashBs', 'differenceUSD',
+        'differenceBs', 'notes', 'previousShiftId', 'previousCloseDateFormatted',
+        'previousCloseCashUSD', 'previousCloseCashBs', 'openingDifferenceUSD',
+        'openingDifferenceBs', 'openingMatchedOutflowsUSD',
+        'openingMatchedOutflowsBs', 'openingMatchedMovementsCount',
+        'openingDifferenceReason', 'openingDifferenceNotes', 'closedNotes',
+        'openedBy', 'closedBy', 'totalSalesUSD', 'totalSalesBs', 'salesBreakdown',
+        'transactionsCount', 'totalExpensesUSD', 'totalExpensesBs',
+        'totalOwnerSalaryUSD', 'totalOwnerSalaryBs', 'totalOwnerWithdrawalsUSD',
+        'totalOwnerWithdrawalsBs', 'totalCreditNotesUSD', 'totalCreditNotesBs',
+        'totalFiadoAbonosUSD', 'totalFiadoAbonosBs', 'totalLoansInflowUSD',
+        'totalLoansInflowBs', 'initialBanks'
+      ];
+    }
+
+    function allowedBusinessProfileKeys() {
+      return [
+        'updatedAt', 'businessInfo', 'bcvRate', 'bcvEuroRate',
+        'bcvLastUpdatedDate', 'bcvLastUpdatedAt', 'lastRatePromptDate',
+        'lastPromptedBcvRate', 'lastPromptedBcvEuroRate',
+        'commercialRoundingStep', 'baseCurrency', 'managerPin', 'managerPinHash',
+        'lastUpdatedBy', 'customCategories', 'rateHistory'
+      ];
+    }
+
+    function allowedCashRegisterKeys() {
+      return [
+        'isOpen', 'activeShift', 'updatedAt', 'updatedBy', 'terminalId', 'openedAt'
+      ];
+    }
+
+    function allowedCreditNoteKeys() {
+      return [
+        'id', 'creditNoteNumber', 'controlNumber', 'saleId',
+        'originalInvoiceNumber', 'originalControlNumber', 'date', 'clientName',
+        'clientRIF', 'clientPhone', 'clientAddress', 'subtotalUSD', 'exemptUSD',
+        'taxableUSD', 'ivaUSD', 'igtfUSD', 'totalUSD', 'subtotalBs', 'exemptBs',
+        'taxableBs', 'ivaBs', 'igtfBs', 'totalBs', 'bcvRate', 'reason',
+        'refundMethod', 'bankAccountId', 'bankAccountLabel', 'cashierName',
+        'syncStatus', 'items'
+      ];
+    }
+
+    function allowedInventoryDischargeKeys() {
+      return [
+        'id', 'dischargeNumber', 'date', 'productId', 'productName',
+        'productCode', 'category', 'quantity', 'unitCostUSD', 'totalLossUSD',
+        'totalLossBs', 'bcvRate', 'reason', 'notes', 'responsibleName', 'syncStatus'
+      ];
+    }
+
+    function allowedKardexKeys() {
+      return [
+        'id', 'date', 'productId', 'productCode', 'productName', 'category',
+        'type', 'quantityChange', 'previousStock', 'newStock', 'unitCostUSD',
+        'totalCostUSD', 'valuationMethod', 'fifoBalanceUSD', 'avgCostUSD',
+        'avgBalanceUSD', 'reference', 'notes', 'userName'
+      ];
+    }
+
+    function allowedSupplierKeys() {
+      return [
+        'id', 'name', 'rif', 'phone', 'address', 'email', 'creditDays',
+        'accumulatedBalanceUSD', 'notes', 'createdAt'
+      ];
+    }
+
+    function allowedLoanKeys() {
+      return [
+        'id', 'lenderName', 'lenderRIF', 'lenderPhone', 'reference',
+        'description', 'grantDate', 'dueDate', 'enteredCurrency',
+        'originalAmountUSD', 'originalAmountBs', 'bcvRate', 'paidAmountUSD',
+        'paidAmountBs', 'remainingUSD', 'remainingBs', 'cashDestination',
+        'bankAccountId', 'bankAccountLabel', 'status', 'notes', 'abonos',
+        'createdAt'
+      ];
+    }
+
+    function allowedTreasuryAccountKeys() {
+      return [
+        'id', 'name', 'bankName', 'accountNumber', 'alias', 'accountType',
+        'currency', 'balance', 'initialBalance', 'isSystemCash', 'isDefault',
+        'isActive', 'notes', 'createdAt', 'updatedAt'
+      ];
+    }
+
+    function allowedTreasuryMovementKeys() {
+      return [
+        'id', 'date', 'accountId', 'accountName', 'accountCurrency',
+        'direction', 'amount', 'balanceBefore', 'balanceAfter', 'bcvRate',
+        'type', 'concept', 'reference', 'paymentMethod', 'linkedEntityType',
+        'linkedEntityId', 'transferPairId', 'counterpartyAccountId',
+        'counterpartyAccountName', 'exchangeRateUsed', 'notes', 'createdBy'
+      ];
+    }
+
+    // Validadores por entidad (compatibles con merge: true y transacciones atómicas)
     function isValidProduct(data) {
       return data is map
         && isOptString(data, 'id', 128)
         && isOptString(data, 'code', 100)
         && isOptString(data, 'name', 200)
         && isOptString(data, 'category', 100)
-        && isOptNumber(data, 'costUSD')
-        && isOptNumber(data, 'priceUSD')
-        && isOptNumber(data, 'priceEUR')
-        && isOptNumber(data, 'priceBsFixed')
-        && isOptNumber(data, 'costBsFixed')
+        && isOptNonNegNumber(data, 'costUSD')
+        && isOptNonNegNumber(data, 'priceUSD')
+        && isOptNonNegNumber(data, 'priceEUR')
+        && isOptNonNegNumber(data, 'priceBsFixed')
+        && isOptNonNegNumber(data, 'costBsFixed')
         && isOptString(data, 'priceCurrency', 10)
         && isOptString(data, 'priceAnchorCurrency', 10)
         && isOptString(data, 'costCurrency', 10)
-        && isOptNumber(data, 'stock')
-        && isOptNumber(data, 'minStock')
+        && isOptNonNegNumber(data, 'stock')
+        && isOptNonNegNumber(data, 'minStock')
         && isOptBool(data, 'isExemptFromIVA')
         && isOptBool(data, 'priceIncludesIVA')
         && isOptString(data, 'unit', 50)
@@ -91,31 +274,31 @@ service cloud.firestore {
         && isOptString(data, 'clientRIF', 50)
         && isOptString(data, 'clientPhone', 50)
         && isOptString(data, 'clientAddress', 500)
-        && isOptNumber(data, 'subtotalUSD')
-        && isOptNumber(data, 'grossSubtotalUSD')
-        && isOptNumber(data, 'discountUSD')
-        && isOptNumber(data, 'exemptUSD')
-        && isOptNumber(data, 'taxableUSD')
-        && isOptNumber(data, 'ivaUSD')
-        && isOptNumber(data, 'igtfUSD')
-        && isOptNumber(data, 'totalUSD')
-        && isOptNumber(data, 'bcvRate')
-        && isOptNumber(data, 'subtotalBs')
-        && isOptNumber(data, 'grossSubtotalBs')
-        && isOptNumber(data, 'discountBs')
+        && isOptNonNegNumber(data, 'subtotalUSD')
+        && isOptNonNegNumber(data, 'grossSubtotalUSD')
+        && isOptNonNegNumber(data, 'discountUSD')
+        && isOptNonNegNumber(data, 'exemptUSD')
+        && isOptNonNegNumber(data, 'taxableUSD')
+        && isOptNonNegNumber(data, 'ivaUSD')
+        && isOptNonNegNumber(data, 'igtfUSD')
+        && isOptNonNegNumber(data, 'totalUSD')
+        && isOptPosNumber(data, 'bcvRate')
+        && isOptNonNegNumber(data, 'subtotalBs')
+        && isOptNonNegNumber(data, 'grossSubtotalBs')
+        && isOptNonNegNumber(data, 'discountBs')
         && isOptString(data, 'discountCurrency', 10)
         && isOptString(data, 'discountReason', 200)
-        && isOptNumber(data, 'exemptBs')
-        && isOptNumber(data, 'taxableBs')
-        && isOptNumber(data, 'ivaBs')
-        && isOptNumber(data, 'igtfBs')
-        && isOptNumber(data, 'totalBs')
+        && isOptNonNegNumber(data, 'exemptBs')
+        && isOptNonNegNumber(data, 'taxableBs')
+        && isOptNonNegNumber(data, 'ivaBs')
+        && isOptNonNegNumber(data, 'igtfBs')
+        && isOptNonNegNumber(data, 'totalBs')
         && isOptString(data, 'paymentMethod', 50)
         && isOptMap(data, 'paymentDetails', 30)
         && isOptString(data, 'status', 50)
         && isOptMap(data, 'returnedQuantities', 500)
         && isOptString(data, 'creditNoteId', 128)
-        && isOptNumber(data, 'refundedUSD')
+        && isOptNonNegNumber(data, 'refundedUSD')
         && isOptString(data, 'cashierName', 100)
         && isOptString(data, 'syncStatus', 50)
         && isOptList(data, 'items', 500);
@@ -134,19 +317,19 @@ service cloud.firestore {
         && isOptString(data, 'supplierPhone', 50)
         && isOptString(data, 'description', 500)
         && isOptString(data, 'category', 100)
-        && isOptNumber(data, 'amountUSD')
-        && isOptNumber(data, 'amountBs')
-        && isOptNumber(data, 'baseImponibleBs')
-        && isOptNumber(data, 'ivaBs')
-        && isOptNumber(data, 'retencionIVABs')
-        && isOptNumber(data, 'retencionISLRBs')
-        && isOptNumber(data, 'bcvRate')
+        && isOptNonNegNumber(data, 'amountUSD')
+        && isOptNonNegNumber(data, 'amountBs')
+        && isOptNonNegNumber(data, 'baseImponibleBs')
+        && isOptNonNegNumber(data, 'ivaBs')
+        && isOptNonNegNumber(data, 'retencionIVABs')
+        && isOptNonNegNumber(data, 'retencionISLRBs')
+        && isOptPosNumber(data, 'bcvRate')
         && isOptString(data, 'enteredCurrency', 10)
         && isOptString(data, 'paymentMethod', 50)
         && isOptString(data, 'bankAccountId', 128)
         && isOptString(data, 'bankAccountLabel', 200)
         && isOptString(data, 'treasuryAccountId', 128)
-        && isOptNumber(data, 'bankFeeAmount')
+        && isOptNonNegNumber(data, 'bankFeeAmount')
         && isOptString(data, 'bankFeeCurrency', 10)
         && isOptBool(data, 'excludeFromLibroCompras')
         && isOptString(data, 'accountingType', 50)
@@ -169,8 +352,8 @@ service cloud.firestore {
         && isOptString(data, 'clientPhone', 50)
         && isOptString(data, 'clientAddress', 500)
         && isOptString(data, 'date', 100)
-        && isOptNumber(data, 'originalDebtUSD')
-        && isOptNumber(data, 'remainingDebtUSD')
+        && isOptNonNegNumber(data, 'originalDebtUSD')
+        && isOptNonNegNumber(data, 'remainingDebtUSD')
         && isOptString(data, 'notes', 1000)
         && isOptString(data, 'status', 50)
         && isOptList(data, 'abonos', 500);
@@ -184,7 +367,7 @@ service cloud.firestore {
         && isOptString(data, 'phone', 50)
         && isOptString(data, 'address', 500)
         && isOptString(data, 'email', 200)
-        && isOptNumber(data, 'creditLimitUSD')
+        && isOptNonNegNumber(data, 'creditLimitUSD')
         && isOptString(data, 'notes', 1000)
         && isOptString(data, 'createdAt', 100);
     }
@@ -202,9 +385,9 @@ service cloud.firestore {
         && isOptString(data, 'dueDate', 100)
         && isOptString(data, 'category', 100)
         && isOptString(data, 'description', 500)
-        && isOptNumber(data, 'totalAmountUSD')
-        && isOptNumber(data, 'paidAmountUSD')
-        && isOptNumber(data, 'remainingUSD')
+        && isOptNonNegNumber(data, 'totalAmountUSD')
+        && isOptNonNegNumber(data, 'paidAmountUSD')
+        && isOptNonNegNumber(data, 'remainingUSD')
         && isOptString(data, 'status', 50)
         && isOptString(data, 'notes', 1000)
         && isOptList(data, 'abonos', 500);
@@ -224,19 +407,19 @@ service cloud.firestore {
         && isOptString(data, 'supplierRIF', 50)
         && isOptString(data, 'supplierPhone', 50)
         && isOptString(data, 'invoiceNumber', 100)
-        && isOptNumber(data, 'amountUSD')
-        && isOptNumber(data, 'amountBs')
-        && isOptNumber(data, 'bcvRate')
+        && isOptNonNegNumber(data, 'amountUSD')
+        && isOptNonNegNumber(data, 'amountBs')
+        && isOptPosNumber(data, 'bcvRate')
         && isOptString(data, 'enteredCurrency', 10)
-        && isOptNumber(data, 'paidAmountUSD')
-        && isOptNumber(data, 'remainingUSD')
+        && isOptNonNegNumber(data, 'paidAmountUSD')
+        && isOptNonNegNumber(data, 'remainingUSD')
         && isOptString(data, 'status', 50)
         && isOptString(data, 'paymentDate', 100)
         && isOptString(data, 'paymentMethod', 50)
         && isOptString(data, 'bankAccountId', 128)
         && isOptString(data, 'bankAccountLabel', 200)
         && isOptString(data, 'treasuryAccountId', 128)
-        && isOptNumber(data, 'bankFeeAmount')
+        && isOptNonNegNumber(data, 'bankFeeAmount')
         && isOptString(data, 'bankFeeCurrency', 10)
         && isOptString(data, 'reference', 100)
         && isOptString(data, 'notes', 1000)
@@ -251,12 +434,12 @@ service cloud.firestore {
         && isOptString(data, 'openedDateFormatted', 100)
         && isOptString(data, 'closedAt', 100)
         && isOptString(data, 'closedDateFormatted', 100)
-        && isOptNumber(data, 'initialCashUSD')
-        && isOptNumber(data, 'initialCashBs')
+        && isOptNonNegNumber(data, 'initialCashUSD')
+        && isOptNonNegNumber(data, 'initialCashBs')
         && isOptNumber(data, 'expectedCashUSD')
         && isOptNumber(data, 'expectedCashBs')
-        && isOptNumber(data, 'countedCashUSD')
-        && isOptNumber(data, 'countedCashBs')
+        && isOptNonNegNumber(data, 'countedCashUSD')
+        && isOptNonNegNumber(data, 'countedCashBs')
         && isOptNumber(data, 'differenceUSD')
         && isOptNumber(data, 'differenceBs')
         && isOptString(data, 'notes', 1000)
@@ -266,9 +449,9 @@ service cloud.firestore {
         && isOptNumber(data, 'previousCloseCashBs')
         && isOptNumber(data, 'openingDifferenceUSD')
         && isOptNumber(data, 'openingDifferenceBs')
-        && isOptNumber(data, 'openingMatchedOutflowsUSD')
-        && isOptNumber(data, 'openingMatchedOutflowsBs')
-        && isOptNumber(data, 'openingMatchedMovementsCount')
+        && isOptNonNegNumber(data, 'openingMatchedOutflowsUSD')
+        && isOptNonNegNumber(data, 'openingMatchedOutflowsBs')
+        && isOptNonNegNumber(data, 'openingMatchedMovementsCount')
         && isOptString(data, 'openingDifferenceReason', 150)
         && isOptString(data, 'openingDifferenceNotes', 1000)
         && isOptString(data, 'closedNotes', 1000)
@@ -277,19 +460,19 @@ service cloud.firestore {
         && isOptNumber(data, 'totalSalesUSD')
         && isOptNumber(data, 'totalSalesBs')
         && isOptMap(data, 'salesBreakdown', 30)
-        && isOptNumber(data, 'transactionsCount')
-        && isOptNumber(data, 'totalExpensesUSD')
-        && isOptNumber(data, 'totalExpensesBs')
-        && isOptNumber(data, 'totalOwnerSalaryUSD')
-        && isOptNumber(data, 'totalOwnerSalaryBs')
-        && isOptNumber(data, 'totalOwnerWithdrawalsUSD')
-        && isOptNumber(data, 'totalOwnerWithdrawalsBs')
-        && isOptNumber(data, 'totalCreditNotesUSD')
-        && isOptNumber(data, 'totalCreditNotesBs')
-        && isOptNumber(data, 'totalFiadoAbonosUSD')
-        && isOptNumber(data, 'totalFiadoAbonosBs')
-        && isOptNumber(data, 'totalLoansInflowUSD')
-        && isOptNumber(data, 'totalLoansInflowBs')
+        && isOptNonNegNumber(data, 'transactionsCount')
+        && isOptNonNegNumber(data, 'totalExpensesUSD')
+        && isOptNonNegNumber(data, 'totalExpensesBs')
+        && isOptNonNegNumber(data, 'totalOwnerSalaryUSD')
+        && isOptNonNegNumber(data, 'totalOwnerSalaryBs')
+        && isOptNonNegNumber(data, 'totalOwnerWithdrawalsUSD')
+        && isOptNonNegNumber(data, 'totalOwnerWithdrawalsBs')
+        && isOptNonNegNumber(data, 'totalCreditNotesUSD')
+        && isOptNonNegNumber(data, 'totalCreditNotesBs')
+        && isOptNonNegNumber(data, 'totalFiadoAbonosUSD')
+        && isOptNonNegNumber(data, 'totalFiadoAbonosBs')
+        && isOptNonNegNumber(data, 'totalLoansInflowUSD')
+        && isOptNonNegNumber(data, 'totalLoansInflowBs')
         && isOptList(data, 'initialBanks', 100);
     }
 
@@ -298,16 +481,17 @@ service cloud.firestore {
         && isOptString(data, 'updatedAt', 100)
         && isOptMap(data, 'businessInfo', 30)
         && (!('businessInfo' in data) || data.businessInfo == null || isOptString(data.businessInfo, 'logoUrl', 350000))
-        && isOptNumber(data, 'bcvRate')
-        && isOptNumber(data, 'bcvEuroRate')
+        && isOptPosNumber(data, 'bcvRate')
+        && isOptPosNumber(data, 'bcvEuroRate')
         && isOptString(data, 'bcvLastUpdatedDate', 50)
         && isOptString(data, 'bcvLastUpdatedAt', 100)
         && isOptString(data, 'lastRatePromptDate', 50)
-        && isOptNumber(data, 'lastPromptedBcvRate')
-        && isOptNumber(data, 'lastPromptedBcvEuroRate')
-        && isOptNumber(data, 'commercialRoundingStep')
+        && isOptPosNumber(data, 'lastPromptedBcvRate')
+        && isOptPosNumber(data, 'lastPromptedBcvEuroRate')
+        && isOptNonNegNumber(data, 'commercialRoundingStep')
         && (!('baseCurrency' in data) || data.baseCurrency == null || data.baseCurrency in ['USD', 'VED'])
         && isOptString(data, 'managerPin', 32)
+        && isOptString(data, 'managerPinHash', 200)
         && isOptString(data, 'lastUpdatedBy', 200)
         && isOptList(data, 'customCategories', 200)
         && isOptList(data, 'rateHistory', 1000);
@@ -317,7 +501,7 @@ service cloud.firestore {
       return data is map
         && isOptBool(data, 'isOpen')
         && isOptMap(data, 'activeShift', 60)
-        && (!('activeShift' in data) || data.activeShift == null || isValidCashShift(data.activeShift))
+        && (!('activeShift' in data) || data.activeShift == null || (isValidCashShift(data.activeShift) && data.activeShift.keys().hasOnly(allowedCashShiftKeys())))
         && isOptString(data, 'updatedAt', 100)
         && isOptString(data, 'updatedBy', 200)
         && isOptString(data, 'terminalId', 128)
@@ -337,19 +521,19 @@ service cloud.firestore {
         && isOptString(data, 'clientRIF', 50)
         && isOptString(data, 'clientPhone', 50)
         && isOptString(data, 'clientAddress', 500)
-        && isOptNumber(data, 'subtotalUSD')
-        && isOptNumber(data, 'exemptUSD')
-        && isOptNumber(data, 'taxableUSD')
-        && isOptNumber(data, 'ivaUSD')
-        && isOptNumber(data, 'igtfUSD')
-        && isOptNumber(data, 'totalUSD')
-        && isOptNumber(data, 'subtotalBs')
-        && isOptNumber(data, 'exemptBs')
-        && isOptNumber(data, 'taxableBs')
-        && isOptNumber(data, 'ivaBs')
-        && isOptNumber(data, 'igtfBs')
-        && isOptNumber(data, 'totalBs')
-        && isOptNumber(data, 'bcvRate')
+        && isOptNonNegNumber(data, 'subtotalUSD')
+        && isOptNonNegNumber(data, 'exemptUSD')
+        && isOptNonNegNumber(data, 'taxableUSD')
+        && isOptNonNegNumber(data, 'ivaUSD')
+        && isOptNonNegNumber(data, 'igtfUSD')
+        && isOptNonNegNumber(data, 'totalUSD')
+        && isOptNonNegNumber(data, 'subtotalBs')
+        && isOptNonNegNumber(data, 'exemptBs')
+        && isOptNonNegNumber(data, 'taxableBs')
+        && isOptNonNegNumber(data, 'ivaBs')
+        && isOptNonNegNumber(data, 'igtfBs')
+        && isOptNonNegNumber(data, 'totalBs')
+        && isOptPosNumber(data, 'bcvRate')
         && isOptString(data, 'reason', 500)
         && isOptString(data, 'refundMethod', 50)
         && isOptString(data, 'bankAccountId', 128)
@@ -368,14 +552,15 @@ service cloud.firestore {
         && isOptString(data, 'productName', 200)
         && isOptString(data, 'productCode', 100)
         && isOptString(data, 'category', 100)
-        && isOptNumber(data, 'quantity')
-        && isOptNumber(data, 'unitCostUSD')
-        && isOptNumber(data, 'totalLossUSD')
-        && isOptNumber(data, 'totalLossBs')
-        && isOptNumber(data, 'bcvRate')
+        && isOptNonNegNumber(data, 'quantity')
+        && isOptNonNegNumber(data, 'unitCostUSD')
+        && isOptNonNegNumber(data, 'totalLossUSD')
+        && isOptNonNegNumber(data, 'totalLossBs')
+        && isOptPosNumber(data, 'bcvRate')
         && isOptString(data, 'reason', 100)
         && isOptString(data, 'notes', 1000)
-        && isOptString(data, 'responsibleName', 100);
+        && isOptString(data, 'responsibleName', 100)
+        && isOptString(data, 'syncStatus', 50);
     }
 
     function isValidKardexEntry(data) {
@@ -388,14 +573,14 @@ service cloud.firestore {
         && isOptString(data, 'category', 100)
         && isOptString(data, 'type', 50)
         && isOptNumber(data, 'quantityChange')
-        && isOptNumber(data, 'previousStock')
-        && isOptNumber(data, 'newStock')
-        && isOptNumber(data, 'unitCostUSD')
-        && isOptNumber(data, 'totalCostUSD')
+        && isOptNonNegNumber(data, 'previousStock')
+        && isOptNonNegNumber(data, 'newStock')
+        && isOptNonNegNumber(data, 'unitCostUSD')
+        && isOptNonNegNumber(data, 'totalCostUSD')
         && isOptString(data, 'valuationMethod', 50)
-        && isOptNumber(data, 'fifoBalanceUSD')
-        && isOptNumber(data, 'avgCostUSD')
-        && isOptNumber(data, 'avgBalanceUSD')
+        && isOptNonNegNumber(data, 'fifoBalanceUSD')
+        && isOptNonNegNumber(data, 'avgCostUSD')
+        && isOptNonNegNumber(data, 'avgBalanceUSD')
         && isOptString(data, 'reference', 150)
         && isOptString(data, 'notes', 1000)
         && isOptString(data, 'userName', 120);
@@ -409,8 +594,8 @@ service cloud.firestore {
         && isOptString(data, 'phone', 50)
         && isOptString(data, 'address', 500)
         && isOptString(data, 'email', 200)
-        && isOptNumber(data, 'creditDays')
-        && isOptNumber(data, 'accumulatedBalanceUSD')
+        && isOptNonNegNumber(data, 'creditDays')
+        && isOptNonNegNumber(data, 'accumulatedBalanceUSD')
         && isOptString(data, 'notes', 1000)
         && isOptString(data, 'createdAt', 100);
     }
@@ -426,13 +611,13 @@ service cloud.firestore {
         && isOptString(data, 'grantDate', 100)
         && isOptString(data, 'dueDate', 100)
         && isOptString(data, 'enteredCurrency', 10)
-        && isOptNumber(data, 'originalAmountUSD')
-        && isOptNumber(data, 'originalAmountBs')
-        && isOptNumber(data, 'bcvRate')
-        && isOptNumber(data, 'paidAmountUSD')
-        && isOptNumber(data, 'paidAmountBs')
-        && isOptNumber(data, 'remainingUSD')
-        && isOptNumber(data, 'remainingBs')
+        && isOptNonNegNumber(data, 'originalAmountUSD')
+        && isOptNonNegNumber(data, 'originalAmountBs')
+        && isOptPosNumber(data, 'bcvRate')
+        && isOptNonNegNumber(data, 'paidAmountUSD')
+        && isOptNonNegNumber(data, 'paidAmountBs')
+        && isOptNonNegNumber(data, 'remainingUSD')
+        && isOptNonNegNumber(data, 'remainingBs')
         && isOptString(data, 'cashDestination', 50)
         && isOptString(data, 'bankAccountId', 128)
         && isOptString(data, 'bankAccountLabel', 200)
@@ -469,11 +654,10 @@ service cloud.firestore {
         && isOptString(data, 'accountName', 200)
         && (!('accountCurrency' in data) || data.accountCurrency == null || data.accountCurrency in ['USD', 'Bs'])
         && (!('direction' in data) || data.direction == null || data.direction in ['in', 'out'])
-        && isOptNumber(data, 'amount')
-        && (!('amount' in data) || data.amount == null || data.amount >= 0)
+        && isOptNonNegNumber(data, 'amount')
         && isOptNumber(data, 'balanceBefore')
         && isOptNumber(data, 'balanceAfter')
-        && isOptNumber(data, 'bcvRate')
+        && isOptPosNumber(data, 'bcvRate')
         && isOptString(data, 'type', 50)
         && isOptString(data, 'concept', 300)
         && isOptString(data, 'reference', 150)
@@ -483,7 +667,7 @@ service cloud.firestore {
         && isOptString(data, 'transferPairId', 128)
         && isOptString(data, 'counterpartyAccountId', 128)
         && isOptString(data, 'counterpartyAccountName', 200)
-        && isOptNumber(data, 'exchangeRateUsed')
+        && isOptPosNumber(data, 'exchangeRateUsed')
         && isOptString(data, 'notes', 1000)
         && isOptString(data, 'createdBy', 120);
     }
@@ -495,104 +679,260 @@ service cloud.firestore {
       match /products/{productId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(productId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(productId) && isValidProduct(incoming()) && matchesDocId(incoming(), productId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(productId)
+          && matchesDocId(incoming(), productId)
+          && incoming().keys().hasAll(['id', 'name', 'priceUSD', 'stock'])
+          && incoming().keys().hasOnly(allowedProductKeys())
+          && isValidProduct(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(productId)
+          && matchesDocId(incoming(), productId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedProductKeys())
+          && isValidProduct(incoming());
       }
 
       match /sales/{saleId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(saleId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(saleId) && isValidSale(incoming()) && matchesDocId(incoming(), saleId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(saleId)
+          && matchesDocId(incoming(), saleId)
+          && incoming().keys().hasAll(['id', 'date', 'invoiceNumber', 'totalUSD', 'paymentMethod', 'status'])
+          && incoming().keys().hasOnly(allowedSaleKeys())
+          && isValidSale(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(saleId)
+          && matchesDocId(incoming(), saleId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedSaleKeys())
+          && isValidSale(incoming());
       }
 
       match /expenses/{expenseId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(expenseId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(expenseId) && isValidExpense(incoming()) && matchesDocId(incoming(), expenseId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(expenseId)
+          && matchesDocId(incoming(), expenseId)
+          && incoming().keys().hasAll(['id', 'date', 'category', 'amountUSD', 'amountBs'])
+          && incoming().keys().hasOnly(allowedExpenseKeys())
+          && isValidExpense(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(expenseId)
+          && matchesDocId(incoming(), expenseId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedExpenseKeys())
+          && isValidExpense(incoming());
       }
 
       match /fiados/{fiadoId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(fiadoId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(fiadoId) && isValidFiado(incoming()) && matchesDocId(incoming(), fiadoId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(fiadoId)
+          && matchesDocId(incoming(), fiadoId)
+          && incoming().keys().hasAll(['id', 'clientName', 'originalDebtUSD', 'remainingDebtUSD', 'status'])
+          && incoming().keys().hasOnly(allowedFiadoKeys())
+          && isValidFiado(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(fiadoId)
+          && matchesDocId(incoming(), fiadoId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedFiadoKeys())
+          && isValidFiado(incoming());
       }
 
       match /clients/{clientId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(clientId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(clientId) && isValidClient(incoming()) && matchesDocId(incoming(), clientId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(clientId)
+          && matchesDocId(incoming(), clientId)
+          && incoming().keys().hasAll(['id', 'name'])
+          && incoming().keys().hasOnly(allowedClientKeys())
+          && isValidClient(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(clientId)
+          && matchesDocId(incoming(), clientId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedClientKeys())
+          && isValidClient(incoming());
       }
 
       match /cuentasPorPagar/{cuentaId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(cuentaId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(cuentaId) && isValidCuentaPorPagar(incoming()) && matchesDocId(incoming(), cuentaId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(cuentaId)
+          && matchesDocId(incoming(), cuentaId)
+          && incoming().keys().hasAll(['id', 'supplierName', 'invoiceNumber', 'totalAmountUSD', 'status'])
+          && incoming().keys().hasOnly(allowedCuentaPorPagarKeys())
+          && isValidCuentaPorPagar(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(cuentaId)
+          && matchesDocId(incoming(), cuentaId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedCuentaPorPagarKeys())
+          && isValidCuentaPorPagar(incoming());
       }
 
       match /gastosOperativos/{gastoId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(gastoId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(gastoId) && isValidGastoOperativo(incoming()) && matchesDocId(incoming(), gastoId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(gastoId)
+          && matchesDocId(incoming(), gastoId)
+          && incoming().keys().hasAll(['id', 'concept', 'category', 'amountUSD', 'status'])
+          && incoming().keys().hasOnly(allowedGastoOperativoKeys())
+          && isValidGastoOperativo(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(gastoId)
+          && matchesDocId(incoming(), gastoId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedGastoOperativoKeys())
+          && isValidGastoOperativo(incoming());
       }
 
       match /cashShiftHistory/{shiftId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(shiftId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(shiftId) && isValidCashShift(incoming()) && matchesDocId(incoming(), shiftId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(shiftId)
+          && matchesDocId(incoming(), shiftId)
+          && incoming().keys().hasAll(['id', 'isOpen', 'openedAt'])
+          && incoming().keys().hasOnly(allowedCashShiftKeys())
+          && isValidCashShift(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(shiftId)
+          && matchesDocId(incoming(), shiftId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedCashShiftKeys())
+          && isValidCashShift(incoming());
       }
 
       match /businessProfile/{docId} {
         allow get: if isVerifiedOwner(userId) && docId == 'profile';
         allow list, delete: if false;
-        allow create, update: if isVerifiedOwner(userId) && docId == 'profile' && isValidBusinessProfile(incoming());
+        allow create: if isVerifiedOwner(userId)
+          && docId == 'profile'
+          && incoming().keys().hasAll(['updatedAt'])
+          && incoming().keys().hasOnly(allowedBusinessProfileKeys())
+          && isValidBusinessProfile(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && docId == 'profile'
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedBusinessProfileKeys())
+          && isValidBusinessProfile(incoming());
       }
 
       match /cashRegister/{docId} {
         allow get: if isVerifiedOwner(userId) && docId == 'status';
         allow list, delete: if false;
-        allow create, update: if isVerifiedOwner(userId) && docId == 'status' && isValidCashRegister(incoming());
+        allow create: if isVerifiedOwner(userId)
+          && docId == 'status'
+          && incoming().keys().hasAll(['isOpen', 'updatedAt'])
+          && incoming().keys().hasOnly(allowedCashRegisterKeys())
+          && isValidCashRegister(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && docId == 'status'
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedCashRegisterKeys())
+          && isValidCashRegister(incoming());
       }
 
       match /creditNotes/{noteId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(noteId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(noteId) && isValidCreditNote(incoming()) && matchesDocId(incoming(), noteId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(noteId)
+          && matchesDocId(incoming(), noteId)
+          && incoming().keys().hasAll(['id', 'creditNoteNumber', 'saleId', 'totalUSD', 'reason', 'refundMethod'])
+          && incoming().keys().hasOnly(allowedCreditNoteKeys())
+          && isValidCreditNote(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(noteId)
+          && matchesDocId(incoming(), noteId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedCreditNoteKeys())
+          && isValidCreditNote(incoming());
       }
 
       match /inventoryDischarges/{dischargeId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(dischargeId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(dischargeId) && isValidInventoryDischarge(incoming()) && matchesDocId(incoming(), dischargeId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(dischargeId)
+          && matchesDocId(incoming(), dischargeId)
+          && incoming().keys().hasAll(['id', 'dischargeNumber', 'productId', 'quantity', 'reason', 'totalLossUSD'])
+          && incoming().keys().hasOnly(allowedInventoryDischargeKeys())
+          && isValidInventoryDischarge(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(dischargeId)
+          && matchesDocId(incoming(), dischargeId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedInventoryDischargeKeys())
+          && isValidInventoryDischarge(incoming());
       }
 
       match /kardex/{kardexId} {
         allow list: if isVerifiedOwner(userId);
         allow get: if isVerifiedOwner(userId) && isValidId(kardexId);
-        allow create: if isVerifiedOwner(userId) && isValidId(kardexId) && isValidKardexEntry(incoming()) && matchesDocId(incoming(), kardexId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(kardexId)
+          && matchesDocId(incoming(), kardexId)
+          && incoming().keys().hasAll(['id', 'date', 'productId', 'type', 'quantityChange', 'previousStock', 'newStock', 'unitCostUSD', 'totalCostUSD', 'valuationMethod'])
+          && incoming().keys().hasOnly(allowedKardexKeys())
+          && isValidKardexEntry(incoming());
         allow update, delete: if false;
       }
 
       match /suppliers/{supplierId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(supplierId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(supplierId) && isValidSupplier(incoming()) && matchesDocId(incoming(), supplierId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(supplierId)
+          && matchesDocId(incoming(), supplierId)
+          && incoming().keys().hasAll(['id', 'name'])
+          && incoming().keys().hasOnly(allowedSupplierKeys())
+          && isValidSupplier(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(supplierId)
+          && matchesDocId(incoming(), supplierId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedSupplierKeys())
+          && isValidSupplier(incoming());
       }
 
       match /loans/{loanId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(loanId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(loanId) && isValidLoan(incoming()) && matchesDocId(incoming(), loanId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(loanId)
+          && matchesDocId(incoming(), loanId)
+          && incoming().keys().hasAll(['id', 'lenderName', 'grantDate', 'dueDate', 'enteredCurrency', 'originalAmountUSD', 'originalAmountBs', 'cashDestination', 'status', 'createdAt'])
+          && incoming().keys().hasOnly(allowedLoanKeys())
+          && isValidLoan(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(loanId)
+          && matchesDocId(incoming(), loanId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedLoanKeys())
+          && isValidLoan(incoming());
       }
 
       match /bankAccounts/{accountId} {
         allow list: if isVerifiedOwner(userId);
         allow get, delete: if isVerifiedOwner(userId) && isValidId(accountId);
-        allow create, update: if isVerifiedOwner(userId) && isValidId(accountId) && isValidTreasuryAccount(incoming()) && matchesDocId(incoming(), accountId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(accountId)
+          && matchesDocId(incoming(), accountId)
+          && incoming().keys().hasAll(['id', 'name', 'accountType', 'currency', 'balance', 'initialBalance', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(allowedTreasuryAccountKeys())
+          && isValidTreasuryAccount(incoming());
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(accountId)
+          && matchesDocId(incoming(), accountId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(allowedTreasuryAccountKeys())
+          && isValidTreasuryAccount(incoming());
       }
 
       match /treasuryMovements/{movementId} {
         allow list: if isVerifiedOwner(userId);
         allow get: if isVerifiedOwner(userId) && isValidId(movementId);
-        allow create: if isVerifiedOwner(userId) && isValidId(movementId) && isValidTreasuryMovement(incoming()) && matchesDocId(incoming(), movementId);
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(movementId)
+          && matchesDocId(incoming(), movementId)
+          && incoming().keys().hasAll(['id', 'date', 'accountId', 'accountName', 'accountCurrency', 'direction', 'amount', 'balanceBefore', 'balanceAfter', 'bcvRate', 'type', 'concept'])
+          && incoming().keys().hasOnly(allowedTreasuryMovementKeys())
+          && isValidTreasuryMovement(incoming());
         allow update, delete: if false;
       }
     }

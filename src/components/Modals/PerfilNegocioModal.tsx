@@ -25,12 +25,11 @@ import {
   Lock,
   Server,
   HardDrive,
-  CheckCircle2,
-  Copy
+  CheckCircle2
 } from 'lucide-react';
 import { PagoMovilAccount, POSTerminal, BankAccount } from '../../types';
 import { BackupDriveModal } from './BackupDriveModal';
-import firestoreRulesSource from '../../../firestore.rules?raw';
+import { sanitizeImageUrl } from '../../utils/exportUtils';
 
 interface PerfilNegocioModalProps {
   isOpen: boolean;
@@ -43,7 +42,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
     updateBusinessInfo, 
     factoryReset, 
     setActiveTab, 
-    managerPin, 
+    verifyManagerPin, 
     setIsGoogleModalOpen, 
     logoutGoogle, 
     googleUser
@@ -100,7 +99,6 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
   const [newBankHolder, setNewBankHolder] = useState('');
   const [newBankCI, setNewBankCI] = useState('');
   const [newBankEmail, setNewBankEmail] = useState('');
-  const [copiedFirestoreRules, setCopiedFirestoreRules] = useState(false);
 
   // Account CRUD async state & delete confirmation modal
   const [isSavingAccountAction, setIsSavingAccountAction] = useState(false);
@@ -213,7 +211,12 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
               compressed = jpegFallback;
             }
           }
-          const finalUrl = compressed.length < rawDataUrl.length ? compressed : rawDataUrl;
+          const rawCandidate = compressed.length < rawDataUrl.length ? compressed : rawDataUrl;
+          const finalUrl = sanitizeImageUrl(rawCandidate);
+          if (!finalUrl) {
+            setLogoError('Formato de imagen no permitido. Usa PNG, JPG, WEBP o GIF.');
+            return;
+          }
           if (finalUrl.length > 340000) {
             setLogoError('El logo supera los 340KB incluso comprimido. Usa una imagen más ligera.');
             return;
@@ -222,17 +225,23 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
             ...prev,
             logoUrl: finalUrl
           }));
-        } else if (rawDataUrl.length <= 340000) {
-          setFormData(prev => ({ ...prev, logoUrl: rawDataUrl }));
         } else {
-          setLogoError('El logo supera los 340KB permitidos por Cloud Firestore.');
+          const safeRaw = sanitizeImageUrl(rawDataUrl);
+          if (!safeRaw) {
+            setLogoError('Formato de imagen no permitido. Usa PNG, JPG, WEBP o GIF.');
+          } else if (safeRaw.length <= 340000) {
+            setFormData(prev => ({ ...prev, logoUrl: safeRaw }));
+          } else {
+            setLogoError('El logo supera los 340KB permitidos por Cloud Firestore.');
+          }
         }
       };
       img.onerror = () => {
-        if (rawDataUrl.length <= 340000) {
-          setFormData(prev => ({ ...prev, logoUrl: rawDataUrl }));
+        const safeRaw = sanitizeImageUrl(rawDataUrl);
+        if (safeRaw && safeRaw.length <= 340000) {
+          setFormData(prev => ({ ...prev, logoUrl: safeRaw }));
         } else {
-          setLogoError('No se pudo comprimir el logo seleccionado.');
+          setLogoError('No se pudo procesar o validar el logo seleccionado (usa PNG, JPG, WEBP o GIF).');
         }
       };
       img.src = rawDataUrl;
@@ -518,7 +527,13 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
-    if (formData.logoUrl && formData.logoUrl.length > 340000) {
+    const trimmedLogo = formData.logoUrl.trim();
+    const safeLogoUrl = trimmedLogo ? sanitizeImageUrl(trimmedLogo) : '';
+    if (trimmedLogo && !safeLogoUrl) {
+      setSaveError('El formato del logo no es válido. Usa una imagen PNG, JPG, WEBP, GIF o URL HTTPS.');
+      return;
+    }
+    if (safeLogoUrl.length > 340000) {
       setSaveError('El logo excede el límite permitido (340KB). Quita o reemplaza la imagen antes de guardar.');
       return;
     }
@@ -529,6 +544,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
     try {
       await updateBusinessInfo({
         ...formData,
+        logoUrl: safeLogoUrl,
         pagoMovilBank: defaultPM?.bank || formData.pagoMovilBank,
         pagoMovilPhone: defaultPM?.phone || formData.pagoMovilPhone,
         pagoMovilCI: defaultPM?.ci || formData.pagoMovilCI,
@@ -560,15 +576,19 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
     e.preventDefault();
     if (isSaving) return;
     const pin = pinConfirmation.trim();
-    const expectedPin = (managerPin || '1234').trim();
-    if (!pin || pin !== expectedPin) {
+    if (!pin) {
       setResetError('Clave de gerente incorrecta. Verifique su PIN de autorización.');
       return;
     }
-    
+
     setIsSaving(true);
     setResetError('');
     try {
+      const isValidPin = await verifyManagerPin(pin);
+      if (!isValidPin) {
+        setResetError('Clave de gerente incorrecta. Verifique su PIN de autorización.');
+        return;
+      }
       await updateBusinessInfo(formData);
       await factoryReset(resetMode);
       
@@ -713,8 +733,8 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                 
                 <div className="flex flex-col sm:flex-row items-center gap-4">
                   <div className="w-20 h-20 rounded-2xl bg-white border border-slate-300 flex items-center justify-center overflow-hidden shrink-0 shadow-inner relative group">
-                    {formData.logoUrl ? (
-                      <img src={formData.logoUrl} alt="Logo" className="w-full h-full object-contain p-1" />
+                    {sanitizeImageUrl(formData.logoUrl) ? (
+                      <img src={sanitizeImageUrl(formData.logoUrl)} alt="Logo" className="w-full h-full object-contain p-1" />
                     ) : (
                       <div className="flex flex-col items-center justify-center text-slate-400">
                         <ImageIcon className="w-6 h-6 stroke-1 mb-1" />
@@ -1622,32 +1642,14 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                 </div>
               </div>
 
-              {/* Firestore Security Rules Copy Helper */}
-              <div className="border border-blue-200 rounded-2xl p-4 bg-blue-50/40 space-y-3 shadow-xs">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs font-black text-[#0B1528] uppercase tracking-wider">
-                    <ShieldCheck className="w-4 h-4 text-[#1D4ED8]" />
-                    <span>Reglas de Firestore (firestore.rules)</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(firestoreRulesSource);
-                        setCopiedFirestoreRules(true);
-                        setTimeout(() => setCopiedFirestoreRules(false), 3000);
-                      } catch {
-                        setCopiedFirestoreRules(false);
-                      }
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-[#1D4ED8] hover:bg-blue-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
-                  >
-                    {copiedFirestoreRules ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedFirestoreRules ? 'Reglas copiadas' : 'Copiar firestore.rules'}</span>
-                  </button>
+              {/* Firestore Security Rules Deployment Note */}
+              <div className="border border-blue-200 rounded-2xl p-4 bg-blue-50/40 space-y-2 shadow-xs">
+                <div className="flex items-center gap-2 text-xs font-black text-[#0B1528] uppercase tracking-wider">
+                  <ShieldCheck className="w-4 h-4 text-[#1D4ED8]" />
+                  <span>Reglas de Firestore (firestore.rules)</span>
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed">
-                  Si utilizas tu propio proyecto en Firebase Console, pega estas reglas en <strong>Firestore Database → Reglas → Publicar</strong> para habilitar todas las colecciones aisladas bajo <code className="font-mono font-bold text-[#0B1528]">users/{'{userId}'}</code> (incluyendo <code className="font-mono">suppliers</code>, <code className="font-mono">kardex</code> y <code className="font-mono">loans</code>).
+                  Las reglas de seguridad se mantienen únicamente en el repositorio del proyecto (<code className="font-mono font-bold text-[#0B1528]">firestore.rules</code>) y nunca se exponen en la app compilada. Para actualizarlas en tu proyecto Firebase, ejecuta <code className="font-mono font-bold bg-blue-100/80 px-1.5 py-0.5 rounded text-[#0B1528]">firebase deploy --only firestore:rules</code> o publica el archivo desde <strong>Firestore Database → Reglas → Publicar</strong> para proteger todas las colecciones bajo <code className="font-mono font-bold text-[#0B1528]">users/{'{userId}'}</code>.
                 </p>
               </div>
 

@@ -15,7 +15,7 @@ import {
 import { 
   downloadComprehensiveAccountingExcel, 
   downloadSystemBackupJSON, 
-  BackupDataPayload 
+  sanitizeBackupPayload
 } from '../../utils/cloudBackupUtils';
 
 interface BackupDriveModalProps {
@@ -133,16 +133,22 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
     e.target.value = '';
     if (!file) return;
 
+    const MAX_BACKUP_BYTES = 25 * 1024 * 1024;
+    if (file.size > MAX_BACKUP_BYTES) {
+      setDownloadFeedback('El archivo de respaldo excede el límite máximo permitido (25 MB).');
+      scheduleTimer(() => setDownloadFeedback(null), 5000);
+      return;
+    }
+
     setIsRestoring(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
-        const content = event.target?.result as string;
-        const parsed = JSON.parse(content) as BackupDataPayload;
-
-        if (!parsed || !Array.isArray(parsed.products) || !Array.isArray(parsed.sales)) {
-          throw new Error('El archivo no tiene el formato válido de copia de seguridad de PosVenecia.');
+        const content = event.target?.result;
+        if (typeof content !== 'string') {
+          throw new Error('El contenido del archivo no es un JSON válido.');
         }
+        const parsed = sanitizeBackupPayload(JSON.parse(content));
 
         await restoreDatabase(parsed);
 
@@ -234,7 +240,9 @@ export const BackupDriveModal: React.FC<BackupDriveModalProps> = ({ isOpen, onCl
       await logoutGoogle();
       onClose();
     } catch (e) {
-      console.error(e);
+      if (import.meta.env.DEV) {
+        console.error(e);
+      }
       onClose();
     }
   };

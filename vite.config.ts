@@ -97,6 +97,8 @@ export default defineConfig(() => {
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
     build: {
+      sourcemap: false,
+      minify: true,
       chunkSizeWarningLimit: 700,
       rolldownOptions: {
         output: {

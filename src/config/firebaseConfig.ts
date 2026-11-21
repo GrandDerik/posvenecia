@@ -89,24 +89,31 @@ export interface FirestoreErrorInfo {
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
   const errMessage = error instanceof Error ? error.message : String(error);
-  const errInfo: FirestoreErrorInfo = {
-    error: errMessage,
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: import.meta.env.DEV ? auth.currentUser?.email : undefined,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: import.meta.env.DEV
-        ? auth.currentUser?.providerData?.map(provider => ({
-            providerId: provider.providerId,
-            email: provider.email,
-          })) || []
-        : []
-    },
-    operationType,
-    path
-  };
+  const errInfo: FirestoreErrorInfo = import.meta.env.DEV
+    ? {
+        error: errMessage,
+        authInfo: {
+          userId: auth.currentUser?.uid,
+          email: auth.currentUser?.email,
+          emailVerified: auth.currentUser?.emailVerified,
+          isAnonymous: auth.currentUser?.isAnonymous,
+          tenantId: auth.currentUser?.tenantId,
+          providerInfo:
+            auth.currentUser?.providerData?.map(provider => ({
+              providerId: provider.providerId,
+              email: provider.email,
+            })) || []
+        },
+        operationType,
+        path
+      }
+    : {
+        error: errMessage,
+        authInfo: {},
+        operationType,
+        path: null
+      };
+
   if (import.meta.env.DEV) {
     console.error('Firestore Error: ', JSON.stringify(errInfo));
   } else {

@@ -18,7 +18,7 @@ import {
   Cloud,
   Landmark
 } from 'lucide-react';
-import { formatBs } from '../utils/exportUtils';
+import { formatBs, sanitizeImageUrl } from '../utils/exportUtils';
 import { GoogleSyncModal } from './Modals/GoogleSyncModal';
 
 export const Navbar: React.FC = () => {
@@ -135,8 +135,8 @@ export const Navbar: React.FC = () => {
             onClick={() => setActiveTab('inicio')}
           >
             <div className="w-10 h-10 rounded-xl bg-[#0B1528] border border-slate-800 flex flex-col items-center justify-center text-white shadow-xs relative overflow-hidden group shrink-0">
-              {businessInfo.logoUrl ? (
-                <img src={businessInfo.logoUrl} alt={businessInfo.name} className="w-full h-full object-cover" />
+              {sanitizeImageUrl(businessInfo.logoUrl) ? (
+                <img src={sanitizeImageUrl(businessInfo.logoUrl)} alt={businessInfo.name} className="w-full h-full object-cover" />
               ) : (
                 <>
                   <div className="flex items-center justify-center">
@@ -324,8 +324,8 @@ export const Navbar: React.FC = () => {
               title="Mi Perfil: Personalizar logo, RIF, dirección y datos del negocio"
             >
               <div className="w-6 h-6 rounded-full bg-blue-600 text-white font-extrabold flex items-center justify-center text-[11px] overflow-hidden shrink-0 border border-blue-400">
-                {businessInfo.logoUrl ? (
-                  <img src={businessInfo.logoUrl} alt={businessInfo.name} className="w-full h-full object-cover" />
+                {sanitizeImageUrl(businessInfo.logoUrl) ? (
+                  <img src={sanitizeImageUrl(businessInfo.logoUrl)} alt={businessInfo.name} className="w-full h-full object-cover" />
                 ) : (
                   <span>{businessInfo.name.charAt(0).toUpperCase() || 'P'}</span>
                 )}

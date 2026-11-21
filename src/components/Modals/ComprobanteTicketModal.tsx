@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Printer } from 'lucide-react';
 import { Sale, BusinessInfo } from '../../types';
-import { formatBs, formatUSD, round2, isCartItemExempt } from '../../utils/exportUtils';
+import { formatBs, formatUSD, round2, isCartItemExempt, sanitizeImageUrl } from '../../utils/exportUtils';
 import { generateTicketVentaPDF } from '../../utils/pdfReceiptUtils';
 
 interface ComprobanteTicketModalProps {
@@ -40,10 +40,10 @@ export const ComprobanteTicketModal: React.FC<ComprobanteTicketModalProps> = ({
             {/* Header */}
             <div className="text-center space-y-0.5 border-b border-dashed border-slate-300 pb-3">
               {/* Custom Business Logo if uploaded */}
-              {businessInfo.logoUrl && (
+              {sanitizeImageUrl(businessInfo.logoUrl) && (
                 <div className="flex justify-center mb-2">
                   <img 
-                    src={businessInfo.logoUrl} 
+                    src={sanitizeImageUrl(businessInfo.logoUrl)} 
                     alt={businessInfo.name} 
                     className="max-h-14 max-w-[140px] object-contain filter contrast-125"
                   />

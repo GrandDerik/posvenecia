@@ -1300,16 +1300,23 @@ export const CuentasPorPagarView: React.FC = () => {
                                 Doc: {gasto.invoiceNumber}
                               </span>
                             )}
-                            {gasto.supplierPhone && (
-                              <a
-                                href={`https://wa.me/58${gasto.supplierPhone.replace(/\D/g, '').slice(-10)}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-[#065F46] hover:underline font-semibold flex items-center gap-1 text-[11px]"
-                              >
-                                <Phone className="w-3 h-3" /> {gasto.supplierPhone}
-                              </a>
-                            )}
+                            {gasto.supplierPhone && (() => {
+                              const phoneDigits = gasto.supplierPhone.replace(/\D/g, '');
+                              return phoneDigits.length >= 7 ? (
+                                <a
+                                  href={`https://wa.me/58${phoneDigits.slice(-10)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[#065F46] hover:underline font-semibold flex items-center gap-1 text-[11px]"
+                                >
+                                  <Phone className="w-3 h-3" /> {gasto.supplierPhone}
+                                </a>
+                              ) : (
+                                <span className="text-slate-600 font-semibold flex items-center gap-1 text-[11px]">
+                                  <Phone className="w-3 h-3" /> {gasto.supplierPhone}
+                                </span>
+                              );
+                            })()}
                           </div>
                         )}
 
@@ -1418,9 +1425,13 @@ export const CuentasPorPagarView: React.FC = () => {
                         <div className="flex items-center gap-1 bg-[#FEECEF] px-2 py-1 rounded-xl border border-[#FBC4CD]">
                           <button
                             type="button"
-                            onClick={() => {
-                              deleteGastoOperativo(gasto.id);
-                              setConfirmDeleteId(null);
+                            onClick={async () => {
+                              try {
+                                await deleteGastoOperativo(gasto.id);
+                                setConfirmDeleteId(null);
+                              } catch {
+                                // Error ya notificado por AppContext
+                              }
                             }}
                             className="text-[11px] font-bold text-[#BE123C] hover:underline cursor-pointer"
                           >
@@ -1566,16 +1577,23 @@ export const CuentasPorPagarView: React.FC = () => {
                         <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-3 flex-wrap">
                           <span>Factura: <strong className="text-[#0B1528]">{cuenta.invoiceNumber}</strong></span>
                           {cuenta.controlNumber && <span>Control: <strong>{cuenta.controlNumber}</strong></span>}
-                          {cuenta.supplierPhone && (
-                            <a 
-                              href={`https://wa.me/58${cuenta.supplierPhone.replace(/\D/g, '').slice(-10)}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-[#065F46] hover:underline font-semibold flex items-center gap-1"
-                            >
-                              <Phone className="w-3 h-3" /> {cuenta.supplierPhone}
-                            </a>
-                          )}
+                          {cuenta.supplierPhone && (() => {
+                            const phoneDigits = cuenta.supplierPhone.replace(/\D/g, '');
+                            return phoneDigits.length >= 7 ? (
+                              <a
+                                href={`https://wa.me/58${phoneDigits.slice(-10)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[#065F46] hover:underline font-semibold flex items-center gap-1"
+                              >
+                                <Phone className="w-3 h-3" /> {cuenta.supplierPhone}
+                              </a>
+                            ) : (
+                              <span className="text-slate-600 font-semibold flex items-center gap-1">
+                                <Phone className="w-3 h-3" /> {cuenta.supplierPhone}
+                              </span>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -1677,7 +1695,11 @@ export const CuentasPorPagarView: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => deleteCuentaPorPagar(cuenta.id)}
+                        onClick={() => {
+                          deleteCuentaPorPagar(cuenta.id).catch((err) => {
+                            if (import.meta.env.DEV) console.warn('Error al eliminar cuenta por pagar:', err);
+                          });
+                        }}
                         className="p-1.5 rounded-xl bg-[#FEECEF] text-[#BE123C] border border-[#FBC4CD] hover:bg-rose-100 transition-colors cursor-pointer"
                         title="Eliminar factura"
                       >
@@ -2455,9 +2477,13 @@ export const CuentasPorPagarView: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    deleteGastoOperativo(detailGasto.id);
-                    setDetailGasto(null);
+                  onClick={async () => {
+                    try {
+                      await deleteGastoOperativo(detailGasto.id);
+                      setDetailGasto(null);
+                    } catch {
+                      // Error ya notificado por AppContext
+                    }
                   }}
                   className="px-3 py-1.5 bg-[#FEECEF] border border-[#FBC4CD] hover:bg-rose-100 text-[#BE123C] rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                 >
@@ -2550,9 +2576,13 @@ export const CuentasPorPagarView: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    deleteCuentaPorPagar(detailCuenta.id);
-                    setDetailCuenta(null);
+                  onClick={async () => {
+                    try {
+                      await deleteCuentaPorPagar(detailCuenta.id);
+                      setDetailCuenta(null);
+                    } catch {
+                      // Error ya notificado por AppContext
+                    }
                   }}
                   className="px-3 py-1.5 bg-[#FEECEF] border border-[#FBC4CD] hover:bg-rose-100 text-[#BE123C] rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
                 >
@@ -2993,16 +3023,23 @@ export const CuentasPorPagarView: React.FC = () => {
 
                     <div className="bg-[#F8FAFC] rounded-xl p-2.5 text-xs text-slate-600 border border-[#DCE4F0] space-y-1">
                       <div className="flex items-center gap-3 flex-wrap">
-                        {sup.phone && (
-                          <a
-                            href={`https://wa.me/58${sup.phone.replace(/\D/g, '').slice(-10)}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-[#065F46] hover:underline font-semibold flex items-center gap-1"
-                          >
-                            <Phone className="w-3 h-3" /> {sup.phone}
-                          </a>
-                        )}
+                        {sup.phone && (() => {
+                          const phoneDigits = sup.phone.replace(/\D/g, '');
+                          return phoneDigits.length >= 7 ? (
+                            <a
+                              href={`https://wa.me/58${phoneDigits.slice(-10)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[#065F46] hover:underline font-semibold flex items-center gap-1"
+                            >
+                              <Phone className="w-3 h-3" /> {sup.phone}
+                            </a>
+                          ) : (
+                            <span className="text-slate-600 font-semibold flex items-center gap-1">
+                              <Phone className="w-3 h-3" /> {sup.phone}
+                            </span>
+                          );
+                        })()}
                         {sup.email && (
                           <span className="flex items-center gap-1 text-slate-500">
                             <Mail className="w-3 h-3" /> {sup.email}

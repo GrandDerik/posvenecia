@@ -531,7 +531,9 @@ export const AperturaCajaModal: React.FC = () => {
                     setBcvSyncFeedback(null);
                     try {
                       const newRate = await fetchLiveRate();
-                      fetchLiveEuroRate().catch(() => {});
+                      fetchLiveEuroRate().catch((err) => {
+                        if (import.meta.env.DEV) console.warn('[AperturaCajaModal] Euro rate background sync skipped:', err);
+                      });
                       setManualRateInput(newRate.toFixed(2));
                       setBcvSyncFeedback({
                         type: 'success',

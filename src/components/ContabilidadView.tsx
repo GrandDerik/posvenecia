@@ -140,6 +140,7 @@ export const ContabilidadView: React.FC = () => {
   const [isSubmittingAbonoCuenta, setIsSubmittingAbonoCuenta] = useState(false);
   const [abonoGastoError, setAbonoGastoError] = useState<string | null>(null);
   const [isSubmittingAbonoGasto, setIsSubmittingAbonoGasto] = useState(false);
+  const [isDeletingRecord, setIsDeletingRecord] = useState(false);
 
   useEffect(() => {
     setSalesPage(1);
@@ -421,36 +422,43 @@ export const ContabilidadView: React.FC = () => {
     }
   };
 
-  const handleConfirmDelete = () => {
-    if (!deleteTarget) return;
-    switch (deleteTarget.type) {
-      case 'sale':
-        deleteSale(deleteTarget.item.id, restoreStockOnSaleDelete);
-        if (selectedSaleForTicket?.id === deleteTarget.item.id) setSelectedSaleForTicket(null);
-        break;
-      case 'expense':
-        deleteExpense(deleteTarget.item.id);
-        if (selectedExpenseForTicket?.id === deleteTarget.item.id) setSelectedExpenseForTicket(null);
-        break;
-      case 'credit_note':
-        deleteCreditNote(deleteTarget.item.id);
-        if (selectedCreditNoteForTicket?.id === deleteTarget.item.id) setSelectedCreditNoteForTicket(null);
-        break;
-      case 'discharge':
-        deleteInventoryDischarge(deleteTarget.item.id);
-        if (selectedDischargeForDetail?.id === deleteTarget.item.id) setSelectedDischargeForDetail(null);
-        break;
-      case 'cuenta':
-        deleteCuentaPorPagar(deleteTarget.item.id);
-        if (selectedCuentaForDetail?.id === deleteTarget.item.id) setSelectedCuentaForDetail(null);
-        break;
-      case 'gasto_op':
-        deleteGastoOperativo(deleteTarget.item.id);
-        if (selectedGastoForDetail?.id === deleteTarget.item.id) setSelectedGastoForDetail(null);
-        break;
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || isDeletingRecord) return;
+    setIsDeletingRecord(true);
+    try {
+      switch (deleteTarget.type) {
+        case 'sale':
+          await deleteSale(deleteTarget.item.id, restoreStockOnSaleDelete);
+          if (selectedSaleForTicket?.id === deleteTarget.item.id) setSelectedSaleForTicket(null);
+          break;
+        case 'expense':
+          await deleteExpense(deleteTarget.item.id);
+          if (selectedExpenseForTicket?.id === deleteTarget.item.id) setSelectedExpenseForTicket(null);
+          break;
+        case 'credit_note':
+          await deleteCreditNote(deleteTarget.item.id);
+          if (selectedCreditNoteForTicket?.id === deleteTarget.item.id) setSelectedCreditNoteForTicket(null);
+          break;
+        case 'discharge':
+          await deleteInventoryDischarge(deleteTarget.item.id);
+          if (selectedDischargeForDetail?.id === deleteTarget.item.id) setSelectedDischargeForDetail(null);
+          break;
+        case 'cuenta':
+          await deleteCuentaPorPagar(deleteTarget.item.id);
+          if (selectedCuentaForDetail?.id === deleteTarget.item.id) setSelectedCuentaForDetail(null);
+          break;
+        case 'gasto_op':
+          await deleteGastoOperativo(deleteTarget.item.id);
+          if (selectedGastoForDetail?.id === deleteTarget.item.id) setSelectedGastoForDetail(null);
+          break;
+      }
+      setDeleteTarget(null);
+      setRestoreStockOnSaleDelete(false);
+    } catch {
+      // Error ya notificado por AppContext; mantener diálogo abierto o evitar rechazo no capturado
+    } finally {
+      setIsDeletingRecord(false);
     }
-    setDeleteTarget(null);
-    setRestoreStockOnSaleDelete(false);
   };
 
   const pendingPayablesCount =
@@ -4009,12 +4017,12 @@ export const ContabilidadView: React.FC = () => {
             </div>
 
             <div className="p-3 bg-[#F8FAFC] border-t border-[#DCE4F0] flex justify-end gap-2">
-              <button type="button" onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-white border border-[#DCE4F0] text-slate-700 rounded-xl text-xs font-bold cursor-pointer">
+              <button type="button" disabled={isDeletingRecord} onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-white border border-[#DCE4F0] text-slate-700 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-60">
                 Cancelar
               </button>
-              <button type="button" onClick={handleConfirmDelete} className="px-4 py-2 bg-[#BE123C] hover:bg-rose-800 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer">
+              <button type="button" disabled={isDeletingRecord} onClick={() => { void handleConfirmDelete(); }} className="px-4 py-2 bg-[#BE123C] hover:bg-rose-800 disabled:opacity-60 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer">
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Sí, Eliminar</span>
+                <span>{isDeletingRecord ? 'Eliminando...' : 'Sí, Eliminar'}</span>
               </button>
             </div>
           </div>

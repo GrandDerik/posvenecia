@@ -33,7 +33,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
     try {
       await onLoginWithGoogle();
     } catch (err: any) {
-      console.error('Login error:', err);
+      if (import.meta.env.DEV) {
+        console.error('Login error:', err);
+      }
       setErrorMsg(err?.message || 'No se pudo iniciar sesión con Google. Verifica tu conexión e intenta nuevamente.');
     } finally {
       setIsLoading(false);

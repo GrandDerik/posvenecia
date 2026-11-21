@@ -32,7 +32,9 @@ import {
   getProductPriceBs,
   getProductPriceUSD,
   getProductPriceEUR,
-  getProductAnchorCurrency
+  getProductAnchorCurrency,
+  safeJsonToSheet,
+  sanitizeImageUrl
 } from '../utils/exportUtils';
 
 export const ProductsView: React.FC = () => {
@@ -249,8 +251,11 @@ export const ProductsView: React.FC = () => {
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          if (rawDataUrl.length <= 340000) {
-            setImageUrl(rawDataUrl);
+          const safeRaw = sanitizeImageUrl(rawDataUrl);
+          if (!safeRaw) {
+            setFormError('Formato de imagen no permitido. Usa PNG, JPG, WEBP o GIF.');
+          } else if (safeRaw.length <= 340000) {
+            setImageUrl(safeRaw);
           } else {
             setFormError('La imagen es demasiado pesada para guardarse en Cloud Firestore. Intenta con una foto más ligera.');
           }
@@ -264,7 +269,12 @@ export const ProductsView: React.FC = () => {
             compressed = jpegFallback;
           }
         }
-        const finalUrl = compressed.length < rawDataUrl.length ? compressed : rawDataUrl;
+        const rawCandidate = compressed.length < rawDataUrl.length ? compressed : rawDataUrl;
+        const finalUrl = sanitizeImageUrl(rawCandidate);
+        if (!finalUrl) {
+          setFormError('Formato de imagen no permitido. Usa PNG, JPG, WEBP o GIF.');
+          return;
+        }
         if (finalUrl.length > 340000) {
           setFormError('La imagen sigue siendo muy pesada después de comprimir (>340KB). Selecciona una imagen más pequeña.');
           return;
@@ -272,10 +282,11 @@ export const ProductsView: React.FC = () => {
         setImageUrl(finalUrl);
       };
       img.onerror = () => {
-        if (rawDataUrl.length <= 340000) {
-          setImageUrl(rawDataUrl);
+        const safeRaw = sanitizeImageUrl(rawDataUrl);
+        if (safeRaw && safeRaw.length <= 340000) {
+          setImageUrl(safeRaw);
         } else {
-          setFormError('No se pudo procesar ni comprimir la imagen seleccionada.');
+          setFormError('No se pudo procesar o validar la imagen seleccionada (usa PNG, JPG, WEBP o GIF).');
         }
       };
       img.src = rawDataUrl;
@@ -353,7 +364,13 @@ export const ProductsView: React.FC = () => {
     e.preventDefault();
     if (!name.trim() || isSubmitting) return;
 
-    if (imageUrl.trim().length > 340000) {
+    const trimmedImage = imageUrl.trim();
+    const safeImageUrl = trimmedImage ? sanitizeImageUrl(trimmedImage) : '';
+    if (trimmedImage && !safeImageUrl) {
+      setFormError('Formato de imagen no válido. Usa PNG, JPG, WEBP, GIF o una URL HTTPS.');
+      return;
+    }
+    if (safeImageUrl.length > 340000) {
       setFormError('La foto seleccionada supera el tamaño máximo permitido (340KB). Quita o reemplaza la imagen.');
       return;
     }
@@ -423,7 +440,7 @@ export const ProductsView: React.FC = () => {
       priceIncludesIVA: isExemptFromIVA ? false : priceIncludesIVA,
       itemType: isService ? 'servicio' : 'producto',
       isService,
-      imageUrl: imageUrl.trim() || undefined,
+      imageUrl: safeImageUrl || undefined,
       purchaseNote: purchaseNote.trim() || undefined
     };
 
@@ -467,7 +484,7 @@ export const ProductsView: React.FC = () => {
       'Nota de Compra / Factura': p.purchaseNote || '-'
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data);
+    const ws = safeJsonToSheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Catálogo');
     XLSX.writeFile(wb, `PosVenecia_Productos_${getLocalDateStr()}.xlsx`);
@@ -510,7 +527,7 @@ export const ProductsView: React.FC = () => {
       'Notas': k.notes || '',
       'Usuario': k.userName || ''
     }));
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = safeJsonToSheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Kardex');
     XLSX.writeFile(wb, `PosVenecia_Kardex_${getLocalDateStr()}.xlsx`);
@@ -715,8 +732,8 @@ export const ProductsView: React.FC = () => {
                     {/* Thumbnail Photo */}
                     <td className="py-3 px-4">
                       <div className="w-10 h-10 rounded-xl bg-[#F8FAFC] border border-[#DCE4F0] overflow-hidden flex items-center justify-center shrink-0">
-                        {prod.imageUrl ? (
-                          <img src={prod.imageUrl} alt={prod.name} className="w-full h-full object-cover" />
+                        {sanitizeImageUrl(prod.imageUrl) ? (
+                          <img src={sanitizeImageUrl(prod.imageUrl)} alt={prod.name} className="w-full h-full object-cover" />
                         ) : (
                           <Package className="w-4 h-4 text-slate-400 stroke-1" />
                         )}
@@ -1223,8 +1240,8 @@ export const ProductsView: React.FC = () => {
               {/* Photo section */}
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex items-center gap-3">
                 <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
-                  {imageUrl ? (
-                    <img src={imageUrl} alt="Foto producto" className="w-full h-full object-cover" />
+                  {sanitizeImageUrl(imageUrl) ? (
+                    <img src={sanitizeImageUrl(imageUrl)} alt="Foto producto" className="w-full h-full object-cover" />
                   ) : (
                     <ImageIcon className="w-6 h-6 text-slate-300 stroke-1" />
                   )}

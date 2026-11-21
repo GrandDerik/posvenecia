@@ -73,7 +73,7 @@ export const TesoreriaView: React.FC = () => {
     treasuryAccounts,
     treasuryMovements,
     bcvRate,
-    managerPin,
+    verifyManagerPin,
     saveTreasuryAccount,
     deleteTreasuryAccount,
     transferBetweenTreasuryAccounts,
@@ -360,14 +360,8 @@ export const TesoreriaView: React.FC = () => {
 
   const handleConfirmAdjust = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adjustTarget) return;
+    if (!adjustTarget || isSubmittingAdjust) return;
     setAdjError(null);
-
-    const expectedPin = (managerPin || '1234').trim();
-    if (adjPin.trim() !== expectedPin) {
-      setAdjError('Clave de Gerente incorrecta. Verifica el PIN configurado en Mi Perfil.');
-      return;
-    }
 
     const parsedBal = parseFloat(adjNewBalance);
     if (isNaN(parsedBal)) {
@@ -377,6 +371,12 @@ export const TesoreriaView: React.FC = () => {
 
     setIsSubmittingAdjust(true);
     try {
+      const isValidPin = await verifyManagerPin(adjPin);
+      if (!isValidPin) {
+        setAdjError('Clave de Gerente incorrecta. Verifica el PIN configurado en Mi Perfil.');
+        return;
+      }
+
       await adjustTreasuryAccountBalance({
         accountId: adjustTarget.id,
         newBalance: round2(parsedBal),
@@ -493,7 +493,7 @@ export const TesoreriaView: React.FC = () => {
           <div>
             <p className="font-extrabold">Permisos de Firestore pendientes para Tesorería</p>
             <p className="text-amber-800 mt-0.5">
-              Publica las reglas actualizadas de Firestore usando el botón superior <strong>Copiar firestore.rules</strong> y luego pulsa <strong>Reintentar</strong> para activar las colecciones <code className="font-mono font-bold">bankAccounts</code> y <code className="font-mono font-bold">treasuryMovements</code>.
+              Publica el archivo <code className="font-mono font-bold">firestore.rules</code> del repositorio en Firebase Console (<strong>Reglas → Publicar</strong>) o mediante <code className="font-mono font-bold">firebase deploy --only firestore:rules</code> y luego pulsa <strong>Reintentar</strong> para activar las colecciones <code className="font-mono font-bold">bankAccounts</code> y <code className="font-mono font-bold">treasuryMovements</code>.
             </p>
           </div>
         </div>

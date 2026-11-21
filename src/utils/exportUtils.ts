@@ -559,6 +559,51 @@ export const formatUSD = (val: number) => {
   }).format(val);
 };
 
+/**
+ * Neutralizes spreadsheet formula injection (=, +, -, @, TAB, CR) in string cells
+ * while preserving numeric values and harmless dash placeholders ("-", "---").
+ */
+export const sanitizeExcelCell = (value: unknown): unknown => {
+  if (typeof value !== 'string') return value;
+  const trimmedStart = value.trimStart();
+  if (!trimmedStart || trimmedStart === '-' || trimmedStart === '---') {
+    return value;
+  }
+  if (/^[=+\-@\t\r]/.test(trimmedStart) || /^[\t\r]/.test(value)) {
+    return `'${value}`;
+  }
+  return value;
+};
+
+export const sanitizeExcelRow = <T extends Record<string, unknown>>(row: T): T => {
+  const safeRow: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(row)) {
+    safeRow[key] = sanitizeExcelCell(val);
+  }
+  return safeRow as T;
+};
+
+export const safeJsonToSheet = <T extends Record<string, unknown>>(rows: T[]): XLSX.WorkSheet => {
+  return XLSX.utils.json_to_sheet(rows.map(sanitizeExcelRow));
+};
+
+/**
+ * Validates that an image URL or base64 data URI uses a safe raster image scheme
+ * (https:// or base64 PNG/JPEG/WEBP/GIF), rejecting SVG payloads and script URIs.
+ */
+export const sanitizeImageUrl = (url?: string | null): string => {
+  if (typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+  if (/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^https:\/\/[^\s"'<>]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return '';
+};
+
 // 1. Export Libro de Ventas to Excel (.xlsx) - SENIAT Standard Format
 export const exportLibroVentasExcel = (sales: Sale[], businessInfo: { name: string; rif: string }) => {
   const data = sales.map((sale, index) => {
@@ -583,7 +628,7 @@ export const exportLibroVentasExcel = (sales: Sale[], businessInfo: { name: stri
     };
   });
 
-  const worksheet = XLSX.utils.json_to_sheet(data);
+  const worksheet = safeJsonToSheet(data);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Libro de Ventas');
   
@@ -689,7 +734,7 @@ export const exportLibroComprasExcel = (expenses: Expense[], businessInfo: { nam
     'Método de Pago': exp.paymentMethod.replace('_', ' ').toUpperCase()
   }));
 
-  const worksheet = XLSX.utils.json_to_sheet(data);
+  const worksheet = safeJsonToSheet(data);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Libro de Compras');
   XLSX.writeFile(workbook, `Libro_de_Compras_SENIAT_${getLocalDateStr()}.xlsx`);
@@ -816,7 +861,7 @@ export const exportEstadoCuentaExcel = (
     { Concepto: 'IGTF 3% Percibido en Divisas (Bs)', Valor: summary.igtfBs },
   ];
 
-  const ws = XLSX.utils.json_to_sheet(data);
+  const ws = safeJsonToSheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Balance General');
   XLSX.writeFile(wb, `Estado_de_Cuenta_${getLocalDateStr()}.xlsx`);
@@ -852,7 +897,8 @@ export const exportEstadoCuentaPDF = (
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
   doc.text(`${businessInfo.name} | RIF: ${businessInfo.rif}`, 14, 21);
-  doc.text(`Tasa Oficial BCV: Bs. ${summary.bcvRate.toFixed(2)} / USD`, 14, 26);
+  const safeRate = Number.isFinite(summary.bcvRate) && summary.bcvRate > 0 ? summary.bcvRate : 0;
+  doc.text(`Tasa Oficial BCV: Bs. ${safeRate.toFixed(2)} / USD`, 14, 26);
   doc.text(`Fecha de Emisión: ${new Date().toLocaleString('es-VE')}`, 14, 31);
 
   // Table with balances
@@ -958,7 +1004,7 @@ export const exportCierreCajaExcel = (
   ];
 
   const wb = XLSX.utils.book_new();
-  const wsSummary = XLSX.utils.json_to_sheet(summaryData);
+  const wsSummary = safeJsonToSheet(summaryData);
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumen Cierre');
 
   // If bank balances exist, add sheet
@@ -973,7 +1019,7 @@ export const exportCierreCajaExcel = (
       'Saldo Apertura (USD)': Number((b.initialBalanceUSD || 0).toFixed(2)),
       'Saldo Contado (USD)': Number((b.countedBalanceUSD ?? b.expectedBalanceUSD ?? b.initialBalanceUSD ?? 0).toFixed(2))
     }));
-    const wsBanks = XLSX.utils.json_to_sheet(bankData);
+    const wsBanks = safeJsonToSheet(bankData);
     XLSX.utils.book_append_sheet(wb, wsBanks, 'Cuentas Bancarias');
   }
 
@@ -984,7 +1030,7 @@ export const exportCierreCajaExcel = (
       'Monto en Divisas (USD)': Number(amounts.usd.toFixed(2)),
       'Monto en Bolívares (Bs)': Number(amounts.bs.toFixed(2))
     }));
-    const wsMethods = XLSX.utils.json_to_sheet(methodData);
+    const wsMethods = safeJsonToSheet(methodData);
     XLSX.utils.book_append_sheet(wb, wsMethods, 'Ventas por Medio de Pago');
   }
 
@@ -1167,7 +1213,7 @@ export const exportHistorialCierresExcel = (
     'Observaciones': shift.closedNotes || ''
   }));
 
-  const ws = XLSX.utils.json_to_sheet(data);
+  const ws = safeJsonToSheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Historial de Cierres');
   XLSX.writeFile(wb, `Historial_Cierres_Caja_${getLocalDateStr()}.xlsx`);
@@ -1217,6 +1263,7 @@ export const exportCuentasPorPagarExcel = (
   businessInfo: { name: string; rif: string },
   bcvRate: number = 889.26
 ) => {
+  const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
   const data = cuentas.map((c, idx) => ({
     'N°': idx + 1,
     'Proveedor': c.supplierName,
@@ -1226,15 +1273,15 @@ export const exportCuentasPorPagarExcel = (
     'Fecha Emisión': c.date,
     'Fecha Vencimiento': c.dueDate,
     'Monto Total USD': Number(c.totalAmountUSD.toFixed(2)),
-    'Monto Total Bs': Number((c.totalAmountUSD * bcvRate).toFixed(2)),
+    'Monto Total Bs': Number((c.totalAmountUSD * safeRate).toFixed(2)),
     'Abonado USD': Number(c.paidAmountUSD.toFixed(2)),
     'Saldo Pendiente USD': Number(c.remainingUSD.toFixed(2)),
-    'Saldo Pendiente Bs': Number((c.remainingUSD * bcvRate).toFixed(2)),
+    'Saldo Pendiente Bs': Number((c.remainingUSD * safeRate).toFixed(2)),
     'Estatus': c.status.toUpperCase(),
     'Notas': c.notes || ''
   }));
 
-  const ws = XLSX.utils.json_to_sheet(data);
+  const ws = safeJsonToSheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Cuentas Por Pagar');
   XLSX.writeFile(wb, `Cuentas_Por_Pagar_Proveedores_${getLocalDateStr()}.xlsx`);
@@ -1246,6 +1293,7 @@ export const exportCuentasPorPagarPDF = (
   businessInfo: { name: string; rif: string },
   bcvRate: number
 ) => {
+  const safeRate = Number.isFinite(bcvRate) && bcvRate > 0 ? bcvRate : 0;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
 
   const totalDeudaUSD = cuentas.reduce((acc, c) => acc + c.totalAmountUSD, 0);
@@ -1257,8 +1305,8 @@ export const exportCuentasPorPagarPDF = (
   doc.text('INFORME CONTABLE DE CUENTAS POR PAGAR (PASIVOS A PROVEEDORES)', 14, 12);
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
-  doc.text(`${businessInfo.name} | RIF: ${businessInfo.rif} | Tasa BCV: Bs. ${bcvRate.toFixed(2)} | Fecha: ${new Date().toLocaleDateString('es-VE')}`, 14, 17);
-  doc.text(`Deuda Global: $${formatUSD(totalDeudaUSD)} | Total Amortizado: $${formatUSD(totalAbonadoUSD)} | Saldo Pendiente por Pagar: $${formatUSD(totalPendienteUSD)} (Bs. ${formatBs(totalPendienteUSD * bcvRate)})`, 14, 22);
+  doc.text(`${businessInfo.name} | RIF: ${businessInfo.rif} | Tasa BCV: Bs. ${safeRate.toFixed(2)} | Fecha: ${new Date().toLocaleDateString('es-VE')}`, 14, 17);
+  doc.text(`Deuda Global: $${formatUSD(totalDeudaUSD)} | Total Amortizado: $${formatUSD(totalAbonadoUSD)} | Saldo Pendiente por Pagar: $${formatUSD(totalPendienteUSD)} (Bs. ${formatBs(totalPendienteUSD * safeRate)})`, 14, 22);
 
   const tableData: (string | number)[][] = cuentas.map((c, idx) => [
     (idx + 1).toString(),
@@ -1270,7 +1318,7 @@ export const exportCuentasPorPagarPDF = (
     `$${formatUSD(c.totalAmountUSD)}`,
     `$${formatUSD(c.paidAmountUSD)}`,
     `$${formatUSD(c.remainingUSD)}`,
-    `Bs. ${formatBs(c.remainingUSD * bcvRate)}`,
+    `Bs. ${formatBs(c.remainingUSD * safeRate)}`,
     c.status.toUpperCase()
   ]);
 

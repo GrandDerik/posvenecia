@@ -153,7 +153,6 @@ export interface AppDatabasePayload {
   bcvLastUpdatedDate?: string | null;
   bcvLastUpdatedAt?: string | null;
   customCategories?: string[];
-  managerPin?: string;
   products: Product[];
   sales: Sale[];
   expenses: Expense[];
@@ -781,7 +780,6 @@ export const mergeDatabasePayloads = (
     bcvLastUpdatedDate: local.bcvLastUpdatedDate || remote.bcvLastUpdatedDate || null,
     bcvLastUpdatedAt: local.bcvLastUpdatedAt || remote.bcvLastUpdatedAt || null,
     customCategories: mergedCategories,
-    managerPin: local.managerPin || remote.managerPin,
     products: mergedProducts,
     sales: mergedSales,
     expenses: mergedExpenses,

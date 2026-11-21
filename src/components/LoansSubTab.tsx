@@ -725,16 +725,23 @@ export const LoansSubTab: React.FC<LoansSubTabProps> = ({ openCreateSignal }) =>
                             {new Date(loan.dueDate).toLocaleDateString('es-VE')}
                           </strong>
                         </span>
-                        {loan.lenderPhone && (
-                          <a
-                            href={`https://wa.me/58${loan.lenderPhone.replace(/\D/g, '').slice(-10)}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-[#065F46] hover:underline font-semibold flex items-center gap-1"
-                          >
-                            <Phone className="w-3 h-3" /> {loan.lenderPhone}
-                          </a>
-                        )}
+                        {loan.lenderPhone && (() => {
+                          const phoneDigits = loan.lenderPhone.replace(/\D/g, '');
+                          return phoneDigits.length >= 7 ? (
+                            <a
+                              href={`https://wa.me/58${phoneDigits.slice(-10)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[#065F46] hover:underline font-semibold flex items-center gap-1"
+                            >
+                              <Phone className="w-3 h-3" /> {loan.lenderPhone}
+                            </a>
+                          ) : (
+                            <span className="text-slate-600 font-semibold flex items-center gap-1">
+                              <Phone className="w-3 h-3" /> {loan.lenderPhone}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
