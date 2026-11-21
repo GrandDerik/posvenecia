@@ -1,6 +1,7 @@
 import { 
   GoogleAuthProvider, 
   signInWithPopup, 
+  reauthenticateWithPopup,
   signOut, 
   onAuthStateChanged, 
   User 
@@ -249,6 +250,61 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
 export const renewGoogleToken = async (): Promise<string> => {
   const { accessToken } = await signInWithGoogle();
   return accessToken;
+};
+
+/**
+ * Re-authenticates the currently signed-in Google user via popup to authorize sensitive actions
+ * such as resetting a forgotten Manager PIN without requiring the previous PIN.
+ */
+export const reauthenticateActiveGoogleUser = async (): Promise<{ user: User; verifiedAt: number }> => {
+  if (!isFirebaseConfigured) {
+    throw new Error(
+      'Firebase Auth no está configurado en este entorno. No es posible verificar la cuenta de Google.'
+    );
+  }
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Debes tener una sesión activa con Google para restablecer la clave de gerente.');
+  }
+  if (isSigningIn) {
+    throw new Error('Ya hay una ventana de autenticación con Google en progreso.');
+  }
+  try {
+    isSigningIn = true;
+    const reauthProvider = new GoogleAuthProvider();
+    reauthProvider.setCustomParameters({
+      prompt: 'select_account',
+      ...(currentUser.email ? { login_hint: currentUser.email } : {})
+    });
+    const result = await reauthenticateWithPopup(currentUser, reauthProvider);
+    if (result.user.uid !== currentUser.uid) {
+      throw new Error('La cuenta seleccionada no coincide con la sesión activa.');
+    }
+    if (!result.user.emailVerified) {
+      throw new Error('Tu cuenta de Google debe tener el correo electrónico verificado.');
+    }
+    return { user: result.user, verifiedAt: Date.now() };
+  } catch (err: any) {
+    if (import.meta.env.DEV) {
+      console.error('Google Reauthentication Error:', err);
+    }
+    const code = typeof err?.code === 'string' ? err.code : '';
+    if (code === 'auth/user-mismatch') {
+      throw new Error('Debes confirmar con la misma cuenta de Google que tiene la sesión activa.');
+    }
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      throw new Error('Confirmación con Google cancelada antes de completarse.');
+    }
+    if (code === 'auth/popup-blocked') {
+      throw new Error('El navegador bloqueó la ventana emergente de Google. Permite los pop-ups e intenta de nuevo.');
+    }
+    if (code === 'auth/network-request-failed') {
+      throw new Error('Sin conexión a internet para verificar tu cuenta de Google.');
+    }
+    throw new Error(err?.message || 'No se pudo verificar tu identidad con Google.');
+  } finally {
+    isSigningIn = false;
+  }
 };
 
 /**

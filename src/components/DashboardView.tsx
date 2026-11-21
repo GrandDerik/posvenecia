@@ -22,6 +22,7 @@ import { formatBs, formatUSD, round2, getLocalDateStr, isSameLocalDate } from '.
 import { Sale } from '../types';
 import { ComprobanteTicketModal } from './Modals/ComprobanteTicketModal';
 import { HourlySalesChart } from './HourlySalesChart';
+import { RecoverManagerPinModal, useManagerPinRecovery } from './Modals/RecoverManagerPinModal';
 
 export const DashboardView: React.FC = () => {
   const {
@@ -61,6 +62,7 @@ export const DashboardView: React.FC = () => {
   const [isSavingPin, setIsSavingPin] = useState(false);
   const [isRefreshingSales, setIsRefreshingSales] = useState(false);
   const [fiadoDaysThreshold, setFiadoDaysThreshold] = useState<15 | 30 | 60>(30);
+  const pinRecovery = useManagerPinRecovery();
 
   // Calculations for today (local timezone) & active cash shift
   const todayStr = getLocalDateStr();
@@ -1127,6 +1129,15 @@ export const DashboardView: React.FC = () => {
                   className="w-full px-3 py-2 bg-[#F8FAFC] border border-[#CBD5E1] rounded-xl text-xs font-mono"
                   autoFocus
                 />
+                <div className="mt-1.5 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void pinRecovery.startRecovery()}
+                    className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer"
+                  >
+                    ¿Olvidaste tu clave de gerente?
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -1163,6 +1174,24 @@ export const DashboardView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <RecoverManagerPinModal
+        isOpen={pinRecovery.isRecoveryOpen}
+        step={pinRecovery.recoveryStep}
+        error={pinRecovery.recoveryError}
+        verifiedEmail={pinRecovery.verifiedEmail}
+        isReauthenticating={pinRecovery.isReauthenticating}
+        onRetryReauth={() => void pinRecovery.retryReauth()}
+        onRequireReauth={() => pinRecovery.setRecoveryStep('verifying')}
+        onClose={pinRecovery.closeRecovery}
+        onMarkSuccess={() => pinRecovery.setRecoveryStep('success')}
+        onSuccess={() => {
+          setIsPinModalOpen(false);
+          setCurrentPinInput('');
+          setNewPinInput('');
+          setPinErrorMsg('');
+        }}
+      />
 
       {/* Comprobante Ticket Preview Modal */}
       {selectedTicketSale && (

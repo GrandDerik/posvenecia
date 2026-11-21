@@ -58,6 +58,7 @@ import { ComprobanteTicketModal } from './Modals/ComprobanteTicketModal';
 import { VenderServicioModal } from './Modals/VenderServicioModal';
 import { RecargoModal } from './Modals/RecargoModal';
 import { DescuentoModal } from './Modals/DescuentoModal';
+import { RecoverManagerPinModal, useManagerPinRecovery } from './Modals/RecoverManagerPinModal';
 import {
   getActiveBankAccounts,
   getDefaultBankAccount,
@@ -101,6 +102,8 @@ export const POSView: React.FC = () => {
     isOnline,
     treasuryAccounts
   } = useApp();
+
+  const pinRecovery = useManagerPinRecovery();
 
   // Search & Filters (starts empty/unselected until explicit category click or search)
   const [searchTerm, setSearchTerm] = useState('');
@@ -2404,6 +2407,17 @@ export const POSView: React.FC = () => {
               <p className="text-xs text-rose-600 font-semibold">{managerPinError}</p>
             )}
 
+            <div className="flex justify-center">
+              <button
+                type="button"
+                disabled={isVerifyingManagerPin}
+                onClick={() => void pinRecovery.startRecovery()}
+                className="text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer disabled:opacity-50"
+              >
+                ¿Olvidaste tu clave de gerente?
+              </button>
+            </div>
+
             <div className="grid grid-cols-2 gap-2 pt-1">
               <button
                 type="button"
@@ -2431,6 +2445,22 @@ export const POSView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <RecoverManagerPinModal
+        isOpen={pinRecovery.isRecoveryOpen}
+        step={pinRecovery.recoveryStep}
+        error={pinRecovery.recoveryError}
+        verifiedEmail={pinRecovery.verifiedEmail}
+        isReauthenticating={pinRecovery.isReauthenticating}
+        onRetryReauth={() => void pinRecovery.retryReauth()}
+        onRequireReauth={() => pinRecovery.setRecoveryStep('verifying')}
+        onClose={pinRecovery.closeRecovery}
+        onMarkSuccess={() => pinRecovery.setRecoveryStep('success')}
+        onSuccess={() => {
+          setManagerPinInput('');
+          setManagerPinError('');
+        }}
+      />
     </div>
   );
 };

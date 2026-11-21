@@ -7,6 +7,7 @@ import {
   TreasuryMovementType
 } from '../types';
 import { formatBs, formatUSD, round2 } from '../utils/exportUtils';
+import { RecoverManagerPinModal, useManagerPinRecovery } from './Modals/RecoverManagerPinModal';
 import {
   Landmark,
   Banknote,
@@ -121,6 +122,7 @@ export const TesoreriaView: React.FC = () => {
   const [adjSetAsInitial, setAdjSetAsInitial] = useState(true);
   const [adjError, setAdjError] = useState<string | null>(null);
   const [isSubmittingAdjust, setIsSubmittingAdjust] = useState(false);
+  const pinRecovery = useManagerPinRecovery();
 
   // Modal: Delete bank account confirmation
   const [deleteTarget, setDeleteTarget] = useState<TreasuryAccount | null>(null);
@@ -1423,6 +1425,16 @@ export const TesoreriaView: React.FC = () => {
                   placeholder="Ingresa tu PIN de Gerente"
                   className="w-full px-3 py-2.5 rounded-xl border border-amber-300 bg-amber-50/40 text-sm font-mono-numbers font-bold focus:outline-none focus:border-amber-500"
                 />
+                <div className="mt-1.5 flex justify-end">
+                  <button
+                    type="button"
+                    disabled={isSubmittingAdjust}
+                    onClick={() => void pinRecovery.startRecovery()}
+                    className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer disabled:opacity-50"
+                  >
+                    ¿Olvidaste tu clave de gerente?
+                  </button>
+                </div>
               </div>
 
               {adjError && (
@@ -1452,6 +1464,22 @@ export const TesoreriaView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <RecoverManagerPinModal
+        isOpen={pinRecovery.isRecoveryOpen}
+        step={pinRecovery.recoveryStep}
+        error={pinRecovery.recoveryError}
+        verifiedEmail={pinRecovery.verifiedEmail}
+        isReauthenticating={pinRecovery.isReauthenticating}
+        onRetryReauth={() => void pinRecovery.retryReauth()}
+        onRequireReauth={() => pinRecovery.setRecoveryStep('verifying')}
+        onClose={pinRecovery.closeRecovery}
+        onMarkSuccess={() => pinRecovery.setRecoveryStep('success')}
+        onSuccess={() => {
+          setAdjPin('');
+          setAdjError(null);
+        }}
+      />
 
       {/* MODAL 4: Confirm Delete Bank Account */}
       {deleteTarget && (

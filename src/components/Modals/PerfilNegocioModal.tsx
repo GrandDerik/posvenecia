@@ -30,6 +30,7 @@ import {
 import { PagoMovilAccount, POSTerminal, BankAccount } from '../../types';
 import { BackupDriveModal } from './BackupDriveModal';
 import { sanitizeImageUrl } from '../../utils/exportUtils';
+import { RecoverManagerPinModal, useManagerPinRecovery } from './RecoverManagerPinModal';
 
 interface PerfilNegocioModalProps {
   isOpen: boolean;
@@ -125,6 +126,7 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
   const [logoError, setLogoError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const pinRecovery = useManagerPinRecovery();
 
   // Sync modal form with live Cloud Firestore businessInfo whenever modal opens
   useEffect(() => {
@@ -1838,6 +1840,16 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
                   {resetError && (
                     <p className="text-[11px] text-rose-600 font-medium mt-1">{resetError}</p>
                   )}
+                  <div className="mt-1.5 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={() => void pinRecovery.startRecovery()}
+                      className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer disabled:opacity-50"
+                    >
+                      ¿Olvidaste tu clave de gerente?
+                    </button>
+                  </div>
                 </div>
 
                 {resetSuccessFeedback ? (
@@ -1869,6 +1881,22 @@ export const PerfilNegocioModal: React.FC<PerfilNegocioModalProps> = ({ isOpen, 
             </div>
           </div>
         )}
+
+        <RecoverManagerPinModal
+          isOpen={pinRecovery.isRecoveryOpen}
+          step={pinRecovery.recoveryStep}
+          error={pinRecovery.recoveryError}
+          verifiedEmail={pinRecovery.verifiedEmail}
+          isReauthenticating={pinRecovery.isReauthenticating}
+          onRetryReauth={() => void pinRecovery.retryReauth()}
+          onRequireReauth={() => pinRecovery.setRecoveryStep('verifying')}
+          onClose={pinRecovery.closeRecovery}
+          onMarkSuccess={() => pinRecovery.setRecoveryStep('success')}
+          onSuccess={() => {
+            setPinConfirmation('');
+            setResetError('');
+          }}
+        />
 
         {/* Modal Confirmación de Eliminación de Método de Pago / POS / Cuenta Bancaria */}
         {deleteAccountTarget && (

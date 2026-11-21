@@ -47,6 +47,7 @@ import {
 import {
   initAuth,
   signInWithGoogle,
+  reauthenticateActiveGoogleUser,
   logOutGoogle,
   getRemoteDatabaseMetadata,
   readDatabaseFromDrive,
@@ -659,6 +660,8 @@ interface AppContextType {
   // Manager PIN (hashed verification without exposing plaintext credential)
   verifyManagerPin: (pin: string) => Promise<boolean>;
   updateManagerPin: (newPin: string) => Promise<void>;
+  reauthenticateForPinReset: () => Promise<{ email: string }>;
+  resetManagerPinAfterReauth: (newPin: string) => Promise<void>;
 
   // Network Connectivity
   isOnline: boolean;
@@ -853,6 +856,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [managerPinHash, setManagerPinHash] = useState<string | null>(null);
   const legacyManagerPinRef = useRef<string | null>(null);
   const pinMigrationDoneRef = useRef<string | null>(null);
+  const pinResetVerifiedUidRef = useRef<string | null>(null);
+  const pinResetVerifiedUntilRef = useRef<number>(0);
 
   // App Theme: light exclusive
   const [appTheme] = useState<AppTheme>('light');
@@ -1262,6 +1267,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw e;
     }
   }, [getActiveUid, notifyError]);
+
+  const reauthenticateForPinReset = useCallback(async (): Promise<{ email: string }> => {
+    const uid = getActiveUid();
+    if (!uid) {
+      throw new Error('Debes iniciar sesión con tu cuenta de Google para restablecer la clave de gerente.');
+    }
+    const { user } = await reauthenticateActiveGoogleUser();
+    pinResetVerifiedUidRef.current = uid;
+    pinResetVerifiedUntilRef.current = Date.now() + 5 * 60 * 1000;
+    return { email: user.email || googleUser?.email || '' };
+  }, [getActiveUid, googleUser?.email]);
+
+  const resetManagerPinAfterReauth = useCallback(async (newPin: string): Promise<void> => {
+    const uid = getActiveUid();
+    if (
+      !uid ||
+      pinResetVerifiedUidRef.current !== uid ||
+      Date.now() > pinResetVerifiedUntilRef.current
+    ) {
+      throw new Error('La verificación con Google expiró o no se completó. Confirma tu identidad nuevamente.');
+    }
+    const clean = newPin.trim();
+    if (clean.length < 4 || clean.length > 16) {
+      throw new Error('La nueva clave de gerente debe tener entre 4 y 16 caracteres.');
+    }
+    try {
+      const hashed = await hashManagerPin(clean);
+      await saveBusinessProfileToFirestore(uid, { managerPinHash: hashed });
+      pinResetVerifiedUidRef.current = null;
+      pinResetVerifiedUntilRef.current = 0;
+      setManagerPinHash(hashed);
+      legacyManagerPinRef.current = null;
+      notifyUser('success', 'Clave de gerente restablecida', 'Tu nuevo PIN de autorización quedó guardado en la nube.');
+    } catch (e) {
+      notifyError(e, 'No se pudo restablecer la clave de gerente');
+      throw e;
+    }
+  }, [getActiveUid, notifyError, notifyUser]);
 
   /**
    * Apertura de Caja para iniciar la jornada diaria
@@ -4194,6 +4237,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateBusinessInfo,
         verifyManagerPin,
         updateManagerPin,
+        reauthenticateForPinReset,
+        resetManagerPinAfterReauth,
         isOnline,
         missingRuleCollections,
         retryFirestoreSubscriptions,
